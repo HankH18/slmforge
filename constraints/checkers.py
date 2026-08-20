@@ -2171,3 +2171,13 @@ def check(constraint: Dict[str, Any], text: str) -> Dict[str, Any]:
     checker = globals()[TYPES[normalized["type"]].checker_name]
     result = checker(normalized, text)
     return {"pass": bool(result["pass"]), "evidence": str(result["evidence"])}
+
+
+def sentence_spans(text: str):
+    """Public alias for the sentence segmenter.
+
+    datagen/filter.py needs sentence boundaries and was importing the private
+    ``_sentence_spans``. A private import across package lines breaks silently on a
+    rename, and this module's sentence path has been edited by several lanes.
+    """
+    return _sentence_spans(text)

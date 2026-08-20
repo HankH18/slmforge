@@ -52,7 +52,8 @@ from scenarios.paths import load_corpus, load_instances, load_smoke  # noqa: E40
 from scenarios.render import render_user_message                  # noqa: E402
 
 from datagen.sampling import (HELDOUT_TYPES, NEGATIVE_TYPES,      # noqa: E402
-                              eval_pair_keys, pair_key, type_shares)
+                              eval_pair_keys, normalize_text, pair_key,
+                              type_shares)
 
 __all__ = ["audit", "AuditResult", "main"]
 
@@ -135,6 +136,7 @@ def audit(path: Path,
     if corpus_rows is None:
         corpus_rows = list(load_corpus()) + list(load_smoke())
     forbidden = eval_pair_keys(corpus_rows)
+    forbidden_tasks = {normalize_text(r["task"]) for r in corpus_rows}
 
     rows = _load_rows(Path(path))
     violations: List[str] = []
@@ -219,6 +221,14 @@ def audit(path: Path,
         if key in forbidden:
             fail("eval_overlap",
                  f"row {idx}: its (task, constraint-set) pair is in the eval corpus")
+        # TASK-level too, which is the standard datagen/task_pool.py states and the
+        # auditor previously did not enforce: "training on its tasks under different
+        # constraint sets is still a model that has seen the exact prose it will be
+        # graded on." Pair-level alone certified verbatim eval prose as clean.
+        if normalize_text(scenario["task"]) in forbidden_tasks:
+            fail("eval_task_overlap",
+                 f"row {idx}: its task text appears verbatim in the eval corpus, "
+                 f"under any constraint set")
         if key in seen_pairs:
             fail("duplicate_pairs",
                  f"row {idx}: duplicates row {seen_pairs[key]} (same task and "

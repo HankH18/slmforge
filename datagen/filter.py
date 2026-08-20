@@ -52,7 +52,7 @@ from typing import Any, Dict, List, Mapping, NamedTuple, Optional, Sequence
 # of the sentence_initial_letter checker; a second segmentation in datagen would
 # be a second answer to "what is a sentence", which this codebase deliberately
 # does not have.
-from constraints.checkers import _sentence_spans as sentence_spans
+from constraints.checkers import sentence_spans
 
 __all__ = ["MIN_DRAFT_WORDS", "MIN_NEGATIVE_WORDS", "MIN_NEGATIVE_SENTENCES",
            "MIN_TASK_OVERLAP_WORDS", "REASON_CODES", "Decision", "FluencyReport",
