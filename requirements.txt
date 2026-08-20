@@ -1,0 +1,20 @@
+# Grounded Abstainer — pinned runtime. Python 3.11+ required:
+# frozen eval.py uses PEP 604 (`list | None`) annotations evaluated at import.
+
+# eval harness — providers
+anthropic>=0.40
+openai>=1.60
+google-genai>=1.0
+
+# local inference for hf: model specs (base + tuned)
+torch>=2.4
+transformers>=4.51
+accelerate>=1.0
+
+# publishing + training orchestration
+huggingface_hub>=0.26
+modal>=0.68
+
+# datagen + tooling
+python-dotenv>=1.0
+pytest>=8.0
