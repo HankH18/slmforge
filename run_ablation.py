@@ -46,6 +46,37 @@ def workers_for(spec: str, cfg: Dict[str, Any]) -> int:
     return int(w.get("by_provider", {}).get(provider, w.get("default", 4)))
 
 
+def _cells_on_disk(out_dir: Path, frontier: List[str], base: Any) -> List[Dict[str, Any]]:
+    """Every cell present in ``out_dir``, re-read from its results JSON.
+
+    The manifest is provenance for the whole run, but the frontier grid and the
+    local base row are run as separate invocations (the base row is hours of local
+    inference and must not gate the frontier cells). Reporting only the cells this
+    process happened to compute would make a complete run look partial.
+    """
+    found: List[Dict[str, Any]] = []
+    for rp in sorted(out_dir.glob("*.results.json")):
+        try:
+            data = json.loads(rp.read_text())
+        except json.JSONDecodeError:
+            continue                      # mid-write; the gate re-reads these anyway
+        model, strategy = data.get("model"), data.get("strategy")
+        metrics = data.get("metrics", {})
+        stem = rp.name[: -len(".results.json")]
+        found.append({
+            "model": model, "strategy": strategy,
+            "classification": "frontier" if model in frontier else (
+                "local_base" if model == base else "unknown"),
+            "results_json": rp.name,
+            "transcripts_jsonl": f"{stem}.transcripts.jsonl",
+            "spec_adherence": metrics.get("spec_adherence"),
+            "robustness": metrics.get("robustness"),
+            "n": metrics.get("n"),
+            "judge_errors": metrics.get("judge_errors", 0),
+        })
+    return found
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="G1 Prompt-Ceiling Ablation")
     ap.add_argument("--config", default="configs/g1.json")
@@ -57,6 +88,9 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=None,
                     help="score only the first N scenarios (R6 floor is 30 per cell)")
     ap.add_argument("--out", default=None)
+    ap.add_argument("--manifest-only", action="store_true",
+                    help="rebuild run_manifest.json from the cells already on "
+                         "disk and exit; calls no provider and re-bills nothing")
     args = ap.parse_args()
 
     cfg = json.loads((REPO_ROOT / args.config).read_text())
@@ -107,6 +141,8 @@ def main() -> int:
           f"cells={len(specs)}x{len(strategies)}  eval_set={cfg['eval_set']}")
 
     cells: List[Dict[str, Any]] = []
+    if args.manifest_only:
+        specs = []          # fall through to the manifest write, calling nothing
     for spec in specs:
         generator = E.make_generator(spec)     # constructed once per model
         w = workers_for(spec, cfg)
@@ -131,6 +167,10 @@ def main() -> int:
             fail = None if sa is None else 1 - sa
             print(f"  [cell] {spec} x {strategy}: SA={sa:.3f} R={rb:.3f} "
                   f"fail={fail:.3f} judgeErr={metrics.get('judge_errors', 0)}")
+
+    # Re-derive the cell list from disk so a manifest written by either invocation
+    # describes the WHOLE run. The frontier and base rows are run separately.
+    cells = _cells_on_disk(out_dir, frontier, base) or cells
 
     manifest = {
         "run_id": cfg.get("run_id", "g1"),
