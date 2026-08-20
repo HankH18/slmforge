@@ -1431,7 +1431,12 @@ def test_g1_eval_set_and_exemplars_are_jsonl_paths_under_data(g1):
         assert isinstance(p, str) and p.endswith(".jsonl"), f"{key}={p!r}"
         assert not Path(p).is_absolute(), f"{key} must be repo-relative"
         assert p.startswith("data/"), f"{key}={p!r} must live under data/"
-    assert g1["eval_set"] == "data/eval/scenarios_v2_hardened.jsonl"
+    # Corrected: this previously pinned data/eval/scenarios_v2_hardened.jsonl, the
+    # RETIRED abstainer hedge corpus. That file exists, so the assertion passed while
+    # pinning a corpus of grounded-abstention scenarios that constraint checkers
+    # cannot meaningfully score. tests/test_g1_config.py binds the schema, which is
+    # the check that would have caught it.
+    assert g1["eval_set"] == "data/scenarios/corpus.jsonl"
     # Existence is deliberately NOT asserted here: both files are other tickets'
     # in-flight deliverables. scripts/gate_check.py FAILS at run time if the eval
     # set is absent (test_sabotaged_run_is_rejected_not_rated covers it), which is
