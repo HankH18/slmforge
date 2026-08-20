@@ -1,0 +1,66 @@
+{
+  "_contract": "PINNED by docs/BUILD_PLAN.md (P4). A disappointing model is a DATA problem - changing these numbers to chase metrics is prohibited; ask first. training/modal_app.py reads every number from this file and never duplicates one in code.",
+  "base_model": {
+    "repo": "Qwen/Qwen3-1.7B",
+    "revision": "70d244cc86ccca08cf5af4e1e306ecf908b1ad5e",
+    "spec": "hf:Qwen/Qwen3-1.7B@70d244cc86ccca08cf5af4e1e306ecf908b1ad5e",
+    "_note": "Qwen3 dropped the -Instruct suffix: Qwen/Qwen3-1.7B IS the post-trained chat variant (Qwen/Qwen3-1.7B-Instruct does not exist on the Hub; Qwen/Qwen3-1.7B-Base is the pretrain-only repo). BUILD_PLAN's phrase 'Qwen3-1.7B-Instruct' resolves to this repo. This revision MUST equal the revision in configs/models.json:base - tests/test_training_config.py enforces it."
+  },
+  "quantization": {
+    "load_in_4bit": true,
+    "dtype": null
+  },
+  "lora": {
+    "r": 16,
+    "lora_alpha": 32,
+    "lora_dropout": 0.05,
+    "target_modules": [
+      "q_proj",
+      "k_proj",
+      "v_proj",
+      "o_proj",
+      "gate_proj",
+      "up_proj",
+      "down_proj"
+    ],
+    "bias": "none",
+    "use_rslora": false,
+    "use_gradient_checkpointing": "unsloth",
+    "random_state": 42
+  },
+  "training": {
+    "learning_rate": 0.0002,
+    "num_train_epochs": 3,
+    "per_device_train_batch_size": 8,
+    "gradient_accumulation_steps": 2,
+    "max_seq_length": 2048,
+    "seed": 42,
+    "warmup_ratio": 0.03,
+    "lr_scheduler_type": "linear",
+    "optim": "adamw_8bit",
+    "weight_decay": 0.01,
+    "max_grad_norm": 1.0,
+    "logging_steps": 1
+  },
+  "smoke_overrides": {
+    "max_steps": 20
+  },
+  "_smoke_overrides_note": "--smoke merges these on top of the resolved config. A key naming a top-level section deep-merges into that section; any other key merges into 'training'. So max_steps lands in training.max_steps, where HF TrainingArguments lets it supersede num_train_epochs.",
+  "data": {
+    "train_jsonl": "data/train/v1.jsonl",
+    "smoke_train_jsonl": "data/train/smoke_v0.jsonl",
+    "completion_only_loss": true,
+    "enable_thinking": false,
+    "_note": "P3 schema: {\"messages\": [system, user, assistant], \"meta\": {...}}. system must equal eval.SYSTEM_CORE verbatim and enable_thinking must match eval.py's HFGenerator, so the training condition equals the zero_shot eval condition."
+  },
+  "output": {
+    "run_dir": "runs/train_v1",
+    "smoke_run_dir": "runs/smoke",
+    "adapter_dirname": "adapter",
+    "merged_dirname": "merged",
+    "merged_save_method": "merged_16bit",
+    "train_log_filename": "train_log.json",
+    "manifest_filename": "run_manifest.json",
+    "modal_volume": "slmforge-artifacts"
+  }
+}
