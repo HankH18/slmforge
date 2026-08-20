@@ -16,6 +16,7 @@ import pytest
 from constraints.checkers import (
     CAN_BE_FINAL_ABBREVIATIONS,
     CAN_BE_FINAL_ONLY_AS_ORDINARY_WORD,
+    EXPRESSION_CONTINUING_FOLLOWERS,
     NAME_TITLE_ABBREVIATIONS,
     NEVER_FINAL_ABBREVIATIONS,
     SENTENCE_LINE_BREAK_CHARS,
@@ -184,21 +185,71 @@ def test_a_never_final_abbreviation_is_not_a_boundary_even_before_a_capital(text
     assert _passes(text) is True
 
 
-@pytest.mark.parametrize("token", NEVER_FINAL_ABBREVIATIONS)
+#: The tier-1 members this file requires BY NAME. Written out as literals on
+#: purpose: the behaviour test below used to parametrize over
+#: ``NEVER_FINAL_ABBREVIATIONS`` itself, which made it self-referential --
+#: deleting "al." from the table deleted its own test case, and the suite
+#: reported 532 passed / 0 failed for a table that had lost a member. A literal
+#: list turns a membership change into a LOUD failure instead of a quieter
+#: suite. New members are still covered: the parametrization below is the union
+#: of this list and the live table.
+NEVER_FINAL_TOKENS_THAT_MUST_BE_PRESENT = (
+    "mr.", "mrs.", "ms.", "dr.", "prof.", "rev.", "hon.",
+    "jr.", "sr.", "col.", "capt.", "lt.", "sgt.", "gov.", "sen.", "mt.",
+    "vs.", "approx.", "fig.", "vol.", "al.",
+    "e.g.", "i.e.", "cf.", "viz.",
+)
+
+
+@pytest.mark.parametrize("token", NEVER_FINAL_TOKENS_THAT_MUST_BE_PRESENT)
+def test_the_never_final_table_still_contains_every_token_it_is_required_to(token):
+    """Membership, asserted against a literal list rather than against the table
+    under test. Removing an entry now fails here AND fails behaviourally below;
+    before, it merely removed a test case."""
+    assert token in NEVER_FINAL_ABBREVIATIONS, (
+        f"{token!r} left NEVER_FINAL_ABBREVIATIONS: every sentence after it "
+        f"is now split off and graded as its own sentence")
+
+
+@pytest.mark.parametrize(
+    "token",
+    sorted(set(NEVER_FINAL_TOKENS_THAT_MUST_BE_PRESENT) | set(NEVER_FINAL_ABBREVIATIONS)))
 def test_every_never_final_entry_holds_the_sentence_open(token):
     """The class, not the samples: EVERY entry means the same thing, so every
     entry is checked against a capitalised follower -- the case that used to
-    split them."""
+    split them. Parametrized over the union of the required literals and the
+    live table, so a token dropped from the table is still exercised (and
+    fails), and a token added to it is covered on arrival."""
     text = f"Something noted {token} Tom left the room."
     assert _spans(text) == [text], token
     assert _passes(text) is True
+
+
+#: The same defence for tier 2, whose behaviour test is parametrized over the
+#: live table for the same reason and would shrink the same silent way.
+CAN_BE_FINAL_TOKENS_THAT_MUST_BE_PRESENT = (
+    "jan.", "feb.", "apr.", "jun.", "jul.", "aug.", "sep.", "sept.",
+    "oct.", "nov.", "dec.",
+    "mon.", "tue.", "tues.", "wed.", "thu.", "thurs.", "fri.",
+    "inc.", "ltd.", "corp.", "univ.", "ave.", "blvd.", "rd.", "sq.", "dept.",
+    "etc.", "u.s.", "u.k.", "a.m.", "p.m.",
+)
+
+
+@pytest.mark.parametrize("token", CAN_BE_FINAL_TOKENS_THAT_MUST_BE_PRESENT)
+def test_the_can_be_final_table_still_contains_every_token_it_is_required_to(token):
+    """Dropping one of these hides every sentence after it (if it moves to tier
+    1) or is simply untested (if it is deleted). Literals, not the table."""
+    assert token in CAN_BE_FINAL_ABBREVIATIONS, token
 
 
 # --------------------------------------------------------------------------
 # TIER 2 -- can be final: the FALSE-PASS direction
 # --------------------------------------------------------------------------
 
-@pytest.mark.parametrize("token", CAN_BE_FINAL_ABBREVIATIONS)
+@pytest.mark.parametrize(
+    "token",
+    sorted(set(CAN_BE_FINAL_TOKENS_THAT_MUST_BE_PRESENT) | set(CAN_BE_FINAL_ABBREVIATIONS)))
 def test_every_can_be_final_entry_splits_before_a_capital_and_not_before_a_lowercase(token):
     """Both halves of the tier-2 rule over the whole table. Before the repair the
     single-dot half of this table was UNCONDITIONALLY never-final, so each entry
@@ -315,3 +366,172 @@ def test_segmentation_is_correct_once_invisible_characters_are_stripped():
     assert _spans(stripped) == ["Sam went to the market.", "Tom bought bread.",
                                 "Rachel paid.", "Nobody complained."]
     assert check_sentence_initial_letter(S, stripped)["pass"] is False
+
+
+# --------------------------------------------------------------------------
+# ITEM 1 -- a can-be-final abbreviation followed by the NEXT PIECE of the same
+# expression. Re-tiering weekdays and months as can-be-final split a date
+# between its own halves ("Shipments resume Fri. Oct. 3." -> ["Shipments resume
+# Fri.", "Oct. 3."]), a false FAIL on clean prose in the direction that inflates
+# the apparent difficulty of the HELD-OUT type.
+# --------------------------------------------------------------------------
+
+#: Literal, not derived from the tables under test: this is the list the class
+#: is defined by, so shrinking a table must fail here rather than quietly
+#: shrinking the number of cases.
+WEEKDAY_ABBREVIATIONS = ("Mon.", "Tue.", "Tues.", "Wed.", "Thu.", "Thurs.", "Fri.")
+
+#: Months that do NOT begin with S, so a spurious second span is a real failure
+#: of a letter-"s" constraint rather than an accidental pass.
+MONTH_ABBREVIATIONS_NOT_BEGINNING_WITH_S = (
+    "Jan.", "Feb.", "Apr.", "Jun.", "Jul.", "Aug.", "Oct.", "Nov.", "Dec.")
+
+DATE_PAIRS = tuple((w, m) for w in WEEKDAY_ABBREVIATIONS
+                   for m in MONTH_ABBREVIATIONS_NOT_BEGINNING_WITH_S)
+
+
+def test_the_date_abbreviations_are_the_tokens_this_class_is_built_from():
+    """Binds the literals above to the real tables. If a weekday or a month
+    leaves tier 2, or a month leaves the continuing-follower table, the class
+    below stops testing what it claims to and this says so first."""
+    assert len(DATE_PAIRS) == 63
+    for token in WEEKDAY_ABBREVIATIONS + MONTH_ABBREVIATIONS_NOT_BEGINNING_WITH_S:
+        assert token.lower() in CAN_BE_FINAL_ABBREVIATIONS, token
+    for month in MONTH_ABBREVIATIONS_NOT_BEGINNING_WITH_S:
+        assert month.lower() in EXPRESSION_CONTINUING_FOLLOWERS, month
+
+
+def test_every_continuing_follower_is_a_known_abbreviation():
+    """The follower table may not smuggle in a token no tier knows about: it is
+    a statement about abbreviations that continue an expression, not a private
+    allowlist that can suppress boundaries after arbitrary words."""
+    known = (set(NEVER_FINAL_ABBREVIATIONS) | set(CAN_BE_FINAL_ABBREVIATIONS)
+             | set(CAN_BE_FINAL_ONLY_AS_ORDINARY_WORD))
+    assert set(EXPRESSION_CONTINUING_FOLLOWERS) <= known
+    for token in EXPRESSION_CONTINUING_FOLLOWERS:
+        assert token == token.lower() and token.endswith("."), token
+    # tier 1 is deliberately NOT a continuing follower: "Dr.", "Mr." and the
+    # clause openers routinely START a sentence ("Sales rose in Aug. Dr. Rivera
+    # resigned."), and suppressing that boundary would hide unbounded text.
+    assert not set(EXPRESSION_CONTINUING_FOLLOWERS) & set(NEVER_FINAL_ABBREVIATIONS)
+
+
+@pytest.mark.parametrize("weekday,month", DATE_PAIRS,
+                         ids=[f"{w}{m}" for w, m in DATE_PAIRS])
+def test_a_date_is_never_split_between_its_own_halves(weekday, month):
+    """All 63 weekday x non-S-month pairs. Every one of them false-failed after
+    the re-tiering: the second span began with the month's capital letter, so a
+    letter-"s" constraint was reported violated by prose that never violated
+    it."""
+    text = f"Shipments resume {weekday} {month} 3."
+    assert _spans(text) == [text], f"{weekday} {month} split inside the date"
+    assert _passes(text) is True
+
+
+@pytest.mark.parametrize("weekday", WEEKDAY_ABBREVIATIONS)
+def test_a_weekday_that_really_does_end_the_sentence_still_splits(weekday):
+    """The other direction of the same rule, over the same tokens: the fix is
+    "the follower is the next piece of this expression", NOT "a weekday never
+    ends a sentence". An ordinary capitalised word after it is still a new
+    sentence and is still graded."""
+    text = f"Supplies ran short by {weekday} Nobody noticed the delay."
+    assert len(_sentence_spans(text)) == 2, weekday
+    assert _passes(text) is False
+
+
+CONTINUING_EXPRESSION_IS_ONE_SENTENCE = (
+    ("Shipments resume Fri. Oct. 3.", "weekday then month then day"),
+    ("Shipments resume Fri. Oct. 3, 2026, as planned.", "the same date in full"),
+    ("Sam waited until Oct. 3 so the invoice cleared.", "month then bare day"),
+    ("Staff met at the U.S. Dept. of Commerce so nobody travelled.",
+     "an organisation's name continuing through two abbreviations"),
+    ("Sam signed for Acme Corp. Ltd. so the deal closed.", "name suffixes in a row"),
+    ("Standup moved to Mon. a.m. so the room is free.", "the halves of a clock time"),
+)
+
+STILL_TWO_SENTENCES = (
+    ("Supplies ran short by Fri. Nobody noticed.", "a capitalised ordinary word"),
+    ("Sales rose in Aug. Tom took the account.", "a name, not an abbreviation"),
+    ("Shipments resume Fri. October arrived badly.",
+     "the month spelled out is an ordinary word, so it opens a sentence"),
+    ("Shipments left Acme Inc. Tom signed for them.", "the pinned tier-2 case"),
+    ("Sales rose in Aug. Dr. Rivera resigned that week.",
+     "a title opens a sentence, so tier 1 is not a continuing follower"),
+)
+
+
+@pytest.mark.parametrize("text,why", CONTINUING_EXPRESSION_IS_ONE_SENTENCE,
+                         ids=[w for _, w in CONTINUING_EXPRESSION_IS_ONE_SENTENCE])
+def test_a_continuing_follower_is_not_a_boundary(text, why):
+    assert _spans(text) == [text], why
+    assert _passes(text) is True
+
+
+@pytest.mark.parametrize("text,why", STILL_TWO_SENTENCES,
+                         ids=[w for _, w in STILL_TWO_SENTENCES])
+def test_a_genuinely_sentence_final_abbreviation_still_splits(text, why):
+    """The repair may not be bought with swallowed boundaries: everything the
+    re-tiering was FOR still splits."""
+    assert len(_sentence_spans(text)) == 2, why
+    assert _passes(text) is False
+
+
+def test_a_bare_number_after_a_month_is_the_day_not_a_new_sentence():
+    """NUMBER_AFTER_ABBREVIATION_CONTINUES_THE_EXPRESSION, stated where it can
+    be seen: the day of a date is a continuation on its own evidence, not
+    because a digit happens not to be an uppercase letter."""
+    from constraints.checkers import _follower_continues_the_expression
+    text = "Sam waited until Oct. 3."
+    assert _follower_continues_the_expression(text, text.index("Oct.") + 4) is True
+    assert _spans(text) == ["Sam waited until Oct. 3."]
+    assert _spans("Sam waited until Oct. 30 so the invoice cleared.") == [
+        "Sam waited until Oct. 30 so the invoice cleared."]
+
+
+# --------------------------------------------------------------------------
+# ITEM 4 -- an abbreviation inside brackets or quotes. ``_preceding_token``
+# returns the token verbatim, so the lookup key was "(e.g." and missed every
+# table: the parenthesised form of the clause openers false-failed at HEAD and
+# at base, and the whole class was invisible to the suite in BOTH directions.
+# --------------------------------------------------------------------------
+
+BRACKETED_ABBREVIATION_IS_ONE_SENTENCE = (
+    ("Several suppliers already use it (e.g. Rivera's group in Denver).",
+     "(e.g. -- the exact text the verifier proved false-failing"),
+    ("Sourcing is the bottleneck (i.e. Rivera cannot buy the parts).", "(i.e."),
+    ("Sign-off came from the lead reviewer (Dr. Ramirez) last week.", "(Dr."),
+    ("Several teams use it [e.g. Rivera's group] already.", "[e.g."),
+    ("Several sources disagree (cf. Nelson on the same point).", "(cf."),
+    ("Some memo said “e.g. Rivera signs for them” and stopped there.",
+     "a curly opening quote"),
+    ("Some note read 'i.e. Rivera signs' and nothing else.", "an apostrophe"),
+    ("Shipments resume (Fri. Oct. 3) as planned.",
+     "both repairs at once: a bracketed weekday and a continuing follower"),
+    ("Some report from (Dr. J. Smith) says so.",
+     "a bracketed title still vouches for the initial after it"),
+)
+
+BRACKETED_TOKEN_THAT_IS_NOT_AN_ABBREVIATION_STILL_SPLITS = (
+    ("Several suppliers use it (Rivera. Tom disagreed loudly.)",
+     "stripping brackets does not make every bracketed token an abbreviation"),
+    ("Shipments resume (Fri. Tom left the room.)",
+     "a bracketed tier-2 token is placed in tier 2, not blanket-suppressed"),
+)
+
+
+@pytest.mark.parametrize("text,why", BRACKETED_ABBREVIATION_IS_ONE_SENTENCE,
+                         ids=[w for _, w in BRACKETED_ABBREVIATION_IS_ONE_SENTENCE])
+def test_a_bracketed_or_quoted_abbreviation_is_looked_up_like_a_bare_one(text, why):
+    """One sentence, beginning with S. Splitting it reports a sentence beginning
+    with R (or J), which is a violation manufactured out of ordinary prose."""
+    assert _spans(text) == [text], why
+    assert _passes(text) is True
+
+
+@pytest.mark.parametrize("text,why", BRACKETED_TOKEN_THAT_IS_NOT_AN_ABBREVIATION_STILL_SPLITS,
+                         ids=["ordinary word", "tier-2 token"])
+def test_stripping_wrappers_does_not_suppress_boundaries_by_itself(text, why):
+    """The other direction: the strip feeds a TABLE LOOKUP, it is not a licence
+    to swallow a boundary after anything wearing a bracket."""
+    assert len(_sentence_spans(text)) == 2, why
+    assert _passes(text) is False

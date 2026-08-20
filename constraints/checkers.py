@@ -1499,6 +1499,55 @@ CAN_BE_FINAL_ONLY_AS_ORDINARY_WORD: Tuple[str, ...] = (
     "no.", "co.", "st.", "sat.", "sun.", "est.", "rep.", "gen.", "mar.",
 )
 
+#: TIER 2, SECOND HALF OF THE RULE -- WHAT THE FOLLOWER IS, not just how it is
+#: cased. Tiering weekdays and months as CAN-BE-FINAL made a DATE split between
+#: its own halves: "Shipments resume Fri. Oct. 3." became ["Shipments resume
+#: Fri.", "Oct. 3."] and the second span was reported as a sentence beginning
+#: with 'O'. All 63 weekday x non-S-month pairs false-failed. No human ruling is
+#: needed for that one -- no reading of "Fri. Oct. 3" contains two sentences --
+#: and the direction it errs in is the expensive one for this project: it
+#: manufactures violations out of clean prose and so biases
+#: sentence_initial_letter, the HELD-OUT type, toward "harder than it is".
+#:
+#: The rule: a tier-2 '.' is not a boundary when the token after it CONTINUES
+#: the same expression -- the next piece of a date ("Fri. Oct. 3", "Oct. 3"),
+#: the next piece of an organisation's name ("the U.S. Dept. of Commerce"), or
+#: the other half of a clock time ("Mon. a.m."). A capitalised ordinary word
+#: ("Fri. Nobody noticed.") is untouched and still splits.
+#:
+#: Why this is a LITERAL table and not "any abbreviation": tier 1 is full of
+#: tokens that routinely OPEN a sentence -- "Sales rose in Aug. Dr. Rivera
+#: resigned." is two sentences -- and so are the tier-3 titles "Rep." and
+#: "Gen.". Suppressing the boundary before those would trade a false fail for a
+#: swallowed boundary, and a swallowed boundary hides an UNBOUNDED amount of
+#: following text while a spurious one costs exactly one extra graded segment.
+#: Only tokens that cannot be the first word of a new sentence *in this
+#: position* are listed. Every member is an abbreviation that appears in one of
+#: the three tiers above (asserted in the tests).
+#: Cost accepted and named: "Sales rose in Aug. Sept. was worse." keeps its
+#: boundary suppressed -- a real, and to a human also ambiguous, sentence pair.
+EXPRESSION_CONTINUING_FOLLOWERS: Tuple[str, ...] = (
+    # a weekday is followed by its month: "Fri. Oct. 3"
+    "jan.", "feb.", "mar.", "apr.", "jun.", "jul.", "aug.",
+    "sep.", "sept.", "oct.", "nov.", "dec.",
+    # name suffixes: these END a name, so they can only be continuing the name
+    # that the previous abbreviation was already part of ("Acme Corp. Ltd.")
+    "inc.", "ltd.", "corp.", "co.", "univ.", "dept.",
+    # address elements, same argument ("Third Ave. Sq. entrance")
+    "ave.", "blvd.", "rd.", "sq.",
+    # the halves of a clock time: "Mon. a.m."
+    "a.m.", "p.m.",
+)
+
+#: A5/ITEM-1: a bare number after a can-be-final abbreviation is the next piece
+#: of the expression ("Oct. 3", "No. 7"), never the first word of a sentence.
+#: Stated here as its own ruling rather than left to fall out of "a digit is not
+#: an uppercase letter", so that relaxing the capital rule later cannot silently
+#: take the day off a date.
+NUMBER_AFTER_ABBREVIATION_CONTINUES_THE_EXPRESSION = True
+
+_EXPRESSION_CONTINUING_FOLLOWER_SET = frozenset(EXPRESSION_CONTINUING_FOLLOWERS)
+
 #: A5: the DEFAULT for an inner-dotted token that is in no table above
 #: ("U.S.A.", "Ph.D.", "3.p.m."): treat it as TIER 2, i.e. the follower decides.
 #: The alternative -- "a token with two dots never terminates" -- is a
@@ -1541,7 +1590,34 @@ SENTENCE_START_SKIPS_NON_ALNUM = True
 #: a sentence and is not checked.
 EMPTY_SEGMENT_IS_SENTENCE = False
 
+#: A5/ITEM-4: an abbreviation means the same thing with a bracket or a quote in
+#: front of it, but ``_preceding_token`` returns the token VERBATIM, so the
+#: lookup key for "(e.g." was "(e.g." and missed EVERY table. The whole
+#: parenthesised form of the clause openers therefore false-failed at HEAD and
+#: at base: "Several suppliers already use it (e.g. Rivera's group in Denver)."
+#: was split and its second half reported as a sentence beginning with 'R' --
+#: again a violation manufactured out of ordinary prose. Leading characters that
+#: are neither letters nor digits are stripped before a table lookup, which is
+#: the rule the reader already uses to find a sentence's first character
+#: (``SENTENCE_START_SKIPS_NON_ALNUM``). A token that is ALL punctuation keeps
+#: its verbatim form, so nothing that used to be looked up becomes empty.
+STRIP_WRAPPERS_BEFORE_ABBREVIATION_LOOKUP = True
+
 _SINGLE_INITIAL_RE = re.compile(r"^[^\W\d_]\.$", re.UNICODE)
+
+
+def _lookup_form(token: str) -> str:
+    """``token`` with any leading brackets/quotes removed, for a table lookup.
+
+    Case is preserved: the ordinary-word tier keys on whether the author wrote
+    ``St.`` or ``st.``, and "(St." must still read as the capitalised form.
+    """
+    if not STRIP_WRAPPERS_BEFORE_ABBREVIATION_LOOKUP:
+        return token
+    idx = 0
+    while idx < len(token) and not token[idx].isalnum():
+        idx += 1
+    return token[idx:] or token
 
 
 def _preceding_token(text: str, end: int) -> str:
@@ -1625,11 +1701,30 @@ def _is_name_initial(text: str, run_end: int, token_lower: str) -> bool:
         return False
     if not SINGLE_INITIAL_REQUIRES_NAME_EVIDENCE:
         return True
-    before = _token_before(text, run_end).lower()
+    before = _lookup_form(_token_before(text, run_end)).lower()
     if before in NAME_TITLE_ABBREVIATIONS or _SINGLE_INITIAL_RE.match(before):
         return True
+    # RAW token: this looks for a second initial inside the SAME name run, so an
+    # intervening bracket or quote means the following initial belongs elsewhere.
+    # Stripping it would manufacture name evidence and swallow a real boundary.
     after = _token_after(text, run_end).lower()
     return bool(_SINGLE_INITIAL_RE.match(after))
+
+
+def _follower_continues_the_expression(text: str, idx: int) -> bool:
+    """Is the token after ``idx`` the NEXT PIECE of the expression (A5/ITEM-1)?
+
+    Only asked of a can-be-final abbreviation, where the follower's case would
+    otherwise decide alone. "Fri. Oct. 3" and "the U.S. Dept. of Commerce" are
+    one expression each; "Fri. Nobody noticed." is two sentences, and stays two.
+    """
+    follower = _lookup_form(_token_after(text, idx))
+    if not follower:
+        return False
+    if follower.lower() in _EXPRESSION_CONTINUING_FOLLOWER_SET:
+        return True
+    return (NUMBER_AFTER_ABBREVIATION_CONTINUES_THE_EXPRESSION
+            and follower[:1].isdigit())
 
 
 def _is_sentence_end(text: str, start: int, run_end: int) -> bool:
@@ -1650,7 +1745,7 @@ def _is_sentence_end(text: str, start: int, run_end: int) -> bool:
         next_ch = text[visible]
         if not next_ch.isspace() and next_ch not in SENTENCE_TRAILERS:
             return False
-    token = _preceding_token(text, run_end)
+    token = _lookup_form(_preceding_token(text, run_end))
     lowered = token.lower()
     if lowered in NEVER_FINAL_ABBREVIATIONS:
         # TIER 1: "Dr.", "e.g." -- introduces what follows, so never a boundary.
@@ -1659,7 +1754,11 @@ def _is_sentence_end(text: str, start: int, run_end: int) -> bool:
         # TIER 3: abbreviation form ("St. Louis") keeps the sentence open;
         # ordinary-word form followed by a new capitalised word ("Sam said no.
         # Tom left.") ends it.
-        written_as_word = not token[:1].isupper()
+        # RAW token, not the stripped one: _lookup_form drops a leading quote or
+        # bracket, so '"No.' opening quoted dialogue would read as capitalised and
+        # take the abbreviation branch, swallowing the boundary. Strip for the TABLE
+        # LOOKUP only; the case test is about how the author wrote the word.
+        written_as_word = not _preceding_token(text, run_end)[:1].isupper()
         return written_as_word and _next_word_starts_a_new_sentence(text, run_end)
     if _is_name_initial(text, run_end, lowered):
         return False
@@ -1668,7 +1767,10 @@ def _is_sentence_end(text: str, start: int, run_end: int) -> bool:
         return False
     if lowered in CAN_BE_FINAL_ABBREVIATIONS or inner_dotted:
         # TIER 2, and the same rule as the default for an unlisted inner-dotted
-        # token: the follower decides.
+        # token: the follower decides -- WHAT it is first ("Fri. Oct. 3" is one
+        # date, not two sentences), then how it is cased.
+        if _follower_continues_the_expression(text, run_end):
+            return False
         return _next_word_starts_a_new_sentence(text, run_end)
     return True
 

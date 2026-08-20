@@ -1130,7 +1130,47 @@ NOT_A_BOUNDARY = (
     ("Sam signed with Acme Co. Ltd so the deal closed.", "Co. Ltd, capitalised follower"),
     ("Sam works at No. 7 Station so he walks.", "No. before a digit"),
     ("Sam waited until Feb. 3 so the invoice cleared.", "month before a date"),
+    # --- ITEM 1: the re-tiering split a DATE between its own halves. All 63
+    # weekday x non-S-month pairs false-failed; the class is enumerated in
+    # tests/test_sentence_segmentation.py, these are its carriers at the
+    # check() boundary.
+    ("Shipments resume Fri. Oct. 3.", "weekday then month then day is one date"),
+    ("Shipments resume Fri. Oct. 3, 2026, as planned.", "the same date written in full"),
+    ("Staff met at the U.S. Dept. of Commerce so nobody travelled.",
+     "an organisation's name continuing through two abbreviations"),
+    ("Standup moved to Mon. a.m. so the room is free.", "the halves of a clock time"),
+    # --- ITEM 4: the same abbreviations wearing a bracket or a quote. The
+    # lookup key was "(e.g." and missed every table, so the whole parenthesised
+    # form of the clause openers false-failed at HEAD and at base.
+    ("Several suppliers already use it (e.g. Rivera's group in Denver).",
+     "(e.g. is the same clause opener as e.g."),
+    ("Sourcing is the bottleneck (i.e. Rivera cannot buy the parts).", "(i.e."),
+    ("Sign-off came from the lead reviewer (Dr. Ramirez) last week.", "(Dr."),
+    ("Several teams use it [e.g. Rivera's group] already.", "[e.g."),
 )
+
+#: The other direction for both repairs: prose that really does contain two
+#: sentences must still be split into two and still fail a letter-"s" check.
+#: Without these rows the repairs could be bought with swallowed boundaries,
+#: which is the expensive direction -- one hides an unbounded amount of text.
+STILL_A_BOUNDARY = (
+    ("Supplies ran short by Fri. Nobody noticed.", "a capitalised ordinary word"),
+    ("Shipments resume Fri. October arrived badly.", "the month spelled out"),
+    ("Sales rose in Aug. Dr. Rivera resigned that week.",
+     "a title opens a sentence, so tier 1 is not a continuing follower"),
+    ("Several suppliers use it (Rivera. Tom disagreed loudly.)",
+     "a bracketed ordinary word is not an abbreviation"),
+    ("Shipments resume (Fri. Tom left the room.)",
+     "a bracketed tier-2 token is placed in tier 2, not blanket-suppressed"),
+)
+
+
+@pytest.mark.parametrize("text,why", STILL_A_BOUNDARY, ids=[w for _, w in STILL_A_BOUNDARY])
+def test_the_continuation_repairs_do_not_swallow_a_real_boundary(text, why):
+    assert len(CHECKERS_MODULE._sentence_spans(text)) == 2, why
+    result = check(S_LETTER, text)
+    assert result["pass"] is False, why
+    _assert_verdict_shape(result, text)
 
 
 @pytest.mark.parametrize("text,why", NOT_A_BOUNDARY, ids=[w for _, w in NOT_A_BOUNDARY])

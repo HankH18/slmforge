@@ -1372,11 +1372,22 @@ def test_thresholds_hold_the_values_r6_states():
 
 
 def test_gate_never_reads_the_repos_real_runs_directory(tmp_path):
-    """These tests must not be able to touch a live artifact."""
+    """These tests must not be able to touch a live artifact.
+
+    The previous form asserted `not runs/g1.exists() or <report>.stat()`, which
+    raised FileNotFoundError whenever runs/g1 existed WITHOUT a gate report --
+    the normal state while an ablation is mid-run, since run_ablation.py creates
+    the directory long before any gate report exists. It tested a coincidence of
+    repo state rather than the guarantee. Compare before/after instead.
+    """
+    live = REPO_ROOT / "runs" / "g1" / "gate_report.json"
+    before = live.stat().st_mtime_ns if live.exists() else None
+
     run_dir, cfg, _, _ = build_run(tmp_path, best_fail=10)
     assert run_gate(run_dir, cfg) == G.EXIT_PROCEED
-    assert not (REPO_ROOT / "runs" / "g1").exists() or \
-        (REPO_ROOT / "runs" / "g1" / "gate_report.json").stat().st_mtime > 0
+
+    after = live.stat().st_mtime_ns if live.exists() else None
+    assert before == after, "the gate wrote into the repo's live runs/g1"
     report = read_report(run_dir)
     assert str(tmp_path) in report["run_dir"]
 
