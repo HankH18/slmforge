@@ -1,0 +1,65 @@
+{"id": "c-lex-001", "type": "banned_words", "params": {"words": ["coffee", "espresso", "latte", "lattes"]}, "family": "lexical", "split": "train"}
+{"id": "c-lex-002", "type": "banned_words", "params": {"words": ["train", "trains", "subway", "rail"]}, "family": "lexical", "split": "train"}
+{"id": "c-lex-003", "type": "banned_words", "params": {"words": ["climate", "carbon", "warming"]}, "family": "lexical", "split": "train"}
+{"id": "c-lex-004", "type": "banned_words", "params": {"words": ["recipe", "recipes", "oven"]}, "family": "lexical", "split": "train"}
+{"id": "c-lex-005", "type": "banned_words", "params": {"words": ["music", "song", "songs", "band"]}, "family": "lexical", "split": "train"}
+{"id": "c-lex-006", "type": "banned_words", "params": {"words": ["sleep", "nap", "naps"]}, "family": "lexical", "split": "train"}
+{"id": "c-lex-007", "type": "banned_words", "params": {"words": ["running", "marathon", "marathons"]}, "family": "lexical", "split": "train"}
+{"id": "c-lex-008", "type": "banned_words", "params": {"words": ["budget", "budgets", "savings"]}, "family": "lexical", "split": "train"}
+{"id": "c-lex-009", "type": "banned_words", "params": {"words": ["dog", "dogs", "puppy", "puppies"]}, "family": "lexical", "split": "train"}
+{"id": "c-lex-010", "type": "banned_words", "params": {"words": ["garden", "gardens", "soil"]}, "family": "lexical", "split": "train"}
+{"id": "c-lex-011", "type": "banned_words", "params": {"words": ["film", "films", "movie", "movies"]}, "family": "lexical", "split": "train"}
+{"id": "c-lex-012", "type": "banned_words", "params": {"words": ["bug", "bugs", "crash", "crashes"]}, "family": "lexical", "split": "train"}
+{"id": "c-lex-013", "type": "banned_words", "params": {"words": ["patient", "patients", "doctor", "doctors"]}, "family": "lexical", "split": "train"}
+{"id": "c-lex-014", "type": "banned_words", "params": {"words": ["teacher", "teachers", "student", "students"]}, "family": "lexical", "split": "train"}
+{"id": "c-lex-015", "type": "banned_words", "params": {"words": ["ocean", "oceans", "sea", "seas"]}, "family": "lexical", "split": "train"}
+{"id": "c-lex-016", "type": "banned_words", "params": {"words": ["bike", "bikes", "bicycle", "bicycles"]}, "family": "lexical", "split": "train"}
+{"id": "c-lex-017", "type": "banned_words", "params": {"words": ["chess", "pawn", "pawns"]}, "family": "lexical", "split": "train"}
+{"id": "c-lex-018", "type": "banned_words", "params": {"words": ["wine", "wines", "vineyard", "vineyards"]}, "family": "lexical", "split": "train"}
+{"id": "c-lex-019", "type": "banned_words", "params": {"words": ["letter", "letters", "mail"]}, "family": "lexical", "split": "train"}
+{"id": "c-lex-020", "type": "banned_words", "params": {"words": ["snow", "winter"]}, "family": "lexical", "split": "train"}
+{"id": "c-lex-021", "type": "banned_words", "params": {"words": ["bread", "dough", "loaf"]}, "family": "lexical", "split": "train"}
+{"id": "c-lex-022", "type": "banned_words", "params": {"words": ["photo", "photos", "photograph", "camera"]}, "family": "lexical", "split": "train"}
+{"id": "c-lex-023", "type": "banned_words", "params": {"words": ["library", "libraries", "book", "books"]}, "family": "lexical", "split": "train"}
+{"id": "c-lex-024", "type": "banned_words", "params": {"words": ["tea", "kettle"]}, "family": "lexical", "split": "train"}
+{"id": "c-lex-025", "type": "banned_words", "params": {"words": ["very", "really", "quite"]}, "family": "lexical", "split": "train"}
+{"id": "c-lex-026", "type": "banned_words", "params": {"words": ["important", "significant"]}, "family": "lexical", "split": "train"}
+{"id": "c-lex-027", "type": "banned_words", "params": {"words": ["good", "bad", "great"]}, "family": "lexical", "split": "train"}
+{"id": "c-lex-028", "type": "banned_words", "params": {"words": ["thing", "things", "stuff"]}, "family": "lexical", "split": "train"}
+{"id": "c-lex-029", "type": "banned_words", "params": {"words": ["just", "simply"]}, "family": "lexical", "split": "train"}
+{"id": "c-lex-030", "type": "banned_words", "params": {"words": ["actually", "basically"]}, "family": "lexical", "split": "train"}
+{"id": "c-lex-040", "type": "banned_phrases", "params": {"phrases": ["in conclusion", "to sum up"]}, "family": "lexical", "split": "train"}
+{"id": "c-lex-041", "type": "banned_phrases", "params": {"phrases": ["it is important to note", "it should be noted"]}, "family": "lexical", "split": "train"}
+{"id": "c-lex-042", "type": "banned_phrases", "params": {"phrases": ["on the other hand", "that being said"]}, "family": "lexical", "split": "train"}
+{"id": "c-lex-043", "type": "banned_phrases", "params": {"phrases": ["first of all", "last but not least"]}, "family": "lexical", "split": "train"}
+{"id": "c-lex-044", "type": "banned_phrases", "params": {"phrases": ["a wide range of", "a variety of"]}, "family": "lexical", "split": "train"}
+{"id": "c-lex-045", "type": "banned_phrases", "params": {"phrases": ["at the end of the day", "when all is said and done"]}, "family": "lexical", "split": "train"}
+{"id": "c-lex-046", "type": "banned_phrases", "params": {"phrases": ["in today's world", "in this day and age"]}, "family": "lexical", "split": "train"}
+{"id": "c-lex-047", "type": "banned_phrases", "params": {"phrases": ["as an ai", "large language model"]}, "family": "lexical", "split": "train"}
+{"id": "c-chr-001", "type": "banned_letter", "params": {"letter": "e"}, "family": "character", "split": "train"}
+{"id": "c-chr-002", "type": "banned_letter", "params": {"letter": "a"}, "family": "character", "split": "train"}
+{"id": "c-chr-003", "type": "banned_letter", "params": {"letter": "s"}, "family": "character", "split": "train"}
+{"id": "c-chr-004", "type": "banned_letter", "params": {"letter": "o"}, "family": "character", "split": "train"}
+{"id": "c-chr-005", "type": "banned_letter", "params": {"letter": "r"}, "family": "character", "split": "train"}
+{"id": "c-chr-006", "type": "banned_letter", "params": {"letter": "l"}, "family": "character", "split": "train"}
+{"id": "c-chr-007", "type": "banned_letter", "params": {"letter": "u"}, "family": "character", "split": "train"}
+{"id": "c-chr-008", "type": "banned_letter", "params": {"letter": "i"}, "family": "character", "split": "train"}
+{"id": "c-chr-009", "type": "banned_letter", "params": {"letter": "m"}, "family": "character", "split": "train"}
+{"id": "c-chr-010", "type": "banned_letter", "params": {"letter": "p"}, "family": "character", "split": "train"}
+{"id": "c-chr-020", "type": "banned_punctuation", "params": {"marks": [","]}, "family": "character", "split": "heldout_type"}
+{"id": "c-chr-021", "type": "banned_punctuation", "params": {"marks": [";", ":"]}, "family": "character", "split": "heldout_type"}
+{"id": "c-chr-022", "type": "banned_punctuation", "params": {"marks": [",", ";"]}, "family": "character", "split": "heldout_type"}
+{"id": "c-chr-023", "type": "banned_punctuation", "params": {"marks": ["-", "—"]}, "family": "character", "split": "heldout_type"}
+{"id": "c-chr-024", "type": "banned_punctuation", "params": {"marks": ["!", "?"]}, "family": "character", "split": "heldout_type"}
+{"id": "c-chr-025", "type": "banned_punctuation", "params": {"marks": ["(", ")"]}, "family": "character", "split": "heldout_type"}
+{"id": "c-chr-026", "type": "banned_punctuation", "params": {"marks": [",", "-"]}, "family": "character", "split": "heldout_type"}
+{"id": "c-str-001", "type": "sentence_initial_letter", "params": {"letter": "t"}, "family": "structural", "split": "heldout_type"}
+{"id": "c-str-002", "type": "sentence_initial_letter", "params": {"letter": "s"}, "family": "structural", "split": "heldout_type"}
+{"id": "c-str-003", "type": "sentence_initial_letter", "params": {"letter": "a"}, "family": "structural", "split": "heldout_type"}
+{"id": "c-str-004", "type": "sentence_initial_letter", "params": {"letter": "w"}, "family": "structural", "split": "heldout_type"}
+{"id": "c-str-005", "type": "sentence_initial_letter", "params": {"letter": "i"}, "family": "structural", "split": "heldout_type"}
+{"id": "c-str-006", "type": "sentence_initial_letter", "params": {"letter": "m"}, "family": "structural", "split": "heldout_type"}
+{"id": "c-str-007", "type": "sentence_initial_letter", "params": {"letter": "e"}, "family": "structural", "split": "heldout_type"}
+{"id": "c-str-008", "type": "sentence_initial_letter", "params": {"letter": "o"}, "family": "structural", "split": "heldout_type"}
+{"id": "c-fmt-001", "type": "no_lists", "params": {}, "family": "format_negative", "split": "train"}
+{"id": "c-fmt-002", "type": "no_quotation_marks", "params": {}, "family": "format_negative", "split": "train"}

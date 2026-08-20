@@ -51,7 +51,11 @@
     "smoke_train_jsonl": "data/train/smoke_v0.jsonl",
     "completion_only_loss": true,
     "enable_thinking": false,
-    "_note": "P3 schema: {\"messages\": [system, user, assistant], \"meta\": {...}}. system must equal eval.SYSTEM_CORE verbatim and enable_thinking must match eval.py's HFGenerator, so the training condition equals the zero_shot eval condition."
+    "prompt_renderer": "scenarios.render.render_user_message",
+    "scenarios_path": "data/scenarios/corpus.jsonl",
+    "constraints_path": "data/scenarios/constraint_instances.jsonl",
+    "_note": "Pivot schema (docs/PIVOT_DESIGN.md, Data models): {\"messages\": [user, assistant], \"constraints\": [...], \"provenance\": {...}}. There is NO system message and training/modal_app.py will not synthesise one. The training condition is bound to the eval condition by prompt_renderer, not by a system prompt: every row's user message is re-rendered through that shared function and must come back byte-identical before a GPU-second is spent. enable_thinking must still match the eval generator's chat-template call.",
+    "_prompt_renderer_note": "DECLARED ASSUMPTION, to be reconciled at integration: the shared scenario -> user-message renderer written by the scenarios/harness lane, called render(scenario, constraint_lookup) -> str (or render(scenario) at arity 1) -- deliberately the same call scripts/check_loop.py makes, so the writer and the validator of train_log.json agree. It did not exist on disk when training/modal_app.py was adapted. If the lane published it under another name, change THIS STRING -- do not add a second renderer in training code, because a second implementation of the prompt is the drift this contract exists to prevent. scenarios_path/constraints_path resolve rows that reference a scenario or constraint by id; they are copied into train_log.dataset so an offline checker can resolve the same ids."
   },
   "output": {
     "run_dir": "runs/train_v1",

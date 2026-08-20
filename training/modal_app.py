@@ -1,43 +1,88 @@
 #!/usr/bin/env python3
 """
-Grounded Abstainer -- QLoRA fine-tune on Modal.
+Forbidden-Constraint Holder -- QLoRA fine-tune on Modal.
 
 EXACT INVOCATION (run from the repo root). Modal turns this file's
-@app.local_entrypoint signature into the CLI, so `--smoke` is a real flag --
-verified with `modal run training/modal_app.py::main --help`, which prints:
+@app.local_entrypoint signature into the CLI, so `--smoke` is a real flag:
 `--run-name TEXT`, `--out-dir TEXT`, `--dataset TEXT`, `--smoke / --no-smoke`.
 
-    # P4 smoke loop: trains on data/train/smoke_v0.jsonl with smoke_overrides
-    # (max_steps 20) applied, writes runs/smoke/train_log.json + run_manifest.json
+    # smoke loop: trains on configs/train.json:data.smoke_train_jsonl with
+    # smoke_overrides (max_steps 20) applied
     .venv/bin/modal run training/modal_app.py::main --smoke
 
-    # P5 real run: trains on data/train/v1.jsonl with configs/train.json untouched,
-    # writes runs/train_v1/
+    # real run: configs/train.json untouched, full 3 epochs
     .venv/bin/modal run training/modal_app.py::main
-
-    # overrides (both optional)
-    .venv/bin/modal run training/modal_app.py::main --smoke \
-        --dataset data/train/smoke_v0.jsonl --out-dir runs/smoke --run-name smoke
 
     # see the generated CLI without touching the network
     .venv/bin/modal run training/modal_app.py::main --help
 
+THE EXAMPLE SCHEMA THIS READS (pinned, docs/PIVOT_DESIGN.md "Data models")
+-------------------------------------------------------------------------
+    {"messages": [{"role": "user",      "content": "<task + constraints rendered>"},
+                  {"role": "assistant", "content": "<clean completion>"}],
+     "constraints": [<constraint objects or ids>],
+     "provenance": {"teacher": "...", "attempt": <int>}}
+
+There is NO system message. This module does not synthesise one: a system turn
+that training invents and the eval harness never sends is exactly the drift the
+prompt contract exists to prevent. A row carrying a system message is a hard
+error here, not something to quietly drop.
+
+THE PROMPT CONTRACT (the thing that makes every number mean anything)
+---------------------------------------------------------------------
+The training condition must equal the eval condition. Two layers:
+
+  layer 1  scenario (task + constraints) -> user message.
+           Owned by the SHARED RENDERER, which lives in the scenarios/ ---
+           harness lane. This module IMPORTS it by the dotted path in
+           configs/train.json:data.prompt_renderer and never reimplements it.
+           Every row is re-rendered through it and compared, byte for byte,
+           against the user message the row actually carries. A single
+           mismatch aborts the run before the base model is even downloaded,
+           and main() resolves the renderer locally before the container
+           starts at all.
+
+  layer 2  user message -> the token sequence fed to the model.
+           tokenizer.apply_chat_template(..., add_generation_prompt=True),
+           the same call the eval generator makes.
+
+train_log.json records EVIDENCE of both, not a claim about them:
+prompt_contract.sample_rendered_prompt is the literal layer-2 text for a
+named row index, so an offline checker can re-derive it from the dataset and
+compare -- rather than trusting a boolean this file wrote about itself. There
+is deliberately no self-attestation flag anywhere in this module.
+
+DECLARED ASSUMPTIONS (the shared renderer is not on disk yet)
+-------------------------------------------------------------
+At the time this was written the scenarios/harness renderer did not exist.
+Nothing here stubs or emulates it. What IS assumed is stated so integration can
+reconcile it by editing configuration, not logic:
+
+  A. the dotted path in configs/train.json:data.prompt_renderer resolves to a
+     callable inside the `scenarios` or `harness` package -- change the JSON,
+     not the code, if the lane lands elsewhere;
+  B. it is called render(scenario, constraint_lookup) -> str, or render(scenario)
+     if it takes a single positional argument. This is deliberately the SAME
+     call scripts/check_loop.py makes (its `_render_arity`/`render_prompt`), so
+     the writer and the validator of train_log.json agree by construction;
+  C. a training row identifies its source scenario, either inline as
+     row["scenario"] or by row["scenario_id"] against the corpus declared in
+     configs/train.json:data.scenarios_path. The pinned example schema stores
+     only the *rendered* user message, so without one of the two the prompt
+     could be self-attested but never re-derived.
+
+If any of these is wrong, resolve_render_fn / scenario_of /
+verify_prompt_contract raise with the assumption spelled out. Nothing degrades
+to a guess.
+
 Artifacts. Weights are NOT returned through the control plane -- the adapter and
 the merged fp16 model are written into the Modal Volume named in
-configs/train.json:output.modal_volume and committed. The call returns only a
-small JSON manifest (paths, file lists, byte counts) plus train_log.json, which
-the local entrypoint writes under the run directory so scripts/check_loop.py can
-re-verify the loop offline, without re-billing a GPU. Pull the weights with:
+configs/train.json:output.modal_volume and committed. The call returns a small
+manifest plus train_log.json, which the local entrypoint writes under the run
+directory. Pull the weights with:
 
-    .venv/bin/modal volume ls  slmforge-artifacts smoke
     .venv/bin/modal volume get slmforge-artifacts smoke/merged  runs/smoke/merged
     .venv/bin/modal volume get slmforge-artifacts smoke/adapter runs/smoke/adapter
-
-Then close the loop (leg 3) against the pulled checkpoint:
-
-    .venv/bin/python eval.py --model hf:runs/smoke/merged \
-        --eval-set data/eval/scenarios_v1.jsonl --out runs/smoke/eval
-    .venv/bin/python scripts/check_loop.py runs/smoke
 
 Environment knobs (deliberately NOT in configs/train.json -- they are infra, not
 hyperparameters, and train.json is frozen by policy):
@@ -45,11 +90,13 @@ hyperparameters, and train.json is frozen by policy):
     SLMFORGE_TIMEOUT_S   function timeout, default 14400  (Modal's own default
                          is 300s and WILL kill a real run partway through)
 
-Written against modal client 1.5.x: modal.App (modal.Stub does not exist),
-gpu= as a string kwarg, secrets= as a list, Volume.from_name + vol.commit().
+Written against modal client 1.5.4 (verified with the installed package):
+modal.App (modal.Stub does not exist in 1.5.x), gpu= as a string kwarg,
+secrets= as a list, Volume.from_name(create_if_missing=True) + vol.commit().
 """
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import sys
@@ -66,11 +113,20 @@ REMOTE_HF_CACHE = "/root/.cache/huggingface"
 GPU = os.environ.get("SLMFORGE_GPU", "L4")
 TIMEOUT_S = int(os.environ.get("SLMFORGE_TIMEOUT_S", "14400"))
 
+#: The pinned train_log.json shape. One lane writes it, one lane validates it,
+#: so the key set is a contract and not an implementation detail.
+TRAIN_LOG_KEYS = ("base_model", "config_resolved", "dataset", "prompt_contract",
+                  "steps", "loss_history", "wall_clock_seconds", "artifacts",
+                  "started_utc", "finished_utc")
+BASE_MODEL_KEYS = ("repo", "revision")
+DATASET_KEYS = ("path", "rows", "sha256")
+PROMPT_CONTRACT_KEYS = ("render_fn", "sample_row_index", "sample_rendered_prompt")
+ARTIFACT_KEYS = ("adapter", "adapter_bytes", "merged_fp16", "merged_bytes")
+
 # The one thing configs/train.json does NOT pin: the container's python deps.
 # Unsloth needs a CUDA runtime and a torch build matched to it, so we start from
 # NVIDIA's image rather than debian_slim. Versions are left to pip resolution on
 # purpose -- pinning a version string that was never built here would be a lie.
-# If the image build fails, this list is the single place to adjust.
 PIP_PACKAGES = [
     "unsloth",
     "unsloth_zoo",
@@ -110,9 +166,12 @@ image = (
         }
     )
     # Mounted (copy=False) rather than baked, so editing the dataset or the
-    # config does not rebuild the image. eval.py rides along so the trainer can
-    # assert the training condition equals the zero_shot eval condition.
-    .add_local_file(REPO_ROOT / "eval.py", f"{REMOTE_REPO}/eval.py")
+    # config does not rebuild the image. The scoring/scenario lane rides along
+    # so the container can IMPORT the shared prompt renderer instead of
+    # reimplementing it.
+    .add_local_file(REPO_ROOT / "harness.py", f"{REMOTE_REPO}/harness.py")
+    .add_local_dir(REPO_ROOT / "scenarios", f"{REMOTE_REPO}/scenarios")
+    .add_local_dir(REPO_ROOT / "constraints", f"{REMOTE_REPO}/constraints")
     .add_local_dir(REPO_ROOT / "configs", f"{REMOTE_REPO}/configs")
     .add_local_dir(REPO_ROOT / "data", f"{REMOTE_REPO}/data")
 )
@@ -174,40 +233,277 @@ def resolve_config(cfg: dict, smoke: bool) -> dict:
     return resolved
 
 
+# ------------------------------------------------------- the shared renderer
+#: The renderer must live in the repo's shared modules. A training run may not
+#: nominate its own prompt renderer -- that would be self-attestation with extra
+#: steps. Same allowlist scripts/check_loop.py enforces on the other side.
+ALLOWED_RENDERER_ROOTS = ("scenarios", "harness")
+
+_RENDERER_ASSUMPTION = (
+    "DECLARED ASSUMPTION: configs/train.json:data.prompt_renderer names the "
+    "shared scenario->user-message renderer written by the scenarios/harness "
+    "lane, called as render(scenario, constraint_lookup) -> str (or "
+    "render(scenario) if it takes one positional argument). This module imports "
+    "it and never reimplements it. If the lane published it under a different "
+    "name, fix the dotted path in configs/train.json -- do NOT add a local "
+    "renderer here, because a second implementation of the prompt IS the drift "
+    "this contract exists to prevent."
+)
+
+
+def resolve_render_fn(dotted: str):
+    """Import the shared prompt renderer named by its dotted path.
+
+    Raises loudly if it is not importable. There is deliberately no fallback:
+    a stubbed renderer would make the training prompt differ from the eval
+    prompt while every check still passed.
+    """
+    if not isinstance(dotted, str) or not dotted.strip():
+        raise ValueError(
+            f"prompt_renderer must be a non-empty dotted path, got {dotted!r}. "
+            + _RENDERER_ASSUMPTION)
+    path = dotted.strip().replace(":", ".")
+    if "." not in path:
+        raise ValueError(
+            f"prompt_renderer {dotted!r} names no module. " + _RENDERER_ASSUMPTION)
+    module_name, _, attr = path.rpartition(".")
+    if module_name.split(".")[0] not in ALLOWED_RENDERER_ROOTS:
+        raise ValueError(
+            f"prompt_renderer {dotted!r} does not live in the shared renderer "
+            f"modules {list(ALLOWED_RENDERER_ROOTS)} -- a training run may not "
+            f"nominate its own prompt renderer. " + _RENDERER_ASSUMPTION)
+    try:
+        module = importlib.import_module(module_name)
+    except ImportError as exc:
+        raise ImportError(
+            f"the shared prompt renderer {dotted!r} is not importable "
+            f"({module_name}: {exc}). " + _RENDERER_ASSUMPTION) from exc
+    try:
+        fn = getattr(module, attr)
+    except AttributeError as exc:
+        raise AttributeError(
+            f"module {module_name!r} has no attribute {attr!r}, named by "
+            f"configs/train.json:data.prompt_renderer. " + _RENDERER_ASSUMPTION
+        ) from exc
+    if not callable(fn):
+        raise TypeError(
+            f"the shared prompt renderer {dotted!r} is not callable "
+            f"(got {type(fn).__name__}). " + _RENDERER_ASSUMPTION)
+    return fn
+
+
+def render_arity(fn) -> int:
+    """2 -> the renderer is called (scenario, constraint_lookup); 1 -> (scenario).
+
+    Deliberately identical to scripts/check_loop.py's rule, so the writer and
+    the validator of train_log.json call the shared renderer the same way.
+    """
+    import inspect
+
+    try:
+        sig = inspect.signature(fn)
+    except (TypeError, ValueError):
+        return 2
+    positional, var_positional = 0, False
+    for param in sig.parameters.values():
+        if param.kind is inspect.Parameter.VAR_POSITIONAL:
+            var_positional = True
+        elif param.kind in (inspect.Parameter.POSITIONAL_ONLY,
+                            inspect.Parameter.POSITIONAL_OR_KEYWORD):
+            positional += 1
+    if var_positional or positional >= 2:
+        return 2
+    return 1
+
+
+def scenario_of(row, index, scenario_corpus=None) -> dict:
+    """The source scenario a training row was rendered from.
+
+    The row carries it (``scenario``) or names it (``scenario_id``) in a corpus
+    declared by configs/train.json:data.scenarios_path. Without one of the two
+    the row's prompt can only be self-attested, never re-derived -- so this is a
+    hard error, never a silent pass.
+    """
+    scenario = row.get("scenario")
+    if isinstance(scenario, dict):
+        if not isinstance(scenario.get("task"), str) or not scenario["task"].strip():
+            raise ValueError(f"row {index}: the row's scenario has no 'task' text, "
+                             f"so its prompt cannot be re-rendered")
+        return scenario
+    sid = row.get("scenario_id")
+    if isinstance(sid, str) and sid:
+        if not scenario_corpus:
+            raise ValueError(
+                f"row {index}: names scenario {sid!r} but no scenario corpus is "
+                f"declared (configs/train.json:data.scenarios_path), so the "
+                f"prompt contract cannot be re-derived from the dataset")
+        if sid not in scenario_corpus:
+            raise ValueError(f"row {index}: scenario {sid!r} is not in the "
+                             f"declared scenario corpus")
+        return scenario_corpus[sid]
+    raise ValueError(
+        f"row {index}: carries neither a 'scenario' object nor a 'scenario_id', "
+        f"so its user message can only be self-attested, never re-derived. "
+        + _RENDERER_ASSUMPTION)
+
+
+def constraint_lookup_of(row, index, constraint_corpus=None) -> dict:
+    """``{id: constraint}`` for one row, from its own constraint objects, or from
+    ids resolved against a declared constraint corpus."""
+    raw = row.get("constraints")
+    if not isinstance(raw, list) or not raw:
+        raise ValueError(f"row {index}: 'constraints' is missing or empty; the "
+                         f"behavior spec requires at least one")
+    lookup = {}
+    for entry in raw:
+        if isinstance(entry, dict):
+            cid = entry.get("id")
+            if not isinstance(cid, str) or not cid:
+                raise ValueError(f"row {index}: a constraint object has no 'id'")
+            lookup[cid] = entry
+        elif isinstance(entry, str):
+            if not constraint_corpus or entry not in constraint_corpus:
+                raise ValueError(
+                    f"row {index}: constraint id {entry!r} cannot be resolved "
+                    f"(declare configs/train.json:data.constraints_path, or "
+                    f"carry constraint objects in the row)")
+            lookup[entry] = constraint_corpus[entry]
+        else:
+            raise ValueError(f"row {index}: constraint entry is a "
+                             f"{type(entry).__name__}, not an object or an id")
+    return lookup
+
+
+def call_renderer(render_fn, arity, scenario, lookup) -> str:
+    out = render_fn(scenario, lookup) if arity == 2 else render_fn(scenario)
+    if not isinstance(out, str):
+        raise TypeError(f"the shared prompt renderer returned "
+                        f"{type(out).__name__}, not a string. "
+                        + _RENDERER_ASSUMPTION)
+    return out
+
+
+def verify_prompt_contract(rows, render_fn, arity=None, scenario_corpus=None,
+                           constraint_corpus=None) -> int:
+    """Re-render every row through the shared renderer and demand the row's own
+    user message back, byte for byte.
+
+    This replaces the abstainer-era guard that compared each row's system
+    message against the frozen eval system prompt -- there is no system message
+    any more, so the renderer is what binds the two conditions together.
+    Returns the number of rows verified; raises on the first mismatch.
+    """
+    if arity is None:
+        arity = render_arity(render_fn)
+    for i, row in enumerate(rows):
+        user_content = row["messages"][0]["content"]
+        scenario = scenario_of(row, i, scenario_corpus)
+        lookup = constraint_lookup_of(row, i, constraint_corpus)
+        rendered = call_renderer(render_fn, arity, scenario, lookup)
+        if rendered != user_content:
+            raise ValueError(
+                f"row {i}: the stored user message is NOT what the shared "
+                f"renderer produces for this scenario + constraint set. Training "
+                f"on it would measure the tuned model under a prompt it never saw."
+                f"\n  stored:   {user_content[:300]!r}"
+                f"\n  rendered: {rendered[:300]!r}")
+    return len(rows)
+
+
+def load_side_corpus(repo_root: Path, rel_path, id_key: str):
+    """``{id: object}`` from a declared JSONL side-corpus, or None when the
+    config declares none. A declared path that does not load is an error --
+    never a silent skip, because the rows that need it would then be
+    unverifiable."""
+    if rel_path in (None, ""):
+        return None
+    corpus_file = Path(repo_root) / rel_path
+    if not corpus_file.exists():
+        raise FileNotFoundError(
+            f"declared corpus {rel_path!r} does not exist at {corpus_file}; the "
+            f"rows that reference it by id could not be re-rendered")
+    corpus = {}
+    for line in corpus_file.read_text().splitlines():
+        if not line.strip():
+            continue
+        obj = json.loads(line)
+        key = obj.get(id_key)
+        if not isinstance(key, str) or not key:
+            raise ValueError(f"{rel_path}: a row has no {id_key!r}")
+        corpus[key] = obj
+    if not corpus:
+        raise ValueError(f"declared corpus {rel_path!r} is empty")
+    return corpus
+
+
 # ---------------------------------------------------------------- data plumbing
+def render_prompt_text(tokenizer, messages, enable_thinking):
+    """The exact layer-2 prompt text: the chat template with a generation prompt
+    appended, which is the same call the eval generator makes. Single source --
+    build_training_features and the train_log evidence both go through here."""
+    try:
+        return tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True,
+            enable_thinking=enable_thinking)
+    except TypeError:  # tokenizer without the enable_thinking kwarg
+        return tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True)
+
+
+def validate_example_schema(row, index) -> None:
+    """The pinned two-message schema, enforced. A violation raises: a silently
+    dropped row is an unnoticed hole in the corpus, and a synthesised system
+    message is prompt drift."""
+    messages = row.get("messages")
+    if not isinstance(messages, list):
+        raise ValueError(f"row {index}: 'messages' must be a list, got "
+                         f"{type(messages).__name__}")
+    roles = [m.get("role") for m in messages if isinstance(m, dict)]
+    if "system" in roles:
+        raise ValueError(
+            f"row {index}: the example carries a system message. The pinned "
+            f"schema is exactly [user, assistant]; the eval harness sends no "
+            f"system turn, so training with one is prompt drift. This module "
+            f"will not strip it and will not synthesise one.")
+    if roles != ["user", "assistant"]:
+        raise ValueError(
+            f"row {index}: messages must be exactly [user, assistant], got "
+            f"{roles!r}")
+    for m, role in zip(messages, roles):
+        if not isinstance(m.get("content"), str):
+            raise ValueError(f"row {index}: {role} content must be a string")
+    if not messages[1]["content"].strip():
+        raise ValueError(f"row {index}: the assistant completion is empty -- "
+                         f"there is nothing to learn from it")
+
+
 def build_training_features(tokenizer, rows, max_seq_length, enable_thinking,
                             completion_only_loss=True):
-    """P3 rows -> {input_ids, attention_mask, labels}, using the model's own chat
-    template.
+    """Pinned rows -> {input_ids, attention_mask, labels}, using the model's own
+    chat template.
 
-    The prompt half is rendered with EXACTLY the call eval.py's HFGenerator makes
-    (add_generation_prompt=True, enable_thinking=False), and the target is
-    appended to that rendered string. Building it this way -- rather than
-    templating the whole conversation in one shot -- guarantees the token prefix
-    the model is trained to continue is byte-identical to the prefix it sees at
-    eval time.
+    The prompt half is rendered with EXACTLY the call the eval generator makes
+    (add_generation_prompt=True), and the target is appended to that rendered
+    string. Building it this way -- rather than templating the whole
+    conversation in one shot -- guarantees the token prefix the model is trained
+    to continue is byte-identical to the prefix it sees at eval time.
+
+    Label masking: prompt tokens -> -100, completion tokens -> themselves. The
+    boundary is len(prompt_ids), verified against the joint tokenization so a
+    merge across the join cannot shift it by one.
 
     Returns (features, stats).
     """
-    def render_prompt(messages):
-        try:
-            return tokenizer.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True,
-                enable_thinking=enable_thinking)
-        except TypeError:  # tokenizer without the enable_thinking kwarg
-            return tokenizer.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True)
-
     eos = tokenizer.eos_token or ""
-    features, stats = [], {"rows": len(rows), "truncated": 0,
-                           "prefix_mismatch": 0, "skipped": 0}
-    for row in rows:
+    features = []
+    stats = {"rows": len(rows), "truncated": 0, "prefix_mismatch": 0,
+             "skipped": 0, "kept_row_indices": []}
+
+    for index, row in enumerate(rows):
+        validate_example_schema(row, index)
         messages = row["messages"]
-        if len(messages) < 2 or messages[-1].get("role") != "assistant":
-            stats["skipped"] += 1
-            continue
-        prompt_text = render_prompt(messages[:-1])
-        target_text = messages[-1]["content"] + eos
+        prompt_text = render_prompt_text(tokenizer, messages[:1], enable_thinking)
+        target_text = messages[1]["content"] + eos
 
         prompt_ids = tokenizer(prompt_text, add_special_tokens=False)["input_ids"]
         full_ids = tokenizer(prompt_text + target_text,
@@ -234,6 +530,7 @@ def build_training_features(tokenizer, rows, max_seq_length, enable_thinking,
             stats["skipped"] += 1  # nothing left to learn from after truncation
             continue
 
+        stats["kept_row_indices"].append(index)
         features.append({"input_ids": full_ids,
                          "attention_mask": [1] * len(full_ids),
                          "labels": labels})
@@ -275,6 +572,84 @@ def _dir_listing(path):
     return files, total
 
 
+# ------------------------------------------------------------------- train_log
+def _hex(value, length, field):
+    if not isinstance(value, str) or len(value) != length or not all(
+            c in "0123456789abcdef" for c in value.lower()):
+        raise ValueError(f"{field} must be a {length}-hex string, got {value!r}")
+    return value.lower()
+
+
+def build_train_log(*, base_repo, base_revision, config_resolved, dataset_path,
+                    dataset_rows, dataset_sha256, render_fn_dotted,
+                    sample_row_index, sample_rendered_prompt, steps,
+                    loss_history, wall_clock_seconds, adapter_path,
+                    adapter_bytes, merged_path, merged_bytes, started_utc,
+                    finished_utc, scenarios_path=None,
+                    constraints_path=None) -> dict:
+    """The pinned train_log.json, and nothing else.
+
+    Every field is derived from something that actually happened; the function
+    refuses to emit a log with empty evidence. Note what is NOT here: no
+    self-attestation boolean. A checker must never trust a flag written by the
+    thing it is checking, so prompt_contract carries the rendered text itself
+    and the checker re-derives the claim from the dataset.
+    """
+    if not isinstance(sample_rendered_prompt, str) or not sample_rendered_prompt:
+        raise ValueError(
+            "prompt_contract.sample_rendered_prompt is empty. It is EVIDENCE -- "
+            "the literal prompt text fed to the model for that row -- and an "
+            "empty string proves nothing.")
+    if not isinstance(sample_row_index, int) or isinstance(sample_row_index, bool) \
+            or sample_row_index < 0:
+        raise ValueError(f"sample_row_index must be a non-negative int, got "
+                         f"{sample_row_index!r}")
+    if not isinstance(render_fn_dotted, str) or "." not in render_fn_dotted:
+        raise ValueError(f"prompt_contract.render_fn must be the dotted path of "
+                         f"the shared renderer, got {render_fn_dotted!r}")
+    if not isinstance(steps, int) or isinstance(steps, bool) or steps <= 0:
+        raise ValueError(f"steps must be a positive int, got {steps!r}")
+    if not isinstance(dataset_rows, int) or dataset_rows <= 0:
+        raise ValueError(f"dataset.rows must be a positive int, got "
+                         f"{dataset_rows!r}")
+
+    history = []
+    for entry in loss_history:
+        step, loss = entry
+        history.append([int(step), float(loss)])
+
+    # The three pinned dataset keys, plus -- only when the run actually used
+    # them -- the side corpora the rows reference by id. Without those declared,
+    # a checker holding an id-carrying dataset cannot resolve the scenario and
+    # the contract stops being re-derivable.
+    dataset = {"path": str(dataset_path),
+               "rows": int(dataset_rows),
+               "sha256": _hex(dataset_sha256, 64, "dataset.sha256")}
+    if scenarios_path:
+        dataset["scenarios_path"] = str(scenarios_path)
+    if constraints_path:
+        dataset["constraints_path"] = str(constraints_path)
+
+    return {
+        "base_model": {"repo": str(base_repo),
+                       "revision": _hex(base_revision, 40, "base_model.revision")},
+        "config_resolved": config_resolved,
+        "dataset": dataset,
+        "prompt_contract": {"render_fn": render_fn_dotted,
+                            "sample_row_index": int(sample_row_index),
+                            "sample_rendered_prompt": sample_rendered_prompt},
+        "steps": int(steps),
+        "loss_history": history,
+        "wall_clock_seconds": float(wall_clock_seconds),
+        "artifacts": {"adapter": str(adapter_path),
+                      "adapter_bytes": int(adapter_bytes),
+                      "merged_fp16": str(merged_path),
+                      "merged_bytes": int(merged_bytes)},
+        "started_utc": started_utc,
+        "finished_utc": finished_utc,
+    }
+
+
 # ---------------------------------------------------------------- the GPU job
 @app.function(
     image=image,
@@ -299,7 +674,6 @@ def train(smoke: bool, dataset_path: str, run_name: str) -> dict:
     from transformers import Trainer, TrainingArguments
 
     sys.path.insert(0, REMOTE_REPO)
-    import eval as E  # the frozen harness -- imported, never reimplemented
 
     cfg = load_config(Path(REMOTE_REPO) / "configs" / "train.json")
     resolved = resolve_config(cfg, smoke)
@@ -309,33 +683,26 @@ def train(smoke: bool, dataset_path: str, run_name: str) -> dict:
     dcfg = resolved["data"]
     ocfg = resolved["output"]
 
-    # ---- dataset (leg 1 of the loop: generate) -------------------------------
+    # ---- dataset -------------------------------------------------------------
     ds_file = Path(REMOTE_REPO) / dataset_path
     if not ds_file.exists():
         raise FileNotFoundError(
-            f"training dataset {dataset_path!r} not found at {ds_file} -- P3 must "
-            f"commit it before P4 can train on it")
+            f"training dataset {dataset_path!r} not found at {ds_file} -- the "
+            f"data pipeline must commit it before a GPU run can train on it")
     raw_bytes = ds_file.read_bytes()
     rows = [json.loads(ln) for ln in raw_bytes.decode().splitlines() if ln.strip()]
     if not rows:
         raise ValueError(f"training dataset {dataset_path!r} is empty")
 
-    # Contract guard: training condition == zero_shot eval condition.
-    bad_system = [i for i, r in enumerate(rows)
-                  if r["messages"][0].get("content") != E.SYSTEM_CORE]
-    if bad_system:
-        raise ValueError(
-            f"{len(bad_system)} training rows do not carry eval.SYSTEM_CORE "
-            f"verbatim as the system message (first: row {bad_system[0]}). The "
-            f"training condition must equal the zero_shot eval condition.")
-
-    label_counts, type_counts = {}, {}
-    for r in rows:
-        meta = r.get("meta", {}) or {}
-        gl = meta.get("gold_label", "unknown")
-        ty = meta.get("type", "unknown")
-        label_counts[gl] = label_counts.get(gl, 0) + 1
-        type_counts[ty] = type_counts.get(ty, 0) + 1
+    # ---- THE PROMPT CONTRACT, checked before the base model is downloaded ----
+    render_fn_dotted = dcfg["prompt_renderer"]
+    render_fn = resolve_render_fn(render_fn_dotted)
+    scenarios_path = dcfg.get("scenarios_path")
+    constraints_path = dcfg.get("constraints_path")
+    scenario_corpus = load_side_corpus(REMOTE_REPO, scenarios_path, "scenario_id")
+    constraint_corpus = load_side_corpus(REMOTE_REPO, constraints_path, "id")
+    verify_prompt_contract(rows, render_fn, scenario_corpus=scenario_corpus,
+                           constraint_corpus=constraint_corpus)
 
     # ---- base model, pinned by revision --------------------------------------
     t_load = time.time()
@@ -365,7 +732,7 @@ def train(smoke: bool, dataset_path: str, run_name: str) -> dict:
     )
     load_s = time.time() - t_load
 
-    # ---- tokenize (leg 2 of the loop: train) ---------------------------------
+    # ---- tokenize ------------------------------------------------------------
     t_tok = time.time()
     features, ds_stats = build_training_features(
         tokenizer, rows,
@@ -376,6 +743,12 @@ def train(smoke: bool, dataset_path: str, run_name: str) -> dict:
     if not features:
         raise ValueError("every training row was dropped during tokenization")
     tokenize_s = time.time() - t_tok
+
+    # Evidence for prompt_contract: the literal layer-2 text for a row that was
+    # actually trained on, produced by the same function that built its tokens.
+    sample_row_index = ds_stats["kept_row_indices"][0]
+    sample_rendered_prompt = render_prompt_text(
+        tokenizer, rows[sample_row_index]["messages"][:1], dcfg["enable_thinking"])
 
     pad_id = tokenizer.pad_token_id
     if pad_id is None:
@@ -413,14 +786,11 @@ def train(smoke: bool, dataset_path: str, run_name: str) -> dict:
     )
 
     t_train = time.time()
-    train_result = trainer.train()
+    trainer.train()
     train_s = time.time() - t_train
 
-    loss_curve = [
-        {"step": h["step"], "loss": h["loss"],
-         "learning_rate": h.get("learning_rate"), "epoch": h.get("epoch")}
-        for h in trainer.state.log_history if "loss" in h
-    ]
+    loss_history = [[h["step"], h["loss"]]
+                    for h in trainer.state.log_history if "loss" in h]
 
     # ---- artifacts: adapter, merged fp16, train_log --------------------------
     adapter_dir = out_root / ocfg["adapter_dirname"]
@@ -459,87 +829,59 @@ def train(smoke: bool, dataset_path: str, run_name: str) -> dict:
     if not merged_files:
         raise RuntimeError(f"merged directory {merged_dir} is empty after save")
 
+    finished_utc = datetime.now(timezone.utc).isoformat()
+    train_log = build_train_log(
+        base_repo=base_repo,
+        base_revision=base_rev,
+        config_resolved=resolved,
+        dataset_path=dataset_path,
+        dataset_rows=len(rows),
+        dataset_sha256=hashlib.sha256(raw_bytes).hexdigest(),
+        scenarios_path=scenarios_path,
+        constraints_path=constraints_path,
+        render_fn_dotted=render_fn_dotted,
+        sample_row_index=sample_row_index,
+        sample_rendered_prompt=sample_rendered_prompt,
+        steps=int(trainer.state.global_step),
+        loss_history=loss_history,
+        wall_clock_seconds=time.time() - t_zero,
+        adapter_path=f"{run_name}/{ocfg['adapter_dirname']}",
+        adapter_bytes=adapter_bytes,
+        merged_path=f"{run_name}/{ocfg['merged_dirname']}",
+        merged_bytes=merged_bytes,
+        started_utc=started_utc,
+        finished_utc=finished_utc,
+    )
+
+    (out_root / ocfg["train_log_filename"]).write_text(
+        json.dumps(train_log, indent=2))
+    artifacts_vol.commit()
+
     try:
         import unsloth as _unsloth
         unsloth_version = getattr(_unsloth, "__version__", "unknown")
     except Exception:  # noqa: BLE001
         unsloth_version = "unknown"
 
-    total_s = time.time() - t_zero
-    train_log = {
-        "run_name": run_name,
-        "smoke": bool(smoke),
-        "started_utc": started_utc,
-        "finished_utc": datetime.now(timezone.utc).isoformat(),
-        "steps": int(trainer.state.global_step),
-        "epochs_completed": float(trainer.state.epoch or 0.0),
-        "final_train_loss": float(train_result.training_loss),
-        "loss_curve": loss_curve,
-        "wall_time_s": {
-            "model_load": round(load_s, 2),
-            "tokenize": round(tokenize_s, 2),
-            "train": round(train_s, 2),
-            "save_adapter": round(adapter_s, 2),
-            "save_merged": round(merge_s, 2),
-            "total": round(total_s, 2),
-        },
-        "dataset": {
-            "path": dataset_path,
-            "rows": len(rows),
-            "rows_trained_on": ds_stats["kept"],
-            "rows_truncated": ds_stats["truncated"],
-            "rows_skipped": ds_stats["skipped"],
-            "prefix_mismatch": ds_stats["prefix_mismatch"],
-            "sha256": hashlib.sha256(raw_bytes).hexdigest(),
-            "gold_label_counts": label_counts,
-            "type_counts": type_counts,
-        },
-        "base_model": {
-            "repo": base_repo,
-            "revision": base_rev,
-            "spec": resolved["base_model"]["spec"],
-            "snapshot_path": snapshot_path,
-        },
-        "rubric_hash": E.rubric_hash(),
-        "rubric_version": E.RUBRIC_VERSION,
-        "system_prompt_equals_eval_SYSTEM_CORE": True,
-        "resolved_config": resolved,
-        "artifacts": {
-            "volume": ocfg["modal_volume"],
-            "run_dir_remote": str(out_root),
-            "adapter": {
-                "remote_path": str(adapter_dir),
-                "volume_path": f"{run_name}/{ocfg['adapter_dirname']}",
-                "files": adapter_files,
-                "bytes": adapter_bytes,
-            },
-            "merged": {
-                "remote_path": str(merged_dir),
-                "volume_path": f"{run_name}/{ocfg['merged_dirname']}",
-                "files": merged_files,
-                "bytes": merged_bytes,
-                "save_method": merge_method,
-                "merge_path": merge_path,
-            },
-            "train_log": str(out_root / ocfg["train_log_filename"]),
-        },
-        "gpu": GPU,
-        "env": {
-            "python": sys.version.split()[0],
-            "torch": torch.__version__,
-            "transformers": transformers.__version__,
-            "unsloth": unsloth_version,
-        },
-    }
-
-    (out_root / ocfg["train_log_filename"]).write_text(
-        json.dumps(train_log, indent=2))
-    artifacts_vol.commit()
-
+    # Everything that is NOT part of the pinned train_log shape rides in the
+    # manifest instead, so the pinned artifact stays exactly the agreed keys.
     return {
         "run_name": run_name,
+        "smoke": bool(smoke),
         "volume": ocfg["modal_volume"],
         "run_dir_remote": str(out_root),
+        "gpu": GPU,
+        "tokenization": ds_stats,
+        "wall_time_s": {"model_load": round(load_s, 2),
+                        "tokenize": round(tokenize_s, 2),
+                        "train": round(train_s, 2),
+                        "save_adapter": round(adapter_s, 2),
+                        "save_merged": round(merge_s, 2)},
+        "artifact_files": {"adapter": adapter_files, "merged": merged_files,
+                           "merge_path": merge_path},
+        "env": {"python": sys.version.split()[0], "torch": torch.__version__,
+                "transformers": transformers.__version__,
+                "unsloth": unsloth_version},
         "pull_commands": [
             f"modal volume get {ocfg['modal_volume']} "
             f"{run_name}/{ocfg['merged_dirname']} <local-dir>",
@@ -572,7 +914,12 @@ def main(smoke: bool = False, dataset: str = "", out_dir: str = "",
     if not local_ds.exists():
         raise SystemExit(
             f"training dataset not found: {local_ds}\n"
-            f"P3 must generate and commit it before P4 can train on it.")
+            f"the data pipeline must generate and commit it before a GPU run.")
+
+    # Fail here, locally and for free, rather than after a container spins up.
+    resolve_render_fn(dcfg["prompt_renderer"])
+    load_side_corpus(REPO_ROOT, dcfg.get("scenarios_path"), "scenario_id")
+    load_side_corpus(REPO_ROOT, dcfg.get("constraints_path"), "id")
 
     print(f"[slmforge] gpu={GPU} timeout={TIMEOUT_S}s smoke={smoke}")
     print(f"[slmforge] dataset={dataset} run_name={run_name} out_dir={out_dir}")
@@ -587,16 +934,12 @@ def main(smoke: bool = False, dataset: str = "", out_dir: str = "",
     (out_path / ocfg["manifest_filename"]).write_text(json.dumps(
         {k: v for k, v in manifest.items() if k != "train_log"}, indent=2))
 
-    art = train_log["artifacts"]
-    print(f"[slmforge] steps={train_log['steps']} "
-          f"final_loss={train_log['final_train_loss']:.4f} "
-          f"train_s={train_log['wall_time_s']['train']}")
+    last_loss = train_log["loss_history"][-1][1] if train_log["loss_history"] else None
+    print(f"[slmforge] steps={train_log['steps']} last_loss={last_loss} "
+          f"wall_clock_s={train_log['wall_clock_seconds']:.1f}")
     print(f"[slmforge] wrote {out_dir}/{ocfg['train_log_filename']} and "
           f"{out_dir}/{ocfg['manifest_filename']}")
     print("\n[slmforge] pull the weights, then close the loop:")
     for name in (ocfg["merged_dirname"], ocfg["adapter_dirname"]):
-        print(f"  modal volume get {art['volume']} {run_name}/{name} "
+        print(f"  modal volume get {manifest['volume']} {run_name}/{name} "
               f"{out_dir}/{name}")
-    print(f"  python eval.py --model hf:{out_dir}/{ocfg['merged_dirname']} "
-          f"--eval-set data/eval/scenarios_v1.jsonl --out {out_dir}/eval")
-    print(f"  python scripts/check_loop.py {out_dir}")

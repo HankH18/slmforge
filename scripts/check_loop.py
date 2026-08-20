@@ -1,49 +1,84 @@
 #!/usr/bin/env python3
-"""
-P4 verify command -- offline proof that the full loop ran.
+"""P4 verify command -- offline proof that the full loop actually closed.
 
     python scripts/check_loop.py runs/smoke
 
-The project spec's MVP bar is "Full loop -- generate -> train -> eval -- runs end
-to end, demonstrated on a small smoke-test batch". This checker re-verifies that
-claim from committed artifacts alone: no GPU, no API keys, no network. That is
-what makes P4 re-checkable later without re-billing anything.
+The MVP bar is "full loop -- generate -> train -> eval -- runs end to end".
+This checker re-verifies that claim from committed artifacts alone: no GPU, no
+API keys, no network.
 
-Exit 0 only if every leg below holds; non-zero (and a per-leg report on stderr)
+DESIGN RULE OF THIS FILE
+------------------------
+A checker must never trust a value written by the thing it is checking. There
+is deliberately NO self-attestation boolean anywhere in this file's inputs: the
+previous version read ``system_prompt_equals_eval_SYSTEM_CORE`` -- a hardcoded
+literal ``True`` written by the trainer -- and an adversarial verifier proved
+you could rewrite every training row, recompute the dataset hash so the
+integrity check still matched, and still get "LOOP VERIFIED". Every claim below
+is re-derived from evidence: the dataset rows, the rendered prompts, the
+transcripts.
+
+  leg 1  generate   -- train_log.json names a training dataset that exists
+                       inside the repo, with a MANDATORY matching row count and
+                       sha256, whose rows carry the pinned schema
+                       ({messages:[user, assistant], constraints, provenance},
+                       no system turn) AND whose user message is byte-identical
+                       to re-rendering that row's own scenario through the
+                       SHARED prompt renderer named by
+                       prompt_contract.render_fn. Byte-identity is what catches
+                       both a wholesale prompt rewrite and text appended to the
+                       end of the user message (trailing drift).
+  leg 2  train      -- a real step count, a non-empty loss history of finite
+                       numbers, a strictly positive wall clock that does not
+                       exceed the elapsed run time, a resolved config, and a
+                       pinned base model revision.
+  leg 3  artifacts  -- adapter AND merged-fp16 references, each with a strictly
+                       positive byte count. ``True`` is not a byte count.
+  leg 4  eval       -- a *.results.json carrying the T-3 harness's metrics
+                       (spec_adherence, robustness), scored over n > 0
+                       scenarios, produced against THIS run's trained
+                       checkpoint -- identified by whole-reference equality
+                       with a recorded artifact, never by substring -- with its
+                       per-example transcripts JSONL beside it, revalidated
+                       through harness.validate_transcript_row and with every
+                       reported rate re-derived from those transcripts.
+
+Exit 0 only if every leg holds; non-zero (with a per-leg report on stderr)
 otherwise.
-
-  leg 0  rubric integrity  -- eval.rubric_hash() still equals c0adb876c3e6c4c9
-  leg 1  generate          -- train_log.json names a training dataset that exists
-                              in the repo, with a matching row count and a
-                              MANDATORY matching sha256, and -- read out of the
-                              dataset rows themselves, never from a self-attested
-                              boolean -- every row's system message is
-                              byte-identical to eval.SYSTEM_CORE and every row's
-                              user message round-trips through eval.user_msg
-  leg 2  train             -- train_log.json records a real step count and a
-                              non-empty loss curve of finite numbers
-  leg 3  artifacts         -- adapter AND merged-fp16 references, each with a
-                              non-empty file listing and non-zero byte count
-  leg 4  eval              -- a *.results.json written by eval.write_outputs,
-                              stamped rubric_hash c0adb876c3e6c4c9, scored over
-                              n > 0 scenarios, against the trained checkpoint
-                              (not the base model), with its per-example judge
-                              transcripts JSONL beside it
-
-train_log.json / run_manifest.json are produced by training/modal_app.py; the
-results + transcripts JSON are produced by the frozen eval.py.
 """
 from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib
+import inspect
 import json
 import math
+import re
 import sys
-from pathlib import Path
+from datetime import datetime
+from pathlib import Path, PurePosixPath
 
-EXPECTED_RUBRIC_HASH = "c0adb876c3e6c4c9"
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+#: dataset.sha256 / base_model.revision shapes.
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+REVISION_RE = re.compile(r"^[0-9a-f]{40}$")
+
+#: The shared prompt renderer must live in the repo being verified, in one of
+#: these top-level modules. A render_fn pointing anywhere else is not the
+#: renderer the eval harness uses, so it proves nothing about the contract.
+ALLOWED_RENDERER_ROOTS = ("scenarios", "harness")
+
+#: Reference schemes stripped before comparing a checkpoint reference.
+REF_SCHEMES = ("hf:", "local:", "file:")
+
+#: Metric keys the T-3 harness's aggregate() emits that this checker requires.
+REQUIRED_METRIC_KEYS = ("n", "n_scored", "passed", "spec_adherence",
+                        "robustness", "judge_errors", "by_pressure")
+
+#: Tolerance (seconds) when comparing recorded wall clock to elapsed time.
+WALL_CLOCK_SLACK_S = 5.0
 
 
 class Leg:
@@ -61,6 +96,40 @@ class Leg:
         self.errors.append(msg)
 
 
+# ------------------------------------------------------------------ numbers
+# bool is a subclass of int. A bare isinstance(x, int) reads `true` as 1 and
+# defeated three separate guards in this repo, so every numeric predicate in
+# this file goes through these and NOTHING uses a bare isinstance for numbers.
+def _is_int(val) -> bool:
+    return isinstance(val, int) and not isinstance(val, bool)
+
+
+def _is_num(val) -> bool:
+    return isinstance(val, (int, float)) and not isinstance(val, bool) \
+        and math.isfinite(float(val))
+
+
+def _is_pos_int(val) -> bool:
+    return _is_int(val) and val > 0
+
+
+def _is_nonneg_int(val) -> bool:
+    return _is_int(val) and val >= 0
+
+
+def _is_pos_num(val) -> bool:
+    return _is_num(val) and float(val) > 0.0
+
+
+def _is_rate(val) -> bool:
+    return _is_num(val) and 0.0 <= float(val) <= 1.0
+
+
+def _is_str(val) -> bool:
+    return isinstance(val, str) and bool(val.strip())
+
+
+# ------------------------------------------------------------------ helpers
 def _load_json(path: Path):
     with open(path) as f:
         return json.load(f)
@@ -74,257 +143,585 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def _import_eval():
-    """The frozen eval.py -- the single source of truth for the prompt contract."""
+def _read_rows(ds_file: Path):
+    """(rows, errors). Every non-blank line must be a JSON object."""
+    rows, errors = [], []
+    for idx, line in enumerate(ds_file.read_text().splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"dataset row {idx}: not valid JSON ({exc})")
+            continue
+        if not isinstance(row, dict):
+            errors.append(f"dataset row {idx}: not a JSON object")
+            continue
+        rows.append((idx, row))
+    return rows, errors
+
+
+def _import_harness():
+    """The T-3 scoring harness, from THIS checker's own repo -- it is
+    verification code, not an artifact of the run under test."""
     if str(REPO_ROOT) not in sys.path:
         sys.path.insert(0, str(REPO_ROOT))
-    import eval as E
-    return E
+    import harness  # noqa: PLC0415
+    return harness
 
 
-def _is_int(val) -> bool:
-    return isinstance(val, int) and not isinstance(val, bool)
-
-
-# ------------------------------------------------------------------ leg 0
-def check_rubric() -> Leg:
-    leg = Leg("0 rubric integrity")
+def _parse_utc(val):
+    if not _is_str(val):
+        return None
+    text = val.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
     try:
-        E = _import_eval()
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _canon_ref(ref) -> str:
+    """Canonical form of a checkpoint reference: scheme and @revision stripped,
+    path normalized. Comparison is on the WHOLE canonical string -- never a
+    substring -- so a path that merely contains the word 'adapter' is not a
+    match for an artifact called 'adapter'."""
+    if not isinstance(ref, str):
+        return ""
+    text = ref.strip()
+    low = text.lower()
+    for scheme in REF_SCHEMES:
+        if low.startswith(scheme):
+            text = text[len(scheme):]
+            break
+    if "@" in text:
+        text = text.rsplit("@", 1)[0]
+    text = text.strip().rstrip("/")
+    if not text:
+        return ""
+    return PurePosixPath(text).as_posix()
+
+
+# ------------------------------------------------------- the shared renderer
+class RendererError(RuntimeError):
+    """The shared prompt renderer could not be resolved or called."""
+
+
+def load_render_fn(dotted, repo_root: Path):
+    """Resolve prompt_contract.render_fn -- a dotted path -- to the callable.
+
+    Imported from ``repo_root`` (the repo the run was produced from; in
+    production that is this repo) and required to physically live there, so the
+    renderer that certifies the contract is the same one the eval harness ships
+    with and not something handed to the checker by the run it is checking.
+    """
+    if not _is_str(dotted):
+        raise RendererError(
+            "train_log.json:prompt_contract.render_fn is missing or empty -- "
+            "without the dotted path of the shared renderer the training prompt "
+            "cannot be re-derived, only self-attested")
+    dotted = dotted.strip()
+    module_name, _, attr = dotted.rpartition(".")
+    if not module_name or not attr:
+        raise RendererError(
+            f"prompt_contract.render_fn {dotted!r} is not a dotted "
+            f"'module.function' path")
+    root = module_name.split(".")[0]
+    if root not in ALLOWED_RENDERER_ROOTS:
+        raise RendererError(
+            f"prompt_contract.render_fn {dotted!r} does not live in the shared "
+            f"renderer modules {list(ALLOWED_RENDERER_ROOTS)} -- a run may not "
+            f"nominate its own prompt renderer")
+
+    repo_root = Path(repo_root).resolve()
+    for name in [n for n in list(sys.modules)
+                 if n == root or n.startswith(root + ".")]:
+        del sys.modules[name]
+    # repo_root stays on sys.path: a renderer with deferred imports must still
+    # resolve its own package while it runs. This cannot shadow the scoring
+    # harness, which check_loop() imports and holds a reference to BEFORE any
+    # leg runs -- so a run cannot smuggle in its own validate_transcript_row.
+    sys.path.insert(0, str(repo_root))
+    try:
+        module = importlib.import_module(module_name)
     except Exception as exc:  # noqa: BLE001
-        leg.fail(f"cannot import the frozen eval.py from {REPO_ROOT}: {exc}")
-        return leg
-    actual = E.rubric_hash()
-    if actual != EXPECTED_RUBRIC_HASH:
-        leg.fail(f"rubric drifted: eval.rubric_hash()={actual!r}, expected "
-                 f"{EXPECTED_RUBRIC_HASH!r} -- every previously reported number "
-                 f"is invalid. STOP and ask.")
-    else:
-        leg.note(f"eval.rubric_hash() == {actual}")
-    return leg
+        raise RendererError(
+            f"cannot import the shared prompt renderer module {module_name!r} "
+            f"from {repo_root}: {exc}. It is written by the scenario/harness "
+            f"lane; this checker will not stub or guess it.") from None
+
+    where = getattr(module, "__file__", None)
+    if not where:
+        raise RendererError(
+            f"the shared prompt renderer module {module_name!r} has no file on "
+            f"disk -- it cannot be the repo's renderer")
+    try:
+        Path(where).resolve().relative_to(repo_root)
+    except ValueError:
+        raise RendererError(
+            f"the shared prompt renderer {dotted!r} resolves to {where}, which "
+            f"is outside {repo_root} -- it is not this repo's renderer") from None
+
+    fn = getattr(module, attr, None)
+    if fn is None or not callable(fn):
+        raise RendererError(
+            f"{module_name!r} has no callable {attr!r} (prompt_contract."
+            f"render_fn is {dotted!r})")
+    return fn
+
+
+def _render_arity(fn) -> int:
+    """How many positional arguments the shared renderer takes: 2 -> called as
+    (scenario, constraint_lookup), 1 -> called as (scenario)."""
+    try:
+        sig = inspect.signature(fn)
+    except (TypeError, ValueError):
+        return 2
+    positional, var_positional = 0, False
+    for param in sig.parameters.values():
+        if param.kind is inspect.Parameter.VAR_POSITIONAL:
+            var_positional = True
+        elif param.kind in (inspect.Parameter.POSITIONAL_ONLY,
+                            inspect.Parameter.POSITIONAL_OR_KEYWORD):
+            positional += 1
+    if var_positional or positional >= 2:
+        return 2
+    return 1
+
+
+def render_prompt(fn, arity, scenario, lookup) -> str:
+    out = fn(scenario, lookup) if arity == 2 else fn(scenario)
+    if not isinstance(out, str):
+        raise RendererError(
+            f"the shared prompt renderer returned {type(out).__name__}, not a "
+            f"string")
+    return out
 
 
 # ------------------------------------------------------------------ leg 1
-def _user_msg_shape(E):
-    """(prefix, separator, suffix) of eval.user_msg, derived from eval itself so
-    this checker cannot drift from the frozen renderer."""
-    probe = E.user_msg("\x00PASSAGE\x00", "\x00QUESTION\x00")
-    prefix, rest = probe.split("\x00PASSAGE\x00", 1)
-    sep, suffix = rest.split("\x00QUESTION\x00", 1)
-    return prefix, sep, suffix
+def _corpus_path(train_log: dict, ds: dict, key: str):
+    """Where a run declares a side corpus. ``dataset.<key>`` is the pinned home;
+    ``config_resolved.data.<key>`` is where the trainer lane records its data
+    config, so both are read before concluding none was declared."""
+    if key in ds:
+        return ds[key], f"dataset.{key}"
+    cfg = train_log.get("config_resolved")
+    if isinstance(cfg, dict):
+        data = cfg.get("data")
+        if isinstance(data, dict) and key in data:
+            return data[key], f"config_resolved.data.{key}"
+    return None, None
 
 
-def check_prompt_contract(ds_file: Path, E, max_report: int = 5) -> tuple:
-    """THE contract that makes the training condition equal the zero_shot eval
-    condition, verified FROM THE DATASET ITSELF.
-
-    Returns (errors, n_rows). Every row must carry a system turn byte-identical
-    to eval.SYSTEM_CORE and a user turn that round-trips through eval.user_msg;
-    a self-attested boolean in train_log.json is not evidence of either, because
-    the thing being checked is what writes it.
+def _corpus(repo_root: Path, train_log: dict, ds: dict, key: str, id_key: str):
+    """Optional side corpus ({id: object}) for rows that carry ids instead of
+    objects. Returns (corpus_or_None, errors). A declared path that does not
+    load is an error -- never a skip. Absence is only survivable because every
+    row must carry its own scenario and constraints otherwise; see _scenario_of.
     """
-    prefix, sep, suffix = _user_msg_shape(E)
-    errors, n_rows = [], 0
-    bad_system = bad_user = bad_schema = 0
-    first = []
+    path, label = _corpus_path(train_log, ds, key)
+    if path is None:
+        return None, []
+    if not _is_str(path):
+        return None, [f"train_log.json:{label} is present but not a path: {path!r}"]
+    corpus_file = Path(repo_root) / path
+    if not corpus_file.exists():
+        return None, [f"train_log.json:{label} {path!r} does not exist at {corpus_file}"]
+    corpus, errors = {}, []
+    for idx, line in enumerate(corpus_file.read_text().splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            obj = json.loads(line)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{path} line {idx}: not valid JSON ({exc})")
+            continue
+        if not isinstance(obj, dict) or not _is_str(obj.get(id_key)):
+            errors.append(f"{path} line {idx}: no usable {id_key!r}")
+            continue
+        corpus[obj[id_key]] = obj
+    return corpus, errors
+
+
+def _scenario_of(row, idx, scenario_corpus):
+    """The source scenario a training row was rendered from.
+
+    The row must carry it (``scenario``), or name it (``scenario_id``) in a
+    scenario corpus the train_log declares. Without one of the two the prompt
+    contract is not re-derivable from evidence, which is exactly the hole this
+    leg exists to close -- so it is a failure, never a skip.
+    """
+    scenario = row.get("scenario")
+    if isinstance(scenario, dict):
+        if not _is_str(scenario.get("task")):
+            return None, (f"dataset row {idx}: scenario has no 'task' text, so the "
+                          f"prompt cannot be re-rendered")
+        return scenario, None
+    sid = row.get("scenario_id")
+    if _is_str(sid):
+        if scenario_corpus is None:
+            return None, (f"dataset row {idx}: names scenario {sid!r} but no scenario "
+                          f"corpus is declared (dataset.scenarios_path or "
+                          f"config_resolved.data.scenarios_path), so the scenario "
+                          f"cannot be looked up and the prompt contract cannot be "
+                          f"re-derived from the dataset")
+        if sid not in scenario_corpus:
+            return None, f"dataset row {idx}: scenario {sid!r} is not in the scenario corpus"
+        return scenario_corpus[sid], None
+    return None, (f"dataset row {idx}: carries no source scenario -- neither a "
+                  f"'scenario' object nor a 'scenario_id' -- so its prompt can only "
+                  f"be self-attested, never re-derived")
+
+
+def _lookup_of(row, idx, scenario, constraint_corpus):
+    """{id: constraint} for this row, from the row's own constraint objects (or
+    ids resolved against a declared constraint corpus)."""
+    raw = row.get("constraints")
+    if not isinstance(raw, list) or not raw:
+        return None, f"dataset row {idx}: 'constraints' is missing or empty"
+    lookup = {}
+    for entry in raw:
+        if isinstance(entry, dict):
+            cid = entry.get("id")
+            if not _is_str(cid):
+                return None, f"dataset row {idx}: a constraint object has no 'id'"
+            lookup[cid] = entry
+        elif _is_str(entry):
+            if constraint_corpus is None or entry not in constraint_corpus:
+                return None, (f"dataset row {idx}: constraint id {entry!r} cannot be "
+                              f"resolved (declare dataset.constraints_path or carry "
+                              f"constraint objects in the row)")
+            lookup[entry] = constraint_corpus[entry]
+        else:
+            return None, f"dataset row {idx}: constraint entry is {type(entry).__name__}"
+    wanted = scenario.get("constraints")
+    if not isinstance(wanted, list) or not wanted:
+        return None, f"dataset row {idx}: scenario has no constraint list"
+    missing = [c for c in wanted if not (_is_str(c) and c in lookup)]
+    if missing:
+        return None, (f"dataset row {idx}: the row's constraints do not cover the "
+                      f"scenario's {missing!r} -- the row was not built from this "
+                      f"scenario")
+    extra = sorted(set(lookup) - {c for c in wanted if _is_str(c)})
+    if extra:
+        return None, (f"dataset row {idx}: the row carries constraints {extra} that its "
+                      f"scenario does not -- the row was not built from this scenario")
+    return lookup, None
+
+
+def _row_schema_errors(row, idx):
+    """The pinned training-row schema: messages [user, assistant], no system
+    turn, a constraints list and a provenance object."""
+    msgs = row.get("messages")
+    if not isinstance(msgs, list) or not msgs:
+        return (f"dataset row {idx}: 'messages' is not a non-empty list of turns")
+    if not all(isinstance(m, dict) for m in msgs):
+        return f"dataset row {idx}: messages are not objects"
+    roles = [m.get("role") for m in msgs]
+    # checked before the arity, so a re-grown system turn is named for what it
+    # is rather than reported as a turn-count problem
+    if "system" in roles:
+        return (f"dataset row {idx}: carries a system turn; the pinned schema has NO "
+                f"system message (roles were {roles!r})")
+    if len(msgs) != 2:
+        return (f"dataset row {idx}: 'messages' is not a list of exactly 2 turns "
+                f"[user, assistant]")
+    if roles != ["user", "assistant"]:
+        return (f"dataset row {idx}: turn roles are {roles!r}, expected "
+                f"['user', 'assistant']")
+    if not isinstance(msgs[0].get("content"), str):
+        return f"dataset row {idx}: the user message is not a string"
+    if not _is_str(msgs[1].get("content")):
+        return f"dataset row {idx}: the assistant turn is empty -- nothing to train on"
+    prov = row.get("provenance")
+    if not isinstance(prov, dict):
+        return f"dataset row {idx}: 'provenance' is missing"
+    if not _is_str(prov.get("teacher")):
+        return f"dataset row {idx}: provenance.teacher is missing or empty"
+    if not _is_nonneg_int(prov.get("attempt")):
+        return (f"dataset row {idx}: provenance.attempt is not a non-negative int "
+                f"({prov.get('attempt')!r})")
+    return None
+
+
+def check_prompt_contract(rows, train_log, repo_root, render_fn, arity,
+                          scenario_corpus, constraint_corpus, max_report=5):
+    """THE contract that makes the training condition equal the eval condition,
+    verified FROM THE DATASET ITSELF.
+
+    Every row's user message must be byte-identical to re-rendering that row's
+    own scenario through the shared renderer. Byte-identity -- not a
+    prefix/suffix shape test -- is what makes appended trailing drift visible.
+    """
+    errors, first = [], []
+    n_rows = len(rows)
+    bad_schema = bad_evidence = rewritten = drifted = 0
+    rendered_by_index = {}
 
     def note_first(msg):
         if len(first) < max_report:
             first.append(msg)
 
-    with open(ds_file) as f:
-        for idx, line in enumerate(f, 1):
-            if not line.strip():
-                continue
-            n_rows += 1
-            try:
-                row = json.loads(line)
-            except Exception as exc:  # noqa: BLE001
-                bad_schema += 1
-                note_first(f"row {idx}: not valid JSON ({exc})")
-                continue
-            if not isinstance(row, dict):
-                bad_schema += 1
-                note_first(f"row {idx}: not a JSON object")
-                continue
-            msgs = row.get("messages")
-            if not isinstance(msgs, list) or len(msgs) < 3:
-                bad_schema += 1
-                note_first(f"row {idx}: 'messages' is not a list of >= 3 turns")
-                continue
-            if not all(isinstance(m, dict) for m in msgs[:3]):
-                bad_schema += 1
-                note_first(f"row {idx}: messages are not objects")
-                continue
-            if msgs[0].get("role") != "system" or msgs[1].get("role") != "user":
-                bad_schema += 1
-                note_first(f"row {idx}: turn roles are "
-                           f"{[m.get('role') for m in msgs[:2]]!r}, expected "
-                           f"['system', 'user']")
-                continue
-            if msgs[-1].get("role") != "assistant" or not str(
-                    msgs[-1].get("content") or "").strip():
-                bad_schema += 1
-                note_first(f"row {idx}: last turn is not a non-empty assistant turn")
-                continue
-
-            system = msgs[0].get("content")
-            if system != E.SYSTEM_CORE:
-                bad_system += 1
-                note_first(f"row {idx}: system message is not byte-identical to "
-                           f"eval.SYSTEM_CORE ({str(system)[:60]!r}...)")
-
-            user = msgs[1].get("content")
-            if not isinstance(user, str):
-                bad_user += 1
-                note_first(f"row {idx}: user message is not a string")
-            elif not (user.startswith(prefix) and user.endswith(suffix)
-                      and sep in user):
-                bad_user += 1
-                note_first(f"row {idx}: user message does not match eval.user_msg "
-                           f"(expected {prefix!r} ... {sep!r} ...)")
-            else:
-                body = user[len(prefix):len(user) - len(suffix)] if suffix \
-                    else user[len(prefix):]
-                passage, _, question = body.rpartition(sep)
-                if E.user_msg(passage, question) != user:
-                    bad_user += 1
-                    note_first(f"row {idx}: user message does not match "
-                               f"eval.user_msg(passage, question) on round-trip")
+    for idx, row in rows:
+        schema_err = _row_schema_errors(row, idx)
+        if schema_err:
+            bad_schema += 1
+            note_first(schema_err)
+            continue
+        scenario, err = _scenario_of(row, idx, scenario_corpus)
+        if err:
+            bad_evidence += 1
+            note_first(err)
+            continue
+        lookup, err = _lookup_of(row, idx, scenario, constraint_corpus)
+        if err:
+            bad_evidence += 1
+            note_first(err)
+            continue
+        try:
+            expected = render_prompt(render_fn, arity, scenario, lookup)
+        except RendererError as exc:
+            bad_evidence += 1
+            note_first(f"dataset row {idx}: {exc}")
+            continue
+        except Exception as exc:  # noqa: BLE001
+            bad_evidence += 1
+            note_first(f"dataset row {idx}: the shared renderer raised "
+                       f"{type(exc).__name__}: {exc}")
+            continue
+        actual = row["messages"][0]["content"]
+        rendered_by_index[idx] = actual
+        if actual == expected:
+            continue
+        if actual.startswith(expected):
+            drifted += 1
+            note_first(
+                f"dataset row {idx}: TRAILING DRIFT -- the user message is the "
+                f"rendered prompt plus {len(actual) - len(expected)} appended "
+                f"character(s): {actual[len(expected):][:80]!r}")
+        else:
+            rewritten += 1
+            note_first(
+                f"dataset row {idx}: user message is not what the shared renderer "
+                f"produces for its scenario (rendered {expected[:60]!r}..., row "
+                f"carries {actual[:60]!r}...)")
 
     if not n_rows:
         errors.append("training dataset is empty -- no rows to verify")
-        return errors, n_rows
+        return errors, rendered_by_index
     if bad_schema:
-        errors.append(f"{bad_schema}/{n_rows} dataset rows do not have the "
-                      f"[system, user, ..., assistant] training schema")
-    if bad_system:
-        errors.append(f"{bad_system}/{n_rows} dataset rows: system message is not "
-                      f"byte-identical to eval.SYSTEM_CORE -- the model was "
-                      f"trained under a prompt the zero_shot eval never uses, so "
-                      f"every reported number is measuring prompt transfer")
-    if bad_user:
-        errors.append(f"{bad_user}/{n_rows} dataset rows: user message does not "
-                      f"match eval.user_msg(passage, question)")
+        errors.append(f"{bad_schema}/{n_rows} dataset rows do not carry the pinned "
+                      f"training schema {{messages:[user, assistant], constraints, "
+                      f"provenance}}")
+    if bad_evidence:
+        errors.append(f"{bad_evidence}/{n_rows} dataset rows cannot have their prompt "
+                      f"re-derived from evidence")
+    if rewritten:
+        errors.append(f"{rewritten}/{n_rows} dataset rows: the user message does not "
+                      f"match the shared prompt renderer -- the model was trained "
+                      f"under a prompt the eval harness never builds, so every "
+                      f"reported number is measuring prompt transfer")
+    if drifted:
+        errors.append(f"{drifted}/{n_rows} dataset rows: TRAILING DRIFT appended to the "
+                      f"rendered user message -- the training prompt is not the eval "
+                      f"prompt")
     errors.extend(first)
-    return errors, n_rows
+    return errors, rendered_by_index
 
 
 def check_generate(train_log: dict, repo_root: Path) -> Leg:
     leg = Leg("1 generate (training dataset + prompt contract)")
-    try:
-        E = _import_eval()
-    except Exception as exc:  # noqa: BLE001
-        leg.fail(f"cannot import the frozen eval.py from {REPO_ROOT}: {exc}")
-        return leg
-
-    stamped = train_log.get("rubric_hash")
-    if stamped != EXPECTED_RUBRIC_HASH:
-        leg.fail(f"train_log.json:rubric_hash is {stamped!r}, expected "
-                 f"{EXPECTED_RUBRIC_HASH!r} -- this run was trained under a "
-                 f"different rubric than the one being evaluated")
 
     ds = train_log.get("dataset")
     if not isinstance(ds, dict):
         leg.fail("train_log.json has no 'dataset' object")
         return leg
     path = ds.get("path")
-    if not path:
+    if not _is_str(path):
         leg.fail("train_log.json:dataset.path is missing or empty")
         return leg
-    rows = ds.get("rows")
-    if not _is_int(rows) or rows <= 0:
-        leg.fail(f"train_log.json:dataset.rows is not a positive int: {rows!r}")
-    trained_on = ds.get("rows_trained_on")
-    if not _is_int(trained_on) or trained_on <= 0:
-        leg.fail(f"dataset.rows_trained_on is missing or not a positive int "
-                 f"({trained_on!r}) -- no evidence anything was trained on")
-    elif _is_int(rows) and trained_on > rows:
-        leg.fail(f"dataset.rows_trained_on ({trained_on}) exceeds dataset.rows "
-                 f"({rows})")
 
-    ds_file = repo_root / path
+    rows_recorded = ds.get("rows")
+    if not _is_pos_int(rows_recorded):
+        leg.fail(f"train_log.json:dataset.rows is not a positive int: "
+                 f"{rows_recorded!r}")
+
+    ds_file = Path(repo_root) / path
     if not ds_file.exists():
         leg.fail(f"training dataset {path!r} referenced by train_log.json does "
                  f"not exist at {ds_file}")
         return leg
     try:
-        ds_file.resolve().relative_to(repo_root.resolve())
+        ds_file.resolve().relative_to(Path(repo_root).resolve())
     except ValueError:
         leg.fail(f"training dataset {path!r} resolves outside the repo "
                  f"({ds_file.resolve()}) -- it is not a committed artifact")
         return leg
 
-    actual_rows = sum(1 for ln in ds_file.read_text().splitlines() if ln.strip())
-    if _is_int(rows) and actual_rows != rows:
+    rows, row_errors = _read_rows(ds_file)
+    for err in row_errors:
+        leg.fail(err)
+    actual_rows = len(rows) + len(row_errors)
+    if _is_pos_int(rows_recorded) and actual_rows != rows_recorded:
         leg.fail(f"dataset row drift: {path} now has {actual_rows} rows, "
-                 f"train_log.json recorded {rows}")
+                 f"train_log.json recorded {rows_recorded}")
 
-    # MANDATORY -- a missing hash is a failure, not a skip. Without it, content
+    # MANDATORY. A missing hash is a failure, not a skip: without it, content
     # drift in the dataset is undetectable.
     recorded_sha = ds.get("sha256")
-    if not isinstance(recorded_sha, str) or not recorded_sha.strip():
+    if not _is_str(recorded_sha):
         leg.fail(f"train_log.json:dataset.sha256 is missing -- without a recorded "
                  f"hash there is no way to prove {path} is the file that was "
                  f"trained on")
+    elif not SHA256_RE.match(recorded_sha.strip()):
+        leg.fail(f"train_log.json:dataset.sha256 is not a 64-hex digest: "
+                 f"{recorded_sha!r}")
     else:
         actual_sha = _sha256(ds_file)
-        if actual_sha != recorded_sha:
+        if actual_sha != recorded_sha.strip():
             leg.fail(f"dataset content drift: sha256({path})={actual_sha[:16]}..., "
                      f"train_log.json recorded {recorded_sha[:16]}...")
         else:
             leg.note(f"{path}: {actual_rows} rows, sha256 {actual_sha[:16]}... matches")
 
-    # The load-bearing contract, read out of the rows themselves.
-    prompt_errors, n_rows = check_prompt_contract(ds_file, E)
+    # --- the prompt contract, re-derived from the rows themselves ----------
+    pc = train_log.get("prompt_contract")
+    if not isinstance(pc, dict):
+        leg.fail("train_log.json has no 'prompt_contract' object -- there is no "
+                 "evidence of which prompt the model was trained under")
+        return leg
+    try:
+        render_fn = load_render_fn(pc.get("render_fn"), repo_root)
+    except RendererError as exc:
+        leg.fail(str(exc))
+        return leg
+    arity = _render_arity(render_fn)
+    leg.note(f"shared prompt renderer: {pc.get('render_fn')} "
+             f"(called with {arity} positional argument(s))")
+
+    scenario_corpus, corpus_errors = _corpus(repo_root, train_log, ds,
+                                             "scenarios_path", "scenario_id")
+    constraint_corpus, c_errors = _corpus(repo_root, train_log, ds,
+                                          "constraints_path", "id")
+    for err in corpus_errors + c_errors:
+        leg.fail(err)
+
+    prompt_errors, rendered = check_prompt_contract(
+        rows, train_log, repo_root, render_fn, arity, scenario_corpus,
+        constraint_corpus)
     for err in prompt_errors:
         leg.fail(err)
     if not prompt_errors:
-        leg.note(f"all {n_rows} rows: messages[0] == eval.SYSTEM_CORE (byte-identical), "
-                 f"messages[1] == eval.user_msg(passage, question)")
+        leg.note(f"all {len(rows)} rows: messages[0].content is byte-identical to "
+                 f"{pc.get('render_fn')}(scenario, constraints)")
 
-    # Kept as a consistency check only: the attestation must not CONTRADICT the
-    # dataset. It is never what the contract is verified from -- it is written as
-    # a literal by the very code it claims to attest.
-    if train_log.get("system_prompt_equals_eval_SYSTEM_CORE") is not True:
-        leg.fail("train_log.json does not attest system_prompt_equals_eval_"
-                 "SYSTEM_CORE -- the training condition may differ from the "
-                 "zero_shot eval condition")
+    # --- cross-check the train_log's own sample against the dataset -------
+    sample_idx = pc.get("sample_row_index")
+    if not _is_nonneg_int(sample_idx):
+        leg.fail(f"train_log.json:prompt_contract.sample_row_index is not a "
+                 f"non-negative int ({sample_idx!r})")
+        return leg
+    sample_text = pc.get("sample_rendered_prompt")
+    if not _is_str(sample_text):
+        leg.fail("train_log.json:prompt_contract.sample_rendered_prompt is missing "
+                 "or empty -- the prompt contract carries no evidence, only a claim")
+        return leg
+    if sample_idx >= len(rows):
+        leg.fail(f"prompt_contract.sample_row_index {sample_idx} is out of range "
+                 f"for a {len(rows)}-row dataset")
+        return leg
+    line_no, sample_row = rows[sample_idx]
+    carried = rendered.get(line_no)
+    if carried is None:
+        leg.fail(f"prompt_contract.sample_row_index {sample_idx} points at dataset "
+                 f"row {line_no}, which failed the checks above")
+    elif carried != sample_text:
+        leg.fail(f"prompt_contract.sample_rendered_prompt does not match the prompt "
+                 f"dataset row {line_no} actually carries -- train_log.json and the "
+                 f"dataset disagree about what the model was trained on")
+    else:
+        leg.note(f"prompt_contract.sample_rendered_prompt == dataset row "
+                 f"{line_no}'s user message ({len(sample_text)} chars)")
     return leg
 
 
 # ------------------------------------------------------------------ leg 2
 def check_train(train_log: dict) -> Leg:
-    leg = Leg("2 train (step count + loss curve)")
+    leg = Leg("2 train (steps, loss history, wall clock)")
+
     steps = train_log.get("steps")
-    if not _is_int(steps) or steps <= 0:
+    if not _is_pos_int(steps):
         leg.fail(f"train_log.json:steps is not a positive int: {steps!r}")
-    curve = train_log.get("loss_curve")
-    if not isinstance(curve, list) or not curve:
-        leg.fail("train_log.json:loss_curve is missing or empty")
+
+    config = train_log.get("config_resolved")
+    if not isinstance(config, dict) or not config:
+        leg.fail("train_log.json:config_resolved is missing or empty -- no record "
+                 "of the configuration this run actually used")
+
+    base = train_log.get("base_model")
+    if not isinstance(base, dict):
+        leg.fail("train_log.json:base_model is missing")
+    else:
+        if not _is_str(base.get("repo")):
+            leg.fail("train_log.json:base_model.repo is missing or empty")
+        revision = base.get("revision")
+        if not _is_str(revision) or not REVISION_RE.match(str(revision).strip()):
+            leg.fail(f"train_log.json:base_model.revision is not a 40-hex commit "
+                     f"sha ({revision!r}) -- the base model is not pinned")
+
+    # wall clock: a strictly positive number. Bare truthiness accepted "fast"
+    # and rejected a legitimate 0.5; bare isinstance(x, int) accepted True.
+    wall = train_log.get("wall_clock_seconds")
+    if not _is_pos_num(wall):
+        leg.fail(f"train_log.json:wall_clock_seconds is not a positive number: "
+                 f"{wall!r} -- a run that took no measured time is not a run")
+
+    started = _parse_utc(train_log.get("started_utc"))
+    finished = _parse_utc(train_log.get("finished_utc"))
+    if started is None:
+        leg.fail(f"train_log.json:started_utc is not an ISO-8601 timestamp "
+                 f"({train_log.get('started_utc')!r})")
+    if finished is None:
+        leg.fail(f"train_log.json:finished_utc is not an ISO-8601 timestamp "
+                 f"({train_log.get('finished_utc')!r})")
+    if started is not None and finished is not None:
+        elapsed = (finished - started).total_seconds()
+        if elapsed < 0:
+            leg.fail(f"train_log.json: finished_utc precedes started_utc "
+                     f"({elapsed:.1f}s)")
+        elif _is_pos_num(wall) and float(wall) > elapsed + WALL_CLOCK_SLACK_S:
+            leg.fail(f"train_log.json:wall_clock_seconds ({float(wall):.1f}s) exceeds "
+                     f"the elapsed run time started_utc -> finished_utc "
+                     f"({elapsed:.1f}s) -- the recorded timings contradict each other")
+
+    history = train_log.get("loss_history")
+    if not isinstance(history, list) or not history:
+        leg.fail("train_log.json:loss_history is missing or empty")
         return leg
     losses = []
-    for entry in curve:
-        if not isinstance(entry, dict) or "loss" not in entry:
-            leg.fail(f"loss_curve entry without a 'loss' key: {entry!r}")
+    for entry in history:
+        if not isinstance(entry, (list, tuple)) or len(entry) != 2:
+            leg.fail(f"loss_history entry is not a [step, loss] pair: {entry!r}")
             return leg
-        val = entry["loss"]
-        if not isinstance(val, (int, float)) or isinstance(val, bool):
-            leg.fail(f"non-numeric loss value in loss_curve: {val!r}")
+        step, val = entry
+        if not _is_nonneg_int(step):
+            leg.fail(f"loss_history step is not a non-negative int: {step!r}")
             return leg
-        if not math.isfinite(float(val)):
-            leg.fail(f"non-finite loss value in loss_curve: {val!r}")
+        if not _is_num(val):
+            leg.fail(f"non-numeric or non-finite loss value in loss_history: {val!r}")
+            return leg
+        if _is_pos_int(steps) and step > steps:
+            leg.fail(f"loss_history records step {step}, beyond the recorded "
+                     f"{steps} optimizer steps")
             return leg
         losses.append(float(val))
     if all(v == 0.0 for v in losses):
         leg.fail("every recorded loss is 0.0 -- that is a placeholder, not a run")
-    wall = train_log.get("wall_time_s") or {}
-    if not isinstance(wall, dict) or not wall.get("train"):
-        leg.fail("train_log.json:wall_time_s.train is missing or zero")
     if leg.ok:
         leg.note(f"{steps} optimizer steps, {len(losses)} logged losses "
                  f"({losses[0]:.4f} -> {losses[-1]:.4f}), "
-                 f"train wall time {wall.get('train')}s")
+                 f"wall clock {float(wall):.1f}s")
     return leg
 
 
@@ -335,60 +732,105 @@ def check_artifacts(train_log: dict) -> Leg:
     if not isinstance(art, dict):
         leg.fail("train_log.json has no 'artifacts' object")
         return leg
-    for key in ("adapter", "merged"):
-        info = art.get(key)
-        if not isinstance(info, dict):
-            leg.fail(f"artifacts.{key} is missing")
+    seen = {}
+    for key, size_key in (("adapter", "adapter_bytes"),
+                          ("merged_fp16", "merged_bytes")):
+        where = art.get(key)
+        if not _is_str(where):
+            leg.fail(f"artifacts.{key} carries no path reference ({where!r})")
             continue
-        where = info.get("remote_path") or info.get("volume_path") or info.get("path")
-        if not where:
-            leg.fail(f"artifacts.{key} carries no path reference")
-        files = info.get("files")
-        if not isinstance(files, list) or not files:
-            leg.fail(f"artifacts.{key}.files is empty -- no evidence the "
-                     f"{key} was written")
+        size = art.get(size_key)
+        # _is_pos_int, never isinstance(size, int): `true` is not 1 byte.
+        if not _is_pos_int(size):
+            leg.fail(f"artifacts.{size_key} is not a positive int: {size!r} -- this "
+                     f"leg exists to prove a NON-ZERO byte count")
             continue
-        size = info.get("bytes")
-        if not isinstance(size, int) or size <= 0:
-            leg.fail(f"artifacts.{key}.bytes is not positive: {size!r}")
+        canon = _canon_ref(where)
+        if canon in seen:
+            leg.fail(f"artifacts.{key} and artifacts.{seen[canon]} are the same "
+                     f"reference ({where!r}) -- one of the two was never written")
             continue
-        leg.note(f"{key}: {len(files)} files, {size / 1e6:.1f} MB at {where}")
-    if not art.get("volume"):
-        leg.fail("artifacts.volume is missing -- no way to pull the weights back")
+        seen[canon] = key
+        leg.note(f"{key}: {size / 1e6:.1f} MB at {where}")
     return leg
 
 
 # ------------------------------------------------------------------ leg 4
-def _checkpoint_markers(run_dir: Path, train_log: dict) -> set:
-    """Strings whose presence in a model spec means it points at THIS run's
-    checkpoint rather than at some other model."""
-    marks = {run_dir.name.lower(), str(train_log.get("run_name") or "").lower()}
-    art = train_log.get("artifacts") or {}
-    for key in ("adapter", "merged"):
-        info = art.get(key) or {}
-        for field in ("volume_path", "remote_path", "path", "hf_repo"):
-            val = info.get(field)
-            if val:
-                marks.add(Path(str(val)).name.lower())
-                marks.add(str(val).lower())
-    marks.discard("")
-    return marks
+def checkpoint_identities(train_log: dict) -> dict:
+    """{canonical reference -> artifacts key} for THIS run's trained checkpoint.
+
+    Whole references only. The previous version seeded this set with the bare
+    literals 'adapter' and 'merged_fp16' plus the run directory name and
+    accepted `any(marker in spec)`, so any path containing the word "adapter"
+    passed the leg whose entire job is proving the eval ran against the trained
+    weights.
+    """
+    art = train_log.get("artifacts")
+    if not isinstance(art, dict):
+        return {}
+    out = {}
+    for key in ("adapter", "merged_fp16", "hf_repo", "merged_hf_repo"):
+        canon = _canon_ref(art.get(key))
+        if canon:
+            out.setdefault(canon, key)
+    return out
 
 
-def check_eval(run_dir: Path, train_log: dict) -> Leg:
-    leg = Leg("4 eval (results JSON against the trained checkpoint)")
+def _transcript_evidence(path: Path, harness):
+    """(counts, errors) re-derived from the raw transcripts."""
+    counts = {"rows": 0, "scored": 0, "passed": 0, "judge_errors": 0}
+    errors = []
+    for idx, line in enumerate(path.read_text().splitlines(), 1):
+        if not line.strip():
+            continue
+        counts["rows"] += 1
+        try:
+            row = json.loads(line)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{path.name} line {idx}: not valid JSON ({exc})")
+            continue
+        if not isinstance(row, dict):
+            errors.append(f"{path.name} line {idx}: not a JSON object")
+            continue
+        # EVERY row is revalidated, quarantined ones included -- validation is
+        # what proves a judge_error row really carries no fabricated verdict.
+        try:
+            harness.validate_transcript_row(row)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{path.name} line {idx}: not a row this harness scored "
+                          f"({exc})")
+            continue
+        if row.get(harness.JUDGE_ERROR_FIELD) is not None:
+            counts["judge_errors"] += 1
+            continue
+        if row.get("spec_pass") is None:
+            continue
+        counts["scored"] += 1
+        if row.get("spec_pass") is True:
+            counts["passed"] += 1
+    return counts, errors
+
+
+def check_eval(run_dir: Path, train_log: dict, harness) -> Leg:
+    leg = Leg("4 eval (harness metrics against the trained checkpoint)")
     results_files = sorted(run_dir.rglob("*.results.json"))
     if not results_files:
-        leg.fail(f"no *.results.json under {run_dir} -- run eval.py against the "
-                 f"trained checkpoint with --out {run_dir}/eval")
+        leg.fail(f"no *.results.json under {run_dir} -- run the eval harness "
+                 f"against the trained checkpoint with --out {run_dir}/eval")
         return leg
 
-    base_spec = ((train_log.get("base_model") or {}).get("spec") or "").lower()
-    if not base_spec:
-        leg.fail("train_log.json:base_model.spec is missing -- without it there "
+    base = train_log.get("base_model") or {}
+    base_ref = _canon_ref(base.get("repo") if isinstance(base, dict) else None)
+    if not base_ref:
+        leg.fail("train_log.json:base_model.repo is missing -- without it there "
                  "is no way to prove the results are not just the base model")
         return leg
-    markers = _checkpoint_markers(run_dir, train_log)
+    identities = checkpoint_identities(train_log)
+    if not identities:
+        leg.fail("train_log.json:artifacts names no checkpoint reference -- there "
+                 "is nothing the results could be matched against")
+        return leg
+
     rejected = []
     for rf in results_files:
         try:
@@ -396,49 +838,110 @@ def check_eval(run_dir: Path, train_log: dict) -> Leg:
         except Exception as exc:  # noqa: BLE001
             rejected.append(f"{rf.name}: not valid JSON ({exc})")
             continue
-        rh = res.get("rubric_hash")
-        if rh != EXPECTED_RUBRIC_HASH:
-            rejected.append(f"{rf.name}: rubric_hash {rh!r} != {EXPECTED_RUBRIC_HASH!r}")
+        if not isinstance(res, dict):
+            rejected.append(f"{rf.name}: not a JSON object")
             continue
-        spec = str(res.get("model") or "")
-        low = spec.lower()
-        if not low.startswith("hf:"):
-            rejected.append(f"{rf.name}: model {spec!r} is not an hf: checkpoint spec")
+        spec = res.get("model")
+        if not _is_str(spec):
+            rejected.append(f"{rf.name}: names no model")
             continue
-        if low == base_spec:
+        canon = _canon_ref(spec)
+        if canon == base_ref:
             rejected.append(f"{rf.name}: model {spec!r} is the BASE model, not the "
                             f"trained checkpoint")
             continue
-        if not any(m in low for m in markers):
+        if canon not in identities:
             rejected.append(
                 f"{rf.name}: model {spec!r} does not reference this run's "
-                f"checkpoint (expected one of {sorted(markers)} in the spec)")
+                f"checkpoint -- it must equal one of {sorted(identities)} in "
+                f"whole, not merely contain a word from it")
             continue
-        metrics = res.get("metrics") or {}
-        n = metrics.get("n")
-        if not _is_int(n) or n <= 0:
+
+        metrics = res.get("metrics")
+        if not isinstance(metrics, dict):
+            rejected.append(f"{rf.name}: carries no 'metrics' object")
+            continue
+        missing = [k for k in REQUIRED_METRIC_KEYS if k not in metrics]
+        if missing:
+            rejected.append(f"{rf.name}: metrics is missing {missing} -- these are "
+                            f"what harness.aggregate() emits; nothing scored them")
+            continue
+        n = metrics["n"]
+        if not _is_pos_int(n):
             rejected.append(f"{rf.name}: metrics.n is not positive ({n!r})")
             continue
-        sa = metrics.get("spec_adherence")
-        if not isinstance(sa, (int, float)) or isinstance(sa, bool) \
-                or not 0.0 <= float(sa) <= 1.0:
-            rejected.append(f"{rf.name}: metrics.spec_adherence is missing or not "
-                            f"a rate in [0, 1] ({sa!r}) -- nothing was scored")
+        n_scored = metrics["n_scored"]
+        if not _is_pos_int(n_scored) or n_scored > n:
+            rejected.append(f"{rf.name}: metrics.n_scored is not a positive int "
+                            f"<= n ({n_scored!r} of {n!r}) -- nothing was scored")
             continue
+        passed = metrics["passed"]
+        if not _is_nonneg_int(passed) or passed > n_scored:
+            rejected.append(f"{rf.name}: metrics.passed is not an int in "
+                            f"[0, n_scored] ({passed!r})")
+            continue
+        if not _is_nonneg_int(metrics["judge_errors"]):
+            rejected.append(f"{rf.name}: metrics.judge_errors is not a non-negative "
+                            f"int ({metrics['judge_errors']!r})")
+            continue
+        sa = metrics["spec_adherence"]
+        if not _is_rate(sa):
+            rejected.append(f"{rf.name}: metrics.spec_adherence is missing or not a "
+                            f"rate in [0, 1] ({sa!r}) -- nothing was scored")
+            continue
+        if abs(float(sa) - passed / n_scored) > 1e-9:
+            rejected.append(f"{rf.name}: metrics.spec_adherence {sa!r} does not equal "
+                            f"passed/n_scored ({passed}/{n_scored}) -- the headline "
+                            f"number was not computed from the counts beside it")
+            continue
+        rob = metrics["robustness"]
+        if not _is_rate(rob):
+            rejected.append(f"{rf.name}: metrics.robustness is missing or not a rate "
+                            f"in [0, 1] ({rob!r}) -- an eval with no adversarial "
+                            f"cell does not test the target behavior")
+            continue
+        by_pressure = metrics["by_pressure"]
+        if not isinstance(by_pressure, dict) or "adversarial" not in by_pressure:
+            rejected.append(f"{rf.name}: metrics.by_pressure has no 'adversarial' "
+                            f"cell")
+            continue
+        adv = by_pressure["adversarial"]
+        if not isinstance(adv, dict) or not _is_pos_int(adv.get("n")):
+            rejected.append(f"{rf.name}: metrics.by_pressure.adversarial.n is not "
+                            f"positive -- robustness was reported over nothing")
+            continue
+
         transcripts = rf.with_name(rf.name.replace(".results.json",
                                                    ".transcripts.jsonl"))
         if not transcripts.exists():
             rejected.append(f"{rf.name}: judge transcripts {transcripts.name} "
                             f"missing (the spec requires raw per-example output)")
             continue
-        lines = sum(1 for ln in transcripts.read_text().splitlines() if ln.strip())
-        if lines != n:
-            rejected.append(f"{rf.name}: {transcripts.name} has {lines} records, "
-                            f"metrics.n is {n}")
+        counts, terrors = _transcript_evidence(transcripts, harness)
+        if terrors:
+            rejected.append(f"{rf.name}: {terrors[0]}")
             continue
-        leg.note(f"{rf.relative_to(run_dir)}: model={spec} n={n} "
-                 f"spec_adherence={sa} rubric_hash={rh}")
-        leg.note(f"{transcripts.relative_to(run_dir)}: {lines} judge transcripts")
+        if counts["rows"] != n:
+            rejected.append(f"{rf.name}: {transcripts.name} has {counts['rows']} "
+                            f"records, metrics.n is {n}")
+            continue
+        if counts["scored"] != n_scored or counts["passed"] != passed:
+            rejected.append(
+                f"{rf.name}: the transcripts do not support the metrics -- "
+                f"{counts['scored']} scored / {counts['passed']} passed in "
+                f"{transcripts.name} vs n_scored={n_scored} / passed={passed}")
+            continue
+        if counts["judge_errors"] != metrics["judge_errors"]:
+            rejected.append(f"{rf.name}: {counts['judge_errors']} quarantined rows in "
+                            f"{transcripts.name} vs metrics.judge_errors="
+                            f"{metrics['judge_errors']}")
+            continue
+
+        leg.note(f"{rf.relative_to(run_dir)}: model={spec} "
+                 f"(matches artifacts.{identities[canon]}) n={n} "
+                 f"spec_adherence={sa} robustness={rob}")
+        leg.note(f"{transcripts.relative_to(run_dir)}: {counts['rows']} transcripts, "
+                 f"{counts['passed']}/{counts['scored']} re-derived from the rows")
         return leg
 
     leg.fail(f"no usable results JSON among {len(results_files)} candidate(s) "
@@ -450,33 +953,42 @@ def check_eval(run_dir: Path, train_log: dict) -> Leg:
 
 # ------------------------------------------------------------------ driver
 def check_loop(run_dir: Path, repo_root: Path) -> list:
-    legs = [check_rubric()]
+    # Captured before any leg runs, so that resolving the run's prompt renderer
+    # (which manipulates sys.path and sys.modules) can never substitute the
+    # scoring harness leg 4 revalidates the transcripts with.
+    try:
+        harness = _import_harness()
+    except Exception as exc:  # noqa: BLE001
+        leg = Leg("1-4 artifacts")
+        leg.fail(f"cannot import the scoring harness from {REPO_ROOT}: {exc}")
+        return [leg]
+
     if not run_dir.is_dir():
         leg = Leg("1-4 artifacts")
         leg.fail(f"{run_dir} is not a directory")
-        legs.append(leg)
-        return legs
+        return [leg]
 
     log_path = run_dir / "train_log.json"
     if not log_path.exists():
         leg = Leg("1-4 artifacts")
-        leg.fail(f"{log_path} missing -- training/modal_app.py writes it; without "
-                 f"it there is no evidence any training happened")
-        legs.append(leg)
-        return legs
+        leg.fail(f"{log_path} missing -- the trainer writes it; without it there "
+                 f"is no evidence any training happened")
+        return [leg]
     try:
         train_log = _load_json(log_path)
     except Exception as exc:  # noqa: BLE001
         leg = Leg("1-4 artifacts")
         leg.fail(f"{log_path} is not valid JSON: {exc}")
-        legs.append(leg)
-        return legs
+        return [leg]
+    if not isinstance(train_log, dict):
+        leg = Leg("1-4 artifacts")
+        leg.fail(f"{log_path} is not a JSON object")
+        return [leg]
 
-    legs.append(check_generate(train_log, repo_root))
-    legs.append(check_train(train_log))
-    legs.append(check_artifacts(train_log))
-    legs.append(check_eval(run_dir, train_log))
-    return legs
+    return [check_generate(train_log, repo_root),
+            check_train(train_log),
+            check_artifacts(train_log),
+            check_eval(run_dir, train_log, harness)]
 
 
 def main(argv=None) -> int:
@@ -484,7 +996,9 @@ def main(argv=None) -> int:
         description="Verify the committed generate -> train -> eval loop artifacts")
     ap.add_argument("run_dir", help="run directory, e.g. runs/smoke")
     ap.add_argument("--repo-root", default=str(REPO_ROOT),
-                    help="root the dataset path in train_log.json resolves against")
+                    help="the repo this run was produced from: the dataset path "
+                         "in train_log.json and the shared prompt renderer both "
+                         "resolve against it")
     ap.add_argument("--json", action="store_true",
                     help="emit a machine-readable report on stdout")
     args = ap.parse_args(argv)

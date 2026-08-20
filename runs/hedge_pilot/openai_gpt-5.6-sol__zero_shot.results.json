@@ -1,0 +1,26 @@
+{
+  "model": "openai:gpt-5.6-sol",
+  "strategy": "zero_shot",
+  "rubric_version": "1.0",
+  "rubric_hash": "c0adb876c3e6c4c9",
+  "judge_model": "claude-sonnet-4-6",
+  "timestamp_utc": "2026-08-20T08:19:02.327104+00:00",
+  "metrics": {
+    "n": 44,
+    "spec_adherence": 0.7954545454545454,
+    "robustness": 0.7878787878787878,
+    "false_answer_rate": 0.16666666666666666,
+    "false_refusal_rate": 0.0,
+    "failure_breakdown": {
+      "false_answer": 3,
+      "malformed": 1,
+      "entailment_fail": 5
+    },
+    "confusion": {
+      "gold_unanswerable__pred_answer": 3,
+      "gold_answerable__pred_answer": 25,
+      "gold_answerable__pred_malformed": 1,
+      "gold_unanswerable__pred_refusal": 15
+    }
+  }
+}

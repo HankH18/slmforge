@@ -1,0 +1,51 @@
+{
+  "_contract": "PINNED by docs/PIVOT_SPEC.md R6 + S1 and docs/PIVOT_TASKS.md T-4. This is the G1 Prompt-Ceiling Ablation config. Model ids are copied verbatim from configs/models.json (never invented here); tests/test_gate_check.py enforces that they still agree. Thresholds live in scripts/gate_check.py and are NOT configurable - a config key that moved the gate would be a softening flag by another name, which the pivot kickoff forbids.",
+  "run_id": "g1",
+  "out_dir": "runs/g1",
+
+  "models": {
+    "frontier": [
+      "openai:gpt-5.6-sol",
+      "google:gemini-3.1-pro-preview"
+    ],
+    "local_base": "hf:Qwen/Qwen3-1.7B@70d244cc86ccca08cf5af4e1e306ecf908b1ad5e",
+    "_note": "Two frontier families (R6 requires >=2 from DIFFERENT families) plus the prompted local base model. The base row is evidence that a small model cannot already do this; scripts/gate_check.py classifies it as local_base and EXCLUDES it from the ceiling claim."
+  },
+
+  "strategies": ["zero_shot", "few_shot", "structured"],
+
+  "eval_set": "data/eval/scenarios_v2_hardened.jsonl",
+  "exemplars": "data/scenarios/fewshot_exemplars.jsonl",
+  "_data_note": "eval_set is the hardened v2 scenario corpus; exemplars are the few_shot exemplars produced by T-2. Both are other tickets' deliverables and may not exist yet - run_ablation.py and scripts/gate_check.py must FAIL loudly if a path is missing rather than silently evaluating a smaller set.",
+
+  "judge": {
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-6",
+    "_note": "Third family, so no ablated model ever scores itself (configs/models.json:judge_model). The judge scores task-quality ONLY - it never decides constraint pass/fail (Design: Decisions & rationale)."
+  },
+
+  "workers": {
+    "default": 8,
+    "by_provider": {
+      "openai": 8,
+      "google": 2,
+      "anthropic": 8,
+      "hf": 1
+    },
+    "_why_google_is_2": "MEASURED 2026-08-20: google:gemini-3.1-pro-preview is capped at 25 requests/minute and 8 workers exhausts that quota and hard-429s MID-RUN, which silently truncates a paid cell. With W workers and mean per-request latency L seconds the steady-state rate is W*60/L rpm, so W workers stay under 25 rpm whenever L >= W*2.4 s. W=2 therefore holds as long as a request takes >=4.8 s, which a reasoning-tier request comfortably does; W=8 would need L>=19.2 s, which it does not. If latency ever drops below 4.8 s, add a client-side rate limiter - do not raise this number.",
+    "_why_hf_is_1": "The local base model loads weights into one process; concurrent workers contend for the same device and buy nothing.",
+    "_why_anthropic_is_8": "Applies to the judge calls, not an ablation row."
+  },
+
+  "ladder": {
+    "_note": "R6 escalation ladder, in order: raise k (2->3->4), THEN raise the adversarial share. `current` names the rung that produced the run now on disk; run_ablation.py records it into the run manifest as `ladder_rung` and scripts/gate_check.py verifies the committed eval set actually matches that rung (max k reached, adversarial share met) rather than taking the label on trust. HARD STOP is only legitimate on the LAST rung.",
+    "current": "r1-k2",
+    "rungs": [
+      {"name": "r1-k2",     "k_values": [2],       "adversarial_share": 0.40},
+      {"name": "r2-k3",     "k_values": [2, 3],    "adversarial_share": 0.40},
+      {"name": "r3-k4",     "k_values": [2, 3, 4], "adversarial_share": 0.40},
+      {"name": "r4-adv60",  "k_values": [2, 3, 4], "adversarial_share": 0.60},
+      {"name": "r5-adv80",  "k_values": [2, 3, 4], "adversarial_share": 0.80}
+    ]
+  }
+}
