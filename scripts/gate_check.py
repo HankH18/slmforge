@@ -111,6 +111,9 @@ HARD_STOP_ADHERENCE_MIN = Fraction("0.90")  # adherence >= 0.90 after the full l
 QUALITY_SCORE_MIN = 3                      # Design: spec_pass needs quality >= 3
 QUALITY_SCORE_RANGE = (1, 5)
 MIN_SCENARIOS_PER_CELL = 30                # R6: ">= 30 scenarios per cell"
+# A row the generator or judge could not produce a verdict for is excluded from
+# the rate. Beyond this share the cell stops being evidence about the model.
+MAX_QUARANTINE_SHARE = 0.10
 
 EXPECTED_STRATEGIES = ("zero_shot", "few_shot", "structured")
 FRONTIER_PROVIDERS = frozenset({"openai", "google", "anthropic"})
@@ -570,6 +573,7 @@ def score_cell(results_path, transcripts_path, model, strategy, eval_index,
         return None
 
     seen = {}
+    quarantined_rows: List[str] = []
     n_pass = 0
     n_adv = 0
     n_adv_pass = 0
@@ -616,6 +620,24 @@ def score_cell(results_path, transcripts_path, model, strategy, eval_index,
             errors.append(f"{where}: row strategy {describe(row['strategy'])} != "
                           f"this cell's strategy {strategy!r}")
             ok = False
+        # --- QUARANTINED rows: the generator or the judge produced nothing, so
+        # there is no verdict to re-derive. The harness records these with
+        # spec_pass=None and a *_error field, excludes them from every rate and
+        # counts them. The gate must do the same: demanding a boolean spec_pass
+        # here would reject an honest run, and silently accepting the row as a
+        # PASS would score a refusal as perfect compliance (empty text satisfies
+        # every checker vacuously). Excluded from re-derivation, counted below,
+        # and capped -- a cell that quarantines much of the eval set is not a
+        # measurement, and quarantining is otherwise a way to drop rows you fail.
+        if row.get("judge_error") is not None or row.get("generator_error") is not None:
+            if row.get("spec_pass") is not None:
+                errors.append(f"{where}: carries an error marker but spec_pass is "
+                              f"{describe(row['spec_pass'])} — a quarantined row "
+                              f"must not also claim a verdict")
+                ok = False
+            quarantined_rows.append(sid)
+            continue
+
         row_ok = True
         if not isinstance(row["output"], str):
             # row_ok, not just ok: the checker is re-run over this value below,
@@ -729,7 +751,11 @@ def score_cell(results_path, transcripts_path, model, strategy, eval_index,
             if recomputed:
                 n_adv_pass += 1
 
-    # --- coverage: the rows must BE the eval set, not a flattering slice of it
+    # --- coverage: the rows must BE the eval set, not a flattering slice of it.
+    # A quarantined scenario HAS a row -- it is covered, it just has no verdict --
+    # so it counts here and is excluded from the rate denominator below.
+    # (quarantined ids are already in `seen`: a quarantined scenario HAS a row,
+    # it just has no verdict, so it is covered but not scored.)
     missing_ids = sorted(set(eval_index) - set(seen))
     if missing_ids:
         errors.append(
@@ -738,10 +764,27 @@ def score_cell(results_path, transcripts_path, model, strategy, eval_index,
             f"spec_adherence even when every surviving row is correctly scored")
         ok = False
 
+    # --- quarantine cap. Excluding unscorable rows is honest; excluding a large
+    # share is not a measurement, and is indistinguishable from dropping the rows
+    # a model failed. Cap it and say the number out loud either way.
+    n_quarantined = len(quarantined_rows)
+    if n_quarantined:
+        share = n_quarantined / max(len(eval_index), 1)
+        if share > MAX_QUARANTINE_SHARE:
+            errors.append(
+                f"{tag}: {n_quarantined} of {len(eval_index)} rows quarantined "
+                f"({share:.1%}) exceeds the {MAX_QUARANTINE_SHARE:.0%} cap — with "
+                f"this many rows unscored the cell is not a measurement of the "
+                f"model, and dropping failures would look identical")
+            ok = False
+
     if not ok:
         return None
 
-    n = len(seen)
+    # seen holds EVERY row (coverage and duplicate detection need that). The rate
+    # denominator must exclude quarantined rows, matching harness.aggregate, which
+    # divides by scored rows only. Counting them would silently deflate the cell.
+    n = len(seen) - n_quarantined
     if n < MIN_SCENARIOS_PER_CELL:
         errors.append(f"{tag}: {n} scored rows; R6 requires >= "
                       f"{MIN_SCENARIOS_PER_CELL} scenarios per cell")
@@ -780,13 +823,24 @@ def score_cell(results_path, transcripts_path, model, strategy, eval_index,
         if optional not in metrics:
             continue
         if optional == "n":
+            # harness.aggregate reports n = TOTAL rows, with n_scored/n_unscored
+            # alongside; the gate's `n` is the rate denominator, i.e. scored rows.
+            # Check both meanings against the right field rather than conflating
+            # them -- comparing total to scored fails every honest run that
+            # quarantined anything.
             if not is_real_int(metrics["n"]):
                 errors.append(f"{where}: metrics.n is {describe(metrics['n'])}, "
                               f"not an integer")
                 stored_ok = False
-            elif metrics["n"] != n:
+            elif metrics["n"] != n + n_quarantined:
                 errors.append(f"{where}: metrics.n == {metrics['n']!r} but {tag} "
-                              f"holds {n} scored rows")
+                              f"holds {n + n_quarantined} rows "
+                              f"({n} scored + {n_quarantined} quarantined)")
+                stored_ok = False
+            elif "n_scored" in metrics and is_real_int(metrics["n_scored"]) \
+                    and metrics["n_scored"] != n:
+                errors.append(f"{where}: metrics.n_scored == {metrics['n_scored']!r} "
+                              f"but {tag} holds {n} scored rows")
                 stored_ok = False
             continue
         if actual is None:
