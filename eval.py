@@ -167,12 +167,46 @@ class MockGenerator:
 
 
 class HFGenerator:
+    """Local inference.
+
+    Memory hygiene is not optional here. Measured on this machine, a 1.7B model
+    whose weights are 3.4GB in bfloat16 peaked at 19.7GB across a handful of
+    generations: MPS does not return the per-generation allocations on its own,
+    so they accumulate until the OS kills the process. Two ablation rows died
+    that way before this was found. Freeing after each generation keeps a
+    147-scenario row flat.
+    """
+
     def __init__(self, repo: str, revision: Optional[str]):
+        import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
+        self.torch = torch
         self.tok = AutoTokenizer.from_pretrained(repo, revision=revision)
-        self.model = AutoModelForCausalLM.from_pretrained(
-            repo, revision=revision, torch_dtype="auto", device_map="auto")
+        # Explicit dtype and a single device rather than "auto"/device_map: auto
+        # can hold a CPU copy alongside the accelerator copy, and the dtype is
+        # read from the model config anyway (bfloat16 for Qwen3).
+        dtype = torch.bfloat16 if torch.backends.mps.is_available() else "auto"
+        import inspect
+        kw = {"revision": revision, "low_cpu_mem_usage": True}
+        # transformers renamed torch_dtype -> dtype; support both without pinning
+        # a version, since the training app and the eval must load identically.
+        sig = inspect.signature(AutoModelForCausalLM.from_pretrained)
+        kw["dtype" if "dtype" in sig.parameters else "torch_dtype"] = dtype
+        try:
+            self.model = AutoModelForCausalLM.from_pretrained(repo, **kw)
+        except TypeError:
+            kw.pop("dtype", None); kw.pop("torch_dtype", None)
+            self.model = AutoModelForCausalLM.from_pretrained(repo, torch_dtype=dtype, **kw)
+        self.device = ("mps" if torch.backends.mps.is_available()
+                       else "cuda" if torch.cuda.is_available() else "cpu")
+        self.model.to(self.device).eval()
         self.thread_safe = False  # forces workers=1
+
+    def _release(self):
+        if self.device == "mps" and hasattr(self.torch, "mps"):
+            self.torch.mps.empty_cache()
+        elif self.device == "cuda":
+            self.torch.cuda.empty_cache()
 
     def __call__(self, scenario, prompt, constraint_lookup=None):
         msgs = ([{"role": "system", "content": prompt["system"]}] if prompt["system"] else [])
@@ -185,10 +219,16 @@ class HFGenerator:
         except TypeError:
             text = self.tok.apply_chat_template(
                 msgs, tokenize=False, add_generation_prompt=True)
-        inputs = self.tok(text, return_tensors="pt").to(self.model.device)
-        out = self.model.generate(**inputs, max_new_tokens=512, do_sample=False)
-        return self.tok.decode(out[0][inputs["input_ids"].shape[1]:],
-                               skip_special_tokens=True)
+        inputs = self.tok(text, return_tensors="pt").to(self.device)
+        try:
+            with self.torch.inference_mode():
+                out = self.model.generate(**inputs, max_new_tokens=512, do_sample=False)
+            decoded = self.tok.decode(out[0][inputs["input_ids"].shape[1]:],
+                                      skip_special_tokens=True)
+        finally:
+            del inputs
+            self._release()
+        return decoded
 
 
 class AnthropicGenerator:
