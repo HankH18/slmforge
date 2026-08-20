@@ -1,0 +1,100 @@
+{
+  "model": "hf:Qwen/Qwen3-1.7B@70d244cc86ccca08cf5af4e1e306ecf908b1ad5e",
+  "strategy": "structured",
+  "spec_version": "forbidden-constraint-holder-1.0",
+  "judge_rubric_hash": "12a0dcaaf29080cb",
+  "judge_model": "claude-sonnet-4-6",
+  "eval_set": "data/scenarios/corpus.jsonl",
+  "timestamp_utc": "2026-08-20T23:31:04.918558+00:00",
+  "metrics": {
+    "n": 147,
+    "n_scored": 146,
+    "n_unscored": 1,
+    "judge_errors": 1,
+    "generator_errors": 0,
+    "passed": 19,
+    "spec_adherence": 0.13013698630136986,
+    "robustness": 0.17391304347826086,
+    "by_pressure": {
+      "clean": {
+        "n": 77,
+        "passed": 7,
+        "spec_adherence": 0.09090909090909091
+      },
+      "adversarial": {
+        "n": 69,
+        "passed": 12,
+        "spec_adherence": 0.17391304347826086
+      }
+    },
+    "by_split": {
+      "heldout_type": {
+        "n": 59,
+        "passed": 4,
+        "spec_adherence": 0.06779661016949153
+      },
+      "train": {
+        "n": 87,
+        "passed": 15,
+        "spec_adherence": 0.1724137931034483
+      }
+    },
+    "by_k": {
+      "2": {
+        "n": 23,
+        "passed": 2,
+        "spec_adherence": 0.08695652173913043
+      },
+      "3": {
+        "n": 48,
+        "passed": 2,
+        "spec_adherence": 0.041666666666666664
+      },
+      "4": {
+        "n": 75,
+        "passed": 15,
+        "spec_adherence": 0.2
+      }
+    },
+    "by_constraint_type": {
+      "rows": 147,
+      "types": {
+        "banned_letter": {
+          "checks": 105,
+          "violations": 105,
+          "violation_rate": 1.0
+        },
+        "banned_phrases": {
+          "checks": 43,
+          "violations": 0,
+          "violation_rate": 0.0
+        },
+        "banned_punctuation": {
+          "checks": 41,
+          "violations": 12,
+          "violation_rate": 0.2926829268292683
+        },
+        "banned_words": {
+          "checks": 124,
+          "violations": 10,
+          "violation_rate": 0.08064516129032258
+        },
+        "no_lists": {
+          "checks": 105,
+          "violations": 2,
+          "violation_rate": 0.01904761904761905
+        },
+        "no_quotation_marks": {
+          "checks": 50,
+          "violations": 1,
+          "violation_rate": 0.02
+        },
+        "sentence_initial_letter": {
+          "checks": 25,
+          "violations": 8,
+          "violation_rate": 0.32
+        }
+      }
+    }
+  }
+}

@@ -5,55 +5,55 @@
   "judge_rubric_hash": "12a0dcaaf29080cb",
   "judge_model": "claude-sonnet-4-6",
   "eval_set": "data/scenarios/corpus.jsonl",
-  "timestamp_utc": "2026-08-20T19:55:33.381501+00:00",
+  "timestamp_utc": "2026-08-20T21:59:34.361051+00:00",
   "metrics": {
     "n": 147,
     "n_scored": 147,
     "n_unscored": 0,
     "judge_errors": 0,
     "generator_errors": 0,
-    "passed": 112,
-    "spec_adherence": 0.7619047619047619,
-    "robustness": 0.6811594202898551,
+    "passed": 115,
+    "spec_adherence": 0.782312925170068,
+    "robustness": 0.7391304347826086,
     "by_pressure": {
       "clean": {
         "n": 78,
-        "passed": 65,
-        "spec_adherence": 0.8333333333333334
+        "passed": 64,
+        "spec_adherence": 0.8205128205128205
       },
       "adversarial": {
         "n": 69,
-        "passed": 47,
-        "spec_adherence": 0.6811594202898551
+        "passed": 51,
+        "spec_adherence": 0.7391304347826086
       }
     },
     "by_split": {
       "heldout_type": {
         "n": 60,
-        "passed": 47,
-        "spec_adherence": 0.7833333333333333
+        "passed": 48,
+        "spec_adherence": 0.8
       },
       "train": {
         "n": 87,
-        "passed": 65,
-        "spec_adherence": 0.7471264367816092
+        "passed": 67,
+        "spec_adherence": 0.7701149425287356
       }
     },
     "by_k": {
       "2": {
         "n": 23,
-        "passed": 16,
-        "spec_adherence": 0.6956521739130435
+        "passed": 17,
+        "spec_adherence": 0.7391304347826086
       },
       "3": {
         "n": 49,
-        "passed": 40,
-        "spec_adherence": 0.8163265306122449
+        "passed": 36,
+        "spec_adherence": 0.7346938775510204
       },
       "4": {
         "n": 75,
-        "passed": 56,
-        "spec_adherence": 0.7466666666666667
+        "passed": 62,
+        "spec_adherence": 0.8266666666666667
       }
     },
     "by_constraint_type": {
@@ -61,8 +61,8 @@
       "types": {
         "banned_letter": {
           "checks": 105,
-          "violations": 33,
-          "violation_rate": 0.3142857142857143
+          "violations": 30,
+          "violation_rate": 0.2857142857142857
         },
         "banned_phrases": {
           "checks": 43,

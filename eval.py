@@ -243,7 +243,7 @@ class AnthropicGenerator:
         kw = {"system": prompt["system"]} if prompt["system"] else {}
         try:
             resp = self.client.messages.create(
-                model=self.model, max_tokens=4096, temperature=0,
+                model=self.model, max_tokens=8192, temperature=0,
                 messages=prompt["turns"], **kw)
         except Exception as exc:  # noqa: BLE001
             # Newer Claude generations reject `temperature` outright with a 400.
@@ -254,7 +254,7 @@ class AnthropicGenerator:
             if not judge_mod._is_temperature_400(exc):
                 raise
             resp = self.client.messages.create(
-                model=self.model, max_tokens=4096, messages=prompt["turns"], **kw)
+                model=self.model, max_tokens=8192, messages=prompt["turns"], **kw)
         text = "".join(b.text for b in resp.content
                        if getattr(b, "type", "") == "text")
         if not text.strip():

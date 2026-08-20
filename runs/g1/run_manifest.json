@@ -1,0 +1,130 @@
+{
+  "run_id": "g1",
+  "ladder_rung": "r7-hifreq",
+  "eval_set": "data/scenarios/corpus.jsonl",
+  "eval_set_sha256": "0ad00c19184d3a51c7950c13800f218b78eb5be4bfb74057608c00186aa9de72",
+  "constraints": "data/scenarios/constraint_instances.jsonl",
+  "constraints_sha256": "8cad778c2f8a06d6114a275d5f81dbc00236603349d508b9ab3e64e2fa532ed6",
+  "exemplars": "data/scenarios/fewshot_exemplars.jsonl",
+  "n_scenarios": 147,
+  "models": {
+    "frontier": [
+      "openai:gpt-5.6-sol",
+      "anthropic:claude-opus-5"
+    ],
+    "local_base": "hf:Qwen/Qwen3-1.7B@70d244cc86ccca08cf5af4e1e306ecf908b1ad5e"
+  },
+  "strategies": [
+    "zero_shot",
+    "few_shot",
+    "structured"
+  ],
+  "judge": {
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-6",
+    "rubric_hash": "12a0dcaaf29080cb"
+  },
+  "timestamp_utc": "2026-08-20T23:32:53.520622+00:00",
+  "cells": [
+    {
+      "model": "anthropic:claude-opus-5",
+      "strategy": "few_shot",
+      "classification": "frontier",
+      "results_json": "anthropic_claude-opus-5__few_shot.results.json",
+      "transcripts_jsonl": "anthropic_claude-opus-5__few_shot.transcripts.jsonl",
+      "spec_adherence": 0.4421768707482993,
+      "robustness": 0.463768115942029,
+      "n": 147,
+      "judge_errors": 0
+    },
+    {
+      "model": "anthropic:claude-opus-5",
+      "strategy": "structured",
+      "classification": "frontier",
+      "results_json": "anthropic_claude-opus-5__structured.results.json",
+      "transcripts_jsonl": "anthropic_claude-opus-5__structured.transcripts.jsonl",
+      "spec_adherence": 0.5205479452054794,
+      "robustness": 0.5507246376811594,
+      "n": 147,
+      "judge_errors": 0
+    },
+    {
+      "model": "anthropic:claude-opus-5",
+      "strategy": "zero_shot",
+      "classification": "frontier",
+      "results_json": "anthropic_claude-opus-5__zero_shot.results.json",
+      "transcripts_jsonl": "anthropic_claude-opus-5__zero_shot.transcripts.jsonl",
+      "spec_adherence": 0.4714285714285714,
+      "robustness": 0.5230769230769231,
+      "n": 147,
+      "judge_errors": 0
+    },
+    {
+      "model": "hf:Qwen/Qwen3-1.7B@70d244cc86ccca08cf5af4e1e306ecf908b1ad5e",
+      "strategy": "few_shot",
+      "classification": "local_base",
+      "results_json": "hf_Qwen_Qwen3-1.7B_70d244cc86ccca08cf5af4e1e306ecf908b1ad5e__few_shot.results.json",
+      "transcripts_jsonl": "hf_Qwen_Qwen3-1.7B_70d244cc86ccca08cf5af4e1e306ecf908b1ad5e__few_shot.transcripts.jsonl",
+      "spec_adherence": 0.0958904109589041,
+      "robustness": 0.1323529411764706,
+      "n": 147,
+      "judge_errors": 1
+    },
+    {
+      "model": "hf:Qwen/Qwen3-1.7B@70d244cc86ccca08cf5af4e1e306ecf908b1ad5e",
+      "strategy": "structured",
+      "classification": "local_base",
+      "results_json": "hf_Qwen_Qwen3-1.7B_70d244cc86ccca08cf5af4e1e306ecf908b1ad5e__structured.results.json",
+      "transcripts_jsonl": "hf_Qwen_Qwen3-1.7B_70d244cc86ccca08cf5af4e1e306ecf908b1ad5e__structured.transcripts.jsonl",
+      "spec_adherence": 0.13013698630136986,
+      "robustness": 0.17391304347826086,
+      "n": 147,
+      "judge_errors": 1
+    },
+    {
+      "model": "hf:Qwen/Qwen3-1.7B@70d244cc86ccca08cf5af4e1e306ecf908b1ad5e",
+      "strategy": "zero_shot",
+      "classification": "local_base",
+      "results_json": "hf_Qwen_Qwen3-1.7B_70d244cc86ccca08cf5af4e1e306ecf908b1ad5e__zero_shot.results.json",
+      "transcripts_jsonl": "hf_Qwen_Qwen3-1.7B_70d244cc86ccca08cf5af4e1e306ecf908b1ad5e__zero_shot.transcripts.jsonl",
+      "spec_adherence": 0.08904109589041095,
+      "robustness": 0.10294117647058823,
+      "n": 147,
+      "judge_errors": 1
+    },
+    {
+      "model": "openai:gpt-5.6-sol",
+      "strategy": "few_shot",
+      "classification": "frontier",
+      "results_json": "openai_gpt-5.6-sol__few_shot.results.json",
+      "transcripts_jsonl": "openai_gpt-5.6-sol__few_shot.transcripts.jsonl",
+      "spec_adherence": 0.6190476190476191,
+      "robustness": 0.6666666666666666,
+      "n": 147,
+      "judge_errors": 0
+    },
+    {
+      "model": "openai:gpt-5.6-sol",
+      "strategy": "structured",
+      "classification": "frontier",
+      "results_json": "openai_gpt-5.6-sol__structured.results.json",
+      "transcripts_jsonl": "openai_gpt-5.6-sol__structured.transcripts.jsonl",
+      "spec_adherence": 0.7074829931972789,
+      "robustness": 0.7101449275362319,
+      "n": 147,
+      "judge_errors": 0
+    },
+    {
+      "model": "openai:gpt-5.6-sol",
+      "strategy": "zero_shot",
+      "classification": "frontier",
+      "results_json": "openai_gpt-5.6-sol__zero_shot.results.json",
+      "transcripts_jsonl": "openai_gpt-5.6-sol__zero_shot.transcripts.jsonl",
+      "spec_adherence": 0.782312925170068,
+      "robustness": 0.7391304347826086,
+      "n": 147,
+      "judge_errors": 0
+    }
+  ],
+  "_note": "Provenance only. scripts/gate_check.py re-derives every metric from the transcripts and re-runs the checkers; nothing here is trusted as a measurement."
+}
