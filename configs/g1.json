@@ -37,7 +37,7 @@
   },
   "ladder": {
     "_note": "R6 escalation ladder, in order: raise k (2->3->4), THEN raise the adversarial share. `current` names the rung that produced the run now on disk; run_ablation.py records it into the run manifest as `ladder_rung` and scripts/gate_check.py verifies the committed eval set actually matches that rung (max k reached, adversarial share met) rather than taking the label on trust. HARD STOP is only legitimate on the LAST rung.",
-    "current": "r1-k2",
+    "current": "r3-k4",
     "rungs": [
       {
         "name": "r1-k2",
@@ -81,7 +81,8 @@
         ],
         "adversarial_share": 0.8
       }
-    ]
+    ],
+    "_current_note": "The shipped corpus already spans k=2,3,4 at ~0.47 adversarial, so it satisfies r3-k4 \u2014 the TOP of the k half of the ladder. Was mislabelled r1-k2. Consequence worth stating: the k-escalation rungs are already exhausted, so a clean G1 leaves only the adversarial-share rungs (r4-adv60, r5-adv80) before HARD_STOP."
   },
   "_eval_set_note": "MUST be the constraint-holding corpus. It previously named data/eval/scenarios_v2_hardened.jsonl -- the retired abstainer hedge set, which exists on disk, so an existence check passed while the run would have scored grounded-abstention scenarios with constraint checkers. tests/test_g1_config.py now binds the SCHEMA, not just the path."
 }
