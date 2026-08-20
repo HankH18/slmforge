@@ -45,12 +45,27 @@ transcripts.
                        the trained row). Comparing that against the layer-1 user
                        message was an unsatisfiable equality: an HONEST run failed
                        leg 1 and the only way to pass was to write something
-                       false. This checker therefore accepts evidence at EITHER
-                       layer and compares at layer 1 -- it locates the dataset
-                       row's user message inside the recorded prompt and requires
-                       everything around it to be chat-template scaffolding.
-                       Layer-1 evidence is the degenerate case (empty scaffold).
-                       check_sample_evidence spells out exactly what that admits.
+                       false.
+                       The fix is NOT to read the layer-2 string back down to
+                       layer 1. That was tried -- locate the user message inside
+                       the recorded prompt, require everything around it to be
+                       "scaffolding" -- and an adversarial verifier defeated it
+                       twice in one sitting (an injected system turn read as
+                       scaffold; a bare <note> tag matched the template-marker
+                       pattern, so drift left an empty residue). "Scaffolding" is
+                       attacker-supplied text, so no pattern-tightening makes that
+                       comparison sound.
+                       Instead the trainer ALSO records
+                       prompt_contract.sample_prompt_messages -- the literal
+                       messages it templated -- and check_sample_evidence compares
+                       THOSE structurally: exactly one turn, role user, no other
+                       keys on that turn, and content byte-identical to the
+                       re-rendered prompt. Nothing is parsed, so there is nothing
+                       to smuggle past.
+                       sample_rendered_prompt is corroboration only: it must
+                       contain the message it claims to have templated, and it is
+                       never compared any further, because reproducing it needs
+                       the pinned tokenizer.
   leg 2  train      -- a real step count, a non-empty loss history of finite
                        numbers, a strictly positive wall clock that does not
                        exceed the elapsed run time, a resolved config, and a
@@ -115,27 +130,6 @@ REQUIRED_METRIC_KEYS = ("n", "n_scored", "passed", "spec_adherence",
 
 #: Tolerance (seconds) when comparing recorded wall clock to elapsed time.
 WALL_CLOCK_SLACK_S = 5.0
-
-#: Chat-template control markers, for reading a LAYER-2 prompt back down to
-#: layer 1. Covers every mainstream template family: ChatML/Qwen
-#: (``<|im_start|>``), Llama-3 (``<|start_header_id|>``), Gemma
-#: (``<start_of_turn>``), Phi (``<|end|>``), Qwen3 thinking (``<think>``),
-#: sentencepiece BOS/EOS (``<s>``/``</s>``) and Mistral (``[INST]``/``[/INST]``).
-#: This is used ONLY to locate the boundary between scaffolding and prompt text;
-#: no template is ever reconstructed here.
-TEMPLATE_MARKER_RE = re.compile(
-    r"<\|[^<>|]*\|>"          # <|im_start|>, <|eot_id|>, <|end|>
-    r"|</?[A-Za-z_][\w.:-]*>"  # <s>, </s>, <bos>, <start_of_turn>, <think>
-    r"|\[/?[A-Z_]+\]")        # [INST], [/INST]
-
-#: What may sit between the last scaffolding marker and the user message (and
-#: between the user message and the first closing marker): whitespace, plus at
-#: most ONE bare word -- the role label that ChatML-family templates write
-#: outside their markers ("<|im_start|>user\n"). One word cannot carry an
-#: instruction; two can. Deliberately NOT a length budget: a character cap is a
-#: number nobody ruled on, and it would admit a short instruction like
-#: "be terse".
-SCAFFOLD_RESIDUE_RE = re.compile(r"\A\s*[A-Za-z0-9_-]*\s*\Z")
 
 
 class Leg:
@@ -587,21 +581,6 @@ def check_prompt_contract(rows, train_log, repo_root, render_fn, arity,
     return errors, rendered_by_index
 
 
-def _scaffold_residue(text: str, side: str) -> str:
-    """The part of a scaffolding fragment that is NOT a template marker.
-
-    ``side="prefix"``  -> everything after the LAST marker (what sits directly
-                         in front of the user message).
-    ``side="suffix"``  -> everything before the FIRST marker (what sits directly
-                         behind it).
-    A fragment with no marker at all is returned whole.
-    """
-    hits = list(TEMPLATE_MARKER_RE.finditer(text))
-    if not hits:
-        return text
-    return text[hits[-1].end():] if side == "prefix" else text[:hits[0].start()]
-
-
 def check_sample_evidence(sample_text, user_message, line_no, sample_messages=None):
     """The prompt contract, checked STRUCTURALLY and EXACTLY.
 
@@ -618,8 +597,9 @@ def check_sample_evidence(sample_text, user_message, line_no, sample_messages=No
     The lesson is that "scaffolding" is attacker-supplied text, so no amount of
     pattern-tightening makes that comparison sound. The trainer now records the
     MESSAGES it templated, so the contract is checked against structure instead:
-    exactly one turn, role user, content byte-identical to the re-rendered prompt.
-    Nothing is parsed, so there is nothing to smuggle past.
+    exactly one turn, role user, no other keys on it, and content byte-identical
+    to the re-rendered prompt. Nothing is parsed, so there is nothing to smuggle
+    past.
     """
     errors = []
     if sample_messages is None:
@@ -647,6 +627,20 @@ def check_sample_evidence(sample_text, user_message, line_no, sample_messages=No
             f"'user'.")
         return errors
 
+    # A turn is a ROLE and a CONTENT and nothing else. Comparing only those two
+    # while ignoring whatever else the turn carries would reopen the same hole
+    # from the other side: chat templates render extra keys (prefix,
+    # reasoning_content, tool_calls) on some model families, so an unchecked key
+    # is unmasked instruction the model trains on and the eval harness never
+    # sends. There is no "harmless extra field" that a checker can certify.
+    extra = sorted(set(turn) - {"role", "content"})
+    if extra:
+        errors.append(
+            f"prompt_contract.sample_prompt_messages[0] carries keys other than "
+            f"role and content ({extra}). A chat template may render them, so "
+            f"they are prompt text the eval harness never sends.")
+        return errors
+
     carried = turn.get("content")
     if carried != user_message:
         errors.append(
@@ -663,6 +657,7 @@ def check_sample_evidence(sample_text, user_message, line_no, sample_messages=No
             f"prompt_contract.sample_rendered_prompt does not contain the user "
             f"message it records templating -- the two fields disagree.")
     return errors
+
 
 def check_generate(train_log: dict, repo_root: Path) -> Leg:
     leg = Leg("1 generate (training dataset + prompt contract)")
@@ -777,11 +772,13 @@ def check_generate(train_log: dict, repo_root: Path) -> Leg:
     for err in sample_errors:
         leg.fail(err)
     if not sample_errors:
-        layer = ("the templated messages, compared structurally: exactly one "
-                 "user turn whose content is byte-identical to the re-rendered prompt")
-        leg.note(f"prompt_contract.sample_rendered_prompt carries dataset row "
-                 f"{line_no}'s user message at {layer}: {len(sample_text)} chars "
-                 f"recorded, {len(carried)} of them the prompt itself")
+        how = ("the templated messages, compared structurally: exactly one "
+               "user turn whose content is byte-identical to the re-rendered prompt")
+        leg.note(f"prompt contract for dataset row {line_no} verified against "
+                 f"{how}. prompt_contract.sample_rendered_prompt corroborates it "
+                 f"({len(sample_text)} chars recorded, {len(carried)} of them the "
+                 f"prompt itself) and is not compared any further -- reproducing "
+                 f"it needs the pinned tokenizer")
     return leg
 
 

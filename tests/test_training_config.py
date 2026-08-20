@@ -215,6 +215,24 @@ def test_modal_app_carries_no_self_attestation_flag():
     assert "SYSTEM_CORE" not in src
 
 
+def test_the_recorded_messages_are_the_slice_that_was_actually_templated():
+    """The GPU job cannot run offline, so this pins the one line that would make
+    the whole prompt contract vacuous: sample_prompt_messages must be built from
+    the SAME slice of the SAME row that is handed to render_prompt_text.
+
+    Recording a different (honest-looking) slice would be undetectable to
+    check_loop -- it compares the recorded messages against the dataset row, and
+    a row's own prompt half always matches -- while the model was templated from
+    something else entirely.
+    """
+    src = MODAL_APP.read_text()
+    slice_expr = 'rows[sample_row_index]["messages"][:1]'
+    assert f"sample_prompt_messages = [dict(m) for m in {slice_expr}]" in src, \
+        "sample_prompt_messages is no longer the row's prompt half, verbatim"
+    assert f"render_prompt_text(\n        tokenizer, {slice_expr}," in src, \
+        "the rendered evidence is no longer templated from that same slice"
+
+
 # =====================================================================
 # The module itself, imported and executed.
 # =====================================================================
@@ -910,8 +928,18 @@ def test_train_log_has_exactly_the_pinned_shape(app_mod):
         constraints_path="data/scenarios/constraint_instances.jsonl"))
     assert list(with_corpora["dataset"]) == [
         "path", "rows", "sha256", "scenarios_path", "constraints_path"]
+    # sample_prompt_messages is PINNED, not optional: it is the evidence
+    # scripts/check_loop.py compares structurally. Reading the layer-2 rendered
+    # string back down to layer 1 was defeated twice by an adversarial verifier
+    # (an injected system turn read as scaffolding; a bare <note> tag left an
+    # empty residue), and an offline checker cannot reproduce that string anyway
+    # -- it needs the pinned tokenizer. A run that records only the string
+    # carries a claim no checker can soundly verify.
     assert list(log["prompt_contract"]) == ["render_fn", "sample_row_index",
-                                            "sample_rendered_prompt"]
+                                            "sample_rendered_prompt",
+                                            "sample_prompt_messages"]
+    assert log["prompt_contract"]["sample_prompt_messages"] == [
+        {"role": "user", "content": "alpha beta"}]
     assert list(log["artifacts"]) == ["adapter", "adapter_bytes", "merged_fp16",
                                       "merged_bytes"]
 
@@ -941,6 +969,12 @@ def test_train_log_carries_no_self_attestation_boolean(app_mod):
         assert not isinstance(value, bool), f"top-level boolean claim: {key}"
     for key, value in log["prompt_contract"].items():
         assert not isinstance(value, bool), f"prompt_contract boolean: {key}"
+    # ...including inside the templated messages, the newest piece of evidence:
+    # a flag smuggled into a turn would be just as untrustworthy there.
+    for turn in log["prompt_contract"]["sample_prompt_messages"]:
+        assert set(turn) == {"role", "content"}, f"extra keys on a turn: {turn}"
+        for key, value in turn.items():
+            assert isinstance(value, str), f"sample_prompt_messages.{key} is {value!r}"
     assert "equals" not in json.dumps(log).lower()
 
 
@@ -976,10 +1010,21 @@ def test_train_log_evidence_matches_what_the_feature_builder_actually_fed(app_mo
     rendered = app_mod.render_prompt_text(tok, rows[index]["messages"][:1], False)
 
     log = app_mod.build_train_log(**train_log_kwargs(
-        sample_row_index=index, sample_rendered_prompt=rendered))
+        sample_row_index=index, sample_rendered_prompt=rendered,
+        sample_prompt_messages=[dict(m) for m in rows[index]["messages"][:1]]))
     evidence = log["prompt_contract"]["sample_rendered_prompt"]
 
     assert evidence == "<bos> <user> alpha beta <end> <assistant>"
     masked_prefix = feats[0]["input_ids"][:BOUNDARY]
     assert tok.ids(evidence) == masked_prefix
     assert feats[0]["labels"][:BOUNDARY] == [-100] * len(masked_prefix)
+
+    # ...and the MESSAGES recorded beside it are the same slice that was
+    # templated: exactly the prompt half, one user turn, verbatim. This is the
+    # half check_loop can compare offline -- it cannot re-render `evidence`
+    # without the pinned tokenizer, so the messages are the checkable evidence
+    # and this test is what ties them to what the feature builder actually fed.
+    templated = log["prompt_contract"]["sample_prompt_messages"]
+    assert templated == rows[index]["messages"][:1]
+    assert [t["role"] for t in templated] == ["user"]
+    assert templated[0]["content"] in evidence

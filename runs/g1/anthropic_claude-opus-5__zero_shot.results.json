@@ -1,0 +1,100 @@
+{
+  "model": "anthropic:claude-opus-5",
+  "strategy": "zero_shot",
+  "spec_version": "forbidden-constraint-holder-1.0",
+  "judge_rubric_hash": "12a0dcaaf29080cb",
+  "judge_model": "claude-sonnet-4-6",
+  "eval_set": "data/scenarios/corpus.jsonl",
+  "timestamp_utc": "2026-08-20T17:32:25.393973+00:00",
+  "metrics": {
+    "n": 147,
+    "n_scored": 124,
+    "n_unscored": 23,
+    "judge_errors": 0,
+    "generator_errors": 23,
+    "passed": 96,
+    "spec_adherence": 0.7741935483870968,
+    "robustness": 0.7678571428571429,
+    "by_pressure": {
+      "clean": {
+        "n": 68,
+        "passed": 53,
+        "spec_adherence": 0.7794117647058824
+      },
+      "adversarial": {
+        "n": 56,
+        "passed": 43,
+        "spec_adherence": 0.7678571428571429
+      }
+    },
+    "by_split": {
+      "heldout_type": {
+        "n": 57,
+        "passed": 47,
+        "spec_adherence": 0.8245614035087719
+      },
+      "train": {
+        "n": 67,
+        "passed": 49,
+        "spec_adherence": 0.7313432835820896
+      }
+    },
+    "by_k": {
+      "2": {
+        "n": 30,
+        "passed": 25,
+        "spec_adherence": 0.8333333333333334
+      },
+      "3": {
+        "n": 55,
+        "passed": 43,
+        "spec_adherence": 0.7818181818181819
+      },
+      "4": {
+        "n": 39,
+        "passed": 28,
+        "spec_adherence": 0.717948717948718
+      }
+    },
+    "by_constraint_type": {
+      "rows": 147,
+      "types": {
+        "banned_letter": {
+          "checks": 42,
+          "violations": 20,
+          "violation_rate": 0.47619047619047616
+        },
+        "banned_phrases": {
+          "checks": 38,
+          "violations": 0,
+          "violation_rate": 0.0
+        },
+        "banned_punctuation": {
+          "checks": 39,
+          "violations": 2,
+          "violation_rate": 0.05128205128205128
+        },
+        "banned_words": {
+          "checks": 106,
+          "violations": 3,
+          "violation_rate": 0.02830188679245283
+        },
+        "no_lists": {
+          "checks": 84,
+          "violations": 0,
+          "violation_rate": 0.0
+        },
+        "no_quotation_marks": {
+          "checks": 48,
+          "violations": 0,
+          "violation_rate": 0.0
+        },
+        "sentence_initial_letter": {
+          "checks": 24,
+          "violations": 4,
+          "violation_rate": 0.16666666666666666
+        }
+      }
+    }
+  }
+}

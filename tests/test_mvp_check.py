@@ -13,8 +13,22 @@ What it must NOT do, and what the sabotage table below pins:
     gate_check.score_cell -- imported, never reimplemented.
   * trust the report's prose. An earlier version only grepped
     docs/MVP_REPORT.md for the metric NAMES, so the headline base-vs-tuned
-    figures could be arbitrarily inflated while every gate stayed green. Every
-    printed number is now matched against the re-derived value.
+    figures could be arbitrarily inflated while every gate stayed green.
+  * inspect only the numbers sitting under a RECOGNISED heading (D3). The
+    version after that validated a table only if a column header or row label
+    normalised exactly to spec_adherence / robustness / fail_rate, and the
+    lookalike guard lived inside those branches -- so a table matching neither
+    was never examined and prose was never examined at all. With the honest
+    table left intact, an adversarial verifier walked a prose claim, a renamed
+    row, a renamed column and an extra column straight past it. The rule is now
+    INVERTED: every percentage, ratio or printed fraction in the report must
+    either be a cell matched against the re-derived value or sit on a line
+    explicitly declared non-metric, and a declared line may not also speak
+    metric vocabulary. All six of those sabotages are in the table below.
+  * accept a package that never measured robustness (D4). A 100%-clean eval set
+    makes robustness None, the report prints "n/a", and the na branch used to
+    pass it. Robustness is the pivot's headline metric on the adversarial
+    subset; a non-empty adversarial subset and a real value are now required.
   * accept a package whose two models sat different exams, whose report cites
     files that do not exist, whose pinned hashes are missing, or which
     quarantined its way past the cap.
@@ -140,6 +154,7 @@ class MvpPackage:
         (self.root / INSTANCES_REL).parent.mkdir(parents=True, exist_ok=True)
         (self.root / "docs").mkdir(parents=True, exist_ok=True)
 
+        self.scenarios = list(SCENARIOS)
         self.write_jsonl(self.root / EVAL_SET_REL, SCENARIOS)
         self.write_jsonl(self.root / INSTANCES_REL, CONSTRAINTS)
         self.models_path = self.root / "configs" / "models.json"
@@ -184,7 +199,7 @@ class MvpPackage:
             "judge_model": JUDGE_MODEL,
             "eval_set": EVAL_SET_REL,
             "timestamp_utc": "2026-08-20T13:23:38.357675+00:00",
-            "metrics": H.aggregate(rows, SCENARIOS, LOOKUP),
+            "metrics": H.aggregate(rows, self.scenarios, LOOKUP),
         }, indent=2))
 
     # ------------------------------------------------------------ reading
@@ -206,6 +221,13 @@ class MvpPackage:
         mutate(rows)
         self.write_jsonl(self.paths(role)[1], rows)
 
+    def set_eval_set(self, scenarios):
+        """Replace the eval set BOTH cells were scored on. The stored aggregates
+        are recomputed against it by reseal(), so the arithmetic stays quiet and
+        only a rule about what an eval set must CONTAIN can object."""
+        self.scenarios = list(scenarios)
+        self.write_jsonl(self.root / EVAL_SET_REL, self.scenarios)
+
     def reseal(self, role):
         """Recompute the stored aggregate from the rows on disk -- what a careless
         regeneration (or an attacker) does to keep the arithmetic quiet."""
@@ -217,7 +239,7 @@ class MvpPackage:
 
     # ------------------------------------------------------------- report
     def write_report(self, tuned=None, base=None, extra_paths=(),
-                     eval_commit_line=True, extra_rows=()):
+                     eval_commit_line=True, extra_rows=(), extra_lines=()):
         tuned = tuned or self.metrics("tuned")
         base = base or self.metrics("base")
         rp_t, tp_t = self.paths("tuned")
@@ -225,6 +247,11 @@ class MvpPackage:
         rel = lambda p: p.relative_to(self.root).as_posix()  # noqa: E731
         repro = (f"python eval.py --model {TUNED_SPEC} "
                  f"--eval-set {EVAL_SET_REL} --strategy zero_shot")
+        # robustness is None when the eval set holds no adversarial scenarios --
+        # the state check_mvp must refuse rather than print through
+        num = lambda v: "n/a" if v is None else f"{v:.4f}"          # noqa: E731
+        dlt = lambda a, b: ("n/a" if a is None or b is None          # noqa: E731
+                            else f"{a - b:+.4f}")
 
         lines = [
             "# MVP report — Forbidden-Constraint Holder",
@@ -247,10 +274,10 @@ class MvpPackage:
             "",
             "| model | spec_adherence | robustness |",
             "| --- | --- | --- |",
-            f"| base `Qwen/Qwen3-1.7B@{BASE_SHA}` | {base['spec_adherence']:.4f} "
-            f"| {base['robustness']:.4f} |",
-            f"| tuned `{TUNED_PIN}` | {tuned['spec_adherence']:.4f} "
-            f"| {tuned['robustness']:.4f} |",
+            f"| base `Qwen/Qwen3-1.7B@{BASE_SHA}` | {num(base['spec_adherence'])} "
+            f"| {num(base['robustness'])} |",
+            f"| tuned `{TUNED_PIN}` | {num(tuned['spec_adherence'])} "
+            f"| {num(tuned['robustness'])} |",
         ]
         lines += list(extra_rows)
         lines += [
@@ -259,8 +286,8 @@ class MvpPackage:
             "",
             "| metric | delta |",
             "| --- | --- |",
-            f"| spec_adherence | {tuned['spec_adherence'] - base['spec_adherence']:+.4f} |",
-            f"| robustness | {tuned['robustness'] - base['robustness']:+.4f} |",
+            f"| spec_adherence | {dlt(tuned['spec_adherence'], base['spec_adherence'])} |",
+            f"| robustness | {dlt(tuned['robustness'], base['robustness'])} |",
             "",
             "## Reproduce",
             "",
@@ -274,6 +301,7 @@ class MvpPackage:
             f"- base: {rel(tp_b)} (aggregate: {rel(rp_b)})",
         ]
         lines += [f"- {p}" for p in extra_paths]
+        lines += list(extra_lines)
         lines.append("")
         self.report_path.write_text("\n".join(lines))
         self.readme_path.write_text(
@@ -334,6 +362,58 @@ def test_check_mvp_imports_the_gate_checks_rederivation(pkg):
                  "pred_class", "entailment", "parse_output",
                  "false_answer_rate", "false_refusal_rate"):
         assert dead not in code, f"abstainer-era vocabulary still live: {dead}"
+
+
+def test_every_number_in_an_honest_report_is_already_accounted_for(pkg):
+    """The inverted rule must not need an escape hatch to accept honest work.
+
+    The fixture report prints pins, shas, a repro command and paths beside its
+    metric tables, and NONE of them needs declaring: a rate is a percentage, a
+    ratio in [0, 1] or a printed fraction, and identifiers like `Qwen3-1.7B` are
+    none of those. If this ever fails, the rule has started taxing honesty.
+    """
+    r = run_gate(pkg)
+    assert r.returncode == 0, out(r)
+    assert "reported metric value(s) match the numbers re-derived" in r.stdout
+    assert "declared non-metric" not in r.stdout
+
+
+def test_a_declared_non_metric_number_is_accepted_and_reported(pkg):
+    """The escape hatch exists for config values and counts, works, and is said
+    out loud -- a grader reading the gate's output sees every number the author
+    claimed was not a result."""
+    pkg.write_report(extra_lines=[
+        "",
+        "## Training configuration",
+        "",
+        "<!-- non-metric-block: LoRA hyperparameters, not measurements -->",
+        "| setting | value |",
+        "| --- | --- |",
+        "| learning rate | 0.0002 |",
+        "| warmup ratio | 0.0300 |",
+        "<!-- /non-metric-block -->",
+        "",
+        "Judge sampling temperature 0.0 <!-- non-metric: decoding parameter -->",
+    ])
+    r = run_gate(pkg)
+    assert r.returncode == 0, out(r)
+    assert "3 number(s) explicitly declared non-metric" in r.stdout
+    assert "LoRA hyperparameters, not measurements" in r.stdout
+    assert "decoding parameter" in r.stdout
+
+
+def test_the_declaration_cannot_be_stretched_over_the_metric_tables(pkg):
+    """A block opened before the results table would exempt the numbers the whole
+    MVP claim rests on. It cannot: those lines speak metric vocabulary, and rule
+    3 refuses to let a declaration cover them."""
+    text = pkg.report_path.read_text()
+    pkg.report_path.write_text(text.replace(
+        "## Results",
+        "<!-- non-metric-block: nothing to see here -->\n\n## Results", 1)
+        + "\n<!-- /non-metric-block -->\n")
+    r = run_gate(pkg)
+    assert r.returncode != 0, out(r)
+    assert "but states a number in metric vocabulary" in out(r)
 
 
 # ================================================================ sabotage
@@ -499,6 +579,107 @@ def _strategy_is_not_zero_shot(p):
     p.edit_results("tuned", lambda d: d.update(strategy="few_shot"))
 
 
+# --- D3: the report cannot carry an UNVALIDATED performance number ------
+# An adversarial verifier got all four of these past the previous rule, which
+# only inspected a table whose column header or row label normalised EXACTLY to
+# spec_adherence / robustness / fail_rate -- so a table matching neither was
+# never examined, and prose was never examined at all. The honest table is left
+# intact in every one of them: the lie is an ADDITION.
+def _a_prose_claim(p):
+    """No table at all. The sentence a grader actually reads."""
+    p.write_report(extra_lines=[
+        "",
+        "## Summary",
+        "",
+        "Tuning lifts spec adherence from 12.0% to 99.4% on the held-out set.",
+    ])
+
+
+def _a_renamed_metric_row(p):
+    """A second table headed `metric | base | tuned | improvement` whose row is
+    called 'constraint adherence' -- a metric this harness never emits, so the
+    numbers in it are backed by nothing."""
+    p.write_report(extra_lines=[
+        "",
+        "## Constraint results",
+        "",
+        "| metric | base | tuned | improvement |",
+        "| --- | --- | --- | --- |",
+        "| constraint adherence | 0.1200 | 0.9940 | +0.8740 |",
+    ])
+
+
+def _a_renamed_metric_column(p):
+    """A second table headed `model | overall adherence | adversarial`. Both
+    column names are inventions; both columns carry numbers."""
+    p.write_report(extra_lines=[
+        "",
+        "## Headline",
+        "",
+        "| model | overall adherence | adversarial |",
+        "| --- | --- | --- |",
+        f"| base `Qwen/Qwen3-1.7B@{BASE_SHA}` | 0.1200 | 0.0500 |",
+        f"| tuned `{TUNED_PIN}` | 0.9940 | 0.9900 |",
+    ])
+
+
+def _an_extra_column_in_the_real_metric_table(p):
+    """An unrecognised column spliced into the table that IS validated. The old
+    lookalike guard ran inside the recognised-heading branch and 'constraint_wins'
+    is on no list, so its numbers rode along untouched."""
+    text = p.report_path.read_text()
+    old_head = "| model | spec_adherence | robustness |"
+    assert old_head in text
+    text = text.replace(old_head, old_head + " constraint_wins |", 1)
+    text = text.replace("| --- | --- | --- |", "| --- | --- | --- | --- |", 1)
+    lines = []
+    for ln in text.splitlines():
+        if ln.startswith("| base `Qwen") or ln.startswith("| tuned `hank"):
+            ln = ln + " 0.9940 |"
+        lines.append(ln)
+    p.report_path.write_text("\n".join(lines) + "\n")
+
+
+def _a_metric_claim_declared_non_metric(p):
+    """The escape hatch, aimed at the thing it may not cover. A declaration can
+    exempt a config value or a count; it may not exempt a sentence that states a
+    performance number in metric vocabulary."""
+    p.write_report(extra_lines=[
+        "",
+        "Tuning lifts spec adherence from 12.0% to 99.4% on the held-out set. "
+        "<!-- non-metric: prose, not a table -->",
+    ])
+
+
+def _an_unclosed_non_metric_block(p):
+    """An unterminated block would exempt everything after it."""
+    p.write_report(extra_lines=[
+        "",
+        "<!-- non-metric-block: hyperparameters -->",
+        "| lora_r | 0.0002 |",
+    ])
+
+
+def _a_non_metric_declaration_with_no_reason(p):
+    """A bare switch is not a declaration: it has to say what the number is."""
+    p.write_report(extra_lines=[
+        "",
+        "Warmup ratio 0.0300 <!-- non-metric:  -->",
+    ])
+
+
+# --- D4: robustness is the pivot's headline metric, not an optional field ---
+def _an_eval_set_with_no_adversarial_scenarios(p):
+    """Every scenario re-labelled 'clean'. gate_check then returns
+    robustness=None, the report prints 'n/a', and the na branch used to accept
+    it -- so a package that never measured the headline metric passed. Both
+    aggregates are resealed against the new eval set, so nothing else objects."""
+    p.set_eval_set([dict(s, pressure="clean") for s in SCENARIOS])
+    p.reseal("tuned")
+    p.reseal("base")
+    p.write_report()
+
+
 SABOTAGE = [
     ("an inflated headline number in the report", _inflated_report_number,
      "does not match the artifact it claims to summarize"),
@@ -537,6 +718,24 @@ SABOTAGE = [
     ("no MVP report", _report_missing, "docs/MVP_REPORT.md missing"),
     ("a cell run under the wrong strategy", _strategy_is_not_zero_shot,
      "strategy"),
+    # --- D3: an unvalidated performance number, in every shape it takes ----
+    ("a prose claim with no table at all", _a_prose_claim,
+     "a performance number this gate cannot check"),
+    ("a renamed metric row in a table of its own", _a_renamed_metric_row,
+     "a performance number this gate cannot check"),
+    ("a renamed metric column in a table of its own", _a_renamed_metric_column,
+     "a performance number this gate cannot check"),
+    ("an extra unrecognised column inside the real metric table",
+     _an_extra_column_in_the_real_metric_table, "never emits"),
+    ("a metric claim declared non-metric", _a_metric_claim_declared_non_metric,
+     "but states a number in metric vocabulary"),
+    ("a non-metric block that is never closed", _an_unclosed_non_metric_block,
+     "never closes it"),
+    ("a non-metric declaration with no reason",
+     _a_non_metric_declaration_with_no_reason, "must state WHY"),
+    # --- D4: robustness measured, not skipped ------------------------------
+    ("an eval set with no adversarial scenarios at all",
+     _an_eval_set_with_no_adversarial_scenarios, "NO adversarial scenarios"),
 ]
 
 
