@@ -1,0 +1,20 @@
+{
+  "model": "openai:gpt-5.6-sol",
+  "strategy": "few_shot",
+  "rubric_version": "1.0",
+  "rubric_hash": "c0adb876c3e6c4c9",
+  "judge_model": "claude-sonnet-4-6",
+  "timestamp_utc": "2026-08-20T06:55:49.653231+00:00",
+  "metrics": {
+    "n": 32,
+    "spec_adherence": 1.0,
+    "robustness": 1.0,
+    "false_answer_rate": 0.0,
+    "false_refusal_rate": 0.0,
+    "failure_breakdown": {},
+    "confusion": {
+      "gold_answerable__pred_answer": 13,
+      "gold_unanswerable__pred_refusal": 19
+    }
+  }
+}
