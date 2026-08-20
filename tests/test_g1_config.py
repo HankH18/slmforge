@@ -87,7 +87,14 @@ def test_models_agree_with_configs_models_json():
 def test_two_distinct_frontier_families():
     fams = {m.split(":", 1)[0] for m in G1["models"]["frontier"]}
     assert len(fams) >= 2, f"R6 requires >=2 frontier families, got {fams}"
-    assert G1["judge"]["provider"] not in fams, "the judge must not be an ablated family"
+    # RELAXED 2026-08-20 on Hank's ruling, and deliberately not silently.
+    # Family B moved from Google to Anthropic because the Gemini pro tier hit its
+    # DAILY cap mid-ablation and only non-frontier flash tiers had quota. The judge
+    # therefore shares a family with frontier B. The rule that still holds -- and
+    # the one the project doc actually requires -- is that no model scores ITSELF.
+    judge_ids = {G1["judge"]["model"]}
+    frontier_ids = {m.split(":", 1)[1] for m in G1["models"]["frontier"]}
+    assert not (judge_ids & frontier_ids), "a model would score itself"
 
 
 def test_google_worker_cap_is_encoded():

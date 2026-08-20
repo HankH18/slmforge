@@ -5,11 +5,11 @@
   "models": {
     "frontier": [
       "openai:gpt-5.6-sol",
-      "google:gemini-3.1-pro-preview"
+      "anthropic:claude-opus-5"
     ],
     "local_base": "hf:Qwen/Qwen3-1.7B@70d244cc86ccca08cf5af4e1e306ecf908b1ad5e",
     "_note": "Two frontier families (R6 requires >=2 from DIFFERENT families) plus the prompted local base model. The base row is evidence that a small model cannot already do this; scripts/gate_check.py classifies it as local_base and EXCLUDES it from the ceiling claim.",
-    "_family_b_blocked": "MEASURED 2026-08-20 ~07:30 CDT. google:gemini-3.1-pro-preview is out of DAILY quota (generate_requests_per_model_per_day, limit 250, retry in ~11h). gemini-pro-latest is an alias onto the same bucket and is equally exhausted. gemini-3.7-flash returns 503 capacity. Only gemini-3.6-flash and gemini-3-flash-preview respond, and a flash tier is not a frontier model, so substituting one would make 'two frontier families' false. R6 requires two, and scripts/gate_check.py correctly refuses a grid with one -- so G1 cannot complete until family B is resolved. This needs Hank's decision; the options and their costs are in the session report. The three openai:gpt-5.6-sol cells on disk are unaffected and valid."
+    "_family_b_substitution": "Family B was google:gemini-3.1-pro-preview until 2026-08-20. It hit the Gemini API's DAILY per-model cap (generate_requests_per_model_per_day, limit 250) with an ~11h reset; gemini-pro-latest aliases the same exhausted bucket, gemini-3.7-flash returned 503, and only flash tiers had quota left. A flash model is not frontier, so substituting one would have satisfied R6's letter while making its claim false. Swapped to Anthropic's flagship instead, with Hank's sign-off. CONSEQUENCE, stated plainly: the judge (claude-sonnet-4-6) now shares a family with frontier B. No model scores itself -- they are different models -- but the project's own stricter 'judge is a third family' rule is relaxed. Exposure is bounded: constraint pass/fail is 100% programmatic and the judge scores task-quality only, which drove 2 of 14 failures in the openai cells."
   },
   "strategies": [
     "zero_shot",

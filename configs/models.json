@@ -1,15 +1,16 @@
 {
   "frontier": [
     "openai:gpt-5.6-sol",
-    "google:gemini-3.1-pro-preview"
+    "anthropic:claude-opus-5"
   ],
   "judge_model": "claude-sonnet-4-6",
   "base": "hf:Qwen/Qwen3-1.7B@70d244cc86ccca08cf5af4e1e306ecf908b1ad5e",
-  "verified_utc": "2026-08-20T06:47:27+00:00",
+  "verified_utc": "2026-08-20T15:18:52.332110+00:00",
   "sources": [
     "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
     "https://ai.google.dev/gemini-api/docs/models",
     "https://platform.claude.com/docs/en/about-claude/models/overview",
     "https://huggingface.co/Qwen/Qwen3-1.7B"
-  ]
+  ],
+  "_family_b_substitution": "Family B was google:gemini-3.1-pro-preview until 2026-08-20. It hit the Gemini API's DAILY per-model cap (generate_requests_per_model_per_day, limit 250) with an ~11h reset; gemini-pro-latest aliases the same exhausted bucket, gemini-3.7-flash returned 503, and only flash tiers had quota left. A flash model is not frontier, so substituting one would have satisfied R6's letter while making its claim false. Swapped to Anthropic's flagship instead, with Hank's sign-off. CONSEQUENCE, stated plainly: the judge (claude-sonnet-4-6) now shares a family with frontier B. No model scores itself -- they are different models -- but the project's own stricter 'judge is a third family' rule is relaxed. Exposure is bounded: constraint pass/fail is 100% programmatic and the judge scores task-quality only, which drove 2 of 14 failures in the openai cells."
 }

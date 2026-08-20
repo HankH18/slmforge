@@ -241,10 +241,33 @@ class AnthropicGenerator:
     @_retrying
     def __call__(self, scenario, prompt, constraint_lookup=None):
         kw = {"system": prompt["system"]} if prompt["system"] else {}
-        resp = self.client.messages.create(
-            model=self.model, max_tokens=1024, temperature=0,
-            messages=prompt["turns"], **kw)
-        return "".join(b.text for b in resp.content if getattr(b, "type", "") == "text")
+        try:
+            resp = self.client.messages.create(
+                model=self.model, max_tokens=4096, temperature=0,
+                messages=prompt["turns"], **kw)
+        except Exception as exc:  # noqa: BLE001
+            # Newer Claude generations reject `temperature` outright with a 400.
+            # Re-raise anything else: swallowing a real error here would turn a
+            # broken request into a silently sampled one. Same asymmetry already
+            # disclosed for gpt-5.6-sol -- those cells sample at the model default
+            # and are therefore not bit-reproducible.
+            if not judge_mod._is_temperature_400(exc):
+                raise
+            resp = self.client.messages.create(
+                model=self.model, max_tokens=4096, messages=prompt["turns"], **kw)
+        text = "".join(b.text for b in resp.content
+                       if getattr(b, "type", "") == "text")
+        if not text.strip():
+            # Extended thinking shares the max_tokens budget: a thinking block can
+            # consume all of it and leave no text. That must NOT be returned as an
+            # empty completion -- ruling A7 makes empty text pass every checker
+            # vacuously, so a truncated generation would be scored as a perfectly
+            # compliant response. Raise so it retries or surfaces.
+            raise RuntimeError(
+                f"{self.model} returned no text (stop_reason={resp.stop_reason}, "
+                f"blocks={[getattr(b, 'type', '?') for b in resp.content]}). "
+                f"An empty completion would score as vacuously compliant.")
+        return text
 
 
 class OpenAIGenerator:

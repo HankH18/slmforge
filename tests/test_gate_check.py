@@ -1429,11 +1429,26 @@ def test_g1_strategies_are_the_pinned_three(g1):
     assert g1["strategies"] == ["zero_shot", "few_shot", "structured"]
 
 
-def test_g1_judge_is_a_third_family_that_never_scores_itself(g1, models_json):
+def test_g1_judge_never_scores_itself(g1, models_json):
+    """No model scores itself.
+
+    RELAXED 2026-08-20 on Hank's ruling, recorded rather than quietly dropped.
+    The stricter form -- judge in a third family -- was the project's own choice,
+    not a project-doc requirement. It became unholdable when google:gemini-3.1-pro
+    hit its DAILY per-model cap mid-ablation (250/day, ~11h reset) and only
+    non-frontier flash tiers had quota; substituting a flash model would have
+    satisfied R6's letter while making its "two frontier models" claim false.
+
+    What still holds, and is what the doc actually asks: the judge is a different
+    MODEL from every ablated one, so nothing grades its own output. Exposure from
+    the shared family is bounded -- constraint pass/fail is 100% programmatic and
+    the judge scores task-quality only, which drove 2 of 14 failures in the
+    openai cells.
+    """
     assert g1["judge"]["model"] == models_json["judge_model"]
     assert g1["judge"]["provider"] == "anthropic"
-    families = {m.split(":", 1)[0] for m in g1["models"]["frontier"]}
-    assert "anthropic" not in families
+    frontier_ids = {m.split(":", 1)[1] for m in g1["models"]["frontier"]}
+    assert g1["judge"]["model"] not in frontier_ids, "a model would score itself"
 
 
 def test_g1_eval_set_and_exemplars_are_jsonl_paths_under_data(g1):

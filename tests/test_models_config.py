@@ -71,11 +71,22 @@ def test_judge_is_an_anthropic_id(cfg):
         f"{judge!r} is not an Anthropic model id")
 
 
-def test_judge_is_a_third_family_and_never_scores_itself(cfg):
-    """BUILD_PLAN decision 3: OpenAI + Google ablate, Anthropic judges."""
-    families = {spec.split(":", 1)[0] for spec in cfg["frontier"]}
-    assert "anthropic" not in families, (
-        "the judge family appears in the ablation -- a model would score itself")
+def test_judge_never_scores_itself(cfg):
+    """No model scores itself.
+
+    RELAXED 2026-08-20 on Hank's ruling, recorded rather than quietly dropped.
+    The stricter form -- judge in a third family -- was the project's own choice,
+    not a project-doc requirement. It became unholdable when google:gemini-3.1-pro
+    hit its DAILY per-model cap mid-ablation (250/day, ~11h reset) and only
+    non-frontier flash tiers had quota; substituting a flash model would have
+    satisfied R6's letter while making its "two frontier models" claim false.
+
+    What still holds, and is what the doc actually asks: the judge is a different
+    MODEL from every ablated one, so nothing grades its own output. Exposure from
+    the shared family is bounded -- constraint pass/fail is 100% programmatic and
+    the judge scores task-quality only, which drove 2 of 14 failures in the
+    openai cells.
+    """
     frontier_models = {spec.split(":", 1)[1] for spec in cfg["frontier"]}
     assert cfg["judge_model"] not in frontier_models
     assert cfg["judge_model"] not in set(cfg["frontier"])
@@ -139,9 +150,25 @@ def test_tuned_when_present_is_repo_at_commit(cfg):
 
 
 def test_no_secret_material_leaked_into_the_artifact(cfg):
+    """Match key SHAPES, not bare prefixes.
+
+    This previously asserted "sk-" was absent, which fires on the ordinary English
+    word "task-quality" and on any hyphenated word ending in -sk. A guard that
+    cries wolf on prose gets relaxed by the next person who trips it, so it is
+    worth making precise: real keys are a prefix followed by a long run of key
+    characters, which no English text produces.
+    """
+    import re  # noqa: PLC0415
     blob = json.dumps(cfg)
-    for marker in ("sk-", "hf_", "AIza", "sk-ant-", "API_KEY"):
-        assert marker not in blob, f"configs/models.json contains {marker!r}"
+    patterns = {
+        "openai": r"sk-(?:proj|svcac|admin)?-?[A-Za-z0-9_-]{20,}",
+        "anthropic": r"sk-ant-[A-Za-z0-9_-]{20,}",
+        "huggingface": r"\bhf_[A-Za-z0-9]{20,}",
+        "google": r"\bAIza[A-Za-z0-9_-]{30,}",
+    }
+    for name, pat in patterns.items():
+        m = re.search(pat, blob)
+        assert not m, f"configs/models.json looks to contain a {name} key: {m.group()[:12]}..."
 
 
 def test_writer_preserves_a_p5_tuned_key(tmp_path):
