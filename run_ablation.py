@@ -88,6 +88,11 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=None,
                     help="score only the first N scenarios (R6 floor is 30 per cell)")
     ap.add_argument("--out", default=None)
+    ap.add_argument("--models", default=None,
+                    help="comma-separated model specs to run, overriding --only. Lets a "
+                         "killed row be resumed without re-billing cells already on disk; "
+                         "they must still appear in the config, so this cannot smuggle in "
+                         "a model the gate did not sanction.")
     ap.add_argument("--manifest-only", action="store_true",
                     help="rebuild run_manifest.json from the cells already on "
                          "disk and exit; calls no provider and re-bills nothing")
@@ -129,6 +134,17 @@ def main() -> int:
         specs = [base] if base else []
     else:
         specs = frontier + ([base] if base else [])
+
+    if args.models:
+        wanted = [m.strip() for m in args.models.split(",") if m.strip()]
+        sanctioned = set(frontier) | ({base} if base else set())
+        unknown = [m for m in wanted if m not in sanctioned]
+        if unknown:
+            print(f"ERROR: {unknown} are not in configs/g1.json's model list. The gate is "
+                  f"defined over the sanctioned grid; running anything else would produce "
+                  f"cells it must reject.", file=sys.stderr)
+            return 2
+        specs = wanted
 
     strategies = list(cfg["strategies"])
     rung = args.rung or (cfg.get("ladder", {}) or {}).get("current")
