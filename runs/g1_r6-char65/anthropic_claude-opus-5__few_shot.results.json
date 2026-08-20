@@ -1,0 +1,100 @@
+{
+  "model": "anthropic:claude-opus-5",
+  "strategy": "few_shot",
+  "spec_version": "forbidden-constraint-holder-1.0",
+  "judge_rubric_hash": "12a0dcaaf29080cb",
+  "judge_model": "claude-sonnet-4-6",
+  "eval_set": "data/scenarios/corpus.jsonl",
+  "timestamp_utc": "2026-08-20T17:43:46.034476+00:00",
+  "metrics": {
+    "n": 147,
+    "n_scored": 141,
+    "n_unscored": 6,
+    "judge_errors": 0,
+    "generator_errors": 6,
+    "passed": 105,
+    "spec_adherence": 0.7446808510638298,
+    "robustness": 0.696969696969697,
+    "by_pressure": {
+      "clean": {
+        "n": 75,
+        "passed": 59,
+        "spec_adherence": 0.7866666666666666
+      },
+      "adversarial": {
+        "n": 66,
+        "passed": 46,
+        "spec_adherence": 0.696969696969697
+      }
+    },
+    "by_split": {
+      "heldout_type": {
+        "n": 60,
+        "passed": 52,
+        "spec_adherence": 0.8666666666666667
+      },
+      "train": {
+        "n": 81,
+        "passed": 53,
+        "spec_adherence": 0.654320987654321
+      }
+    },
+    "by_k": {
+      "2": {
+        "n": 35,
+        "passed": 27,
+        "spec_adherence": 0.7714285714285715
+      },
+      "3": {
+        "n": 62,
+        "passed": 45,
+        "spec_adherence": 0.7258064516129032
+      },
+      "4": {
+        "n": 44,
+        "passed": 33,
+        "spec_adherence": 0.75
+      }
+    },
+    "by_constraint_type": {
+      "rows": 147,
+      "types": {
+        "banned_letter": {
+          "checks": 57,
+          "violations": 31,
+          "violation_rate": 0.543859649122807
+        },
+        "banned_phrases": {
+          "checks": 41,
+          "violations": 0,
+          "violation_rate": 0.0
+        },
+        "banned_punctuation": {
+          "checks": 41,
+          "violations": 0,
+          "violation_rate": 0.0
+        },
+        "banned_words": {
+          "checks": 119,
+          "violations": 2,
+          "violation_rate": 0.01680672268907563
+        },
+        "no_lists": {
+          "checks": 100,
+          "violations": 0,
+          "violation_rate": 0.0
+        },
+        "no_quotation_marks": {
+          "checks": 49,
+          "violations": 0,
+          "violation_rate": 0.0
+        },
+        "sentence_initial_letter": {
+          "checks": 25,
+          "violations": 4,
+          "violation_rate": 0.16
+        }
+      }
+    }
+  }
+}

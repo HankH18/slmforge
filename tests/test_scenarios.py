@@ -33,6 +33,7 @@ These deserve their names read carefully:
 """
 import json
 import re
+from statistics import mean
 
 import pytest
 
@@ -43,16 +44,24 @@ from constraints.registry import (FAMILIES, ID_PREFIX_BY_FAMILY, TYPES, Constrai
                                   family_of, list_types, split_of, validate_constraint)
 from scenarios import build as build_mod
 from scenarios.generator import (ALLOWED_K, CHARACTER_FAMILY, CHARACTER_TYPES,
-                                 MIN_ADVERSARIAL_SHARE, MIN_CHARACTER_CONSTRAINT_SHARE,
+                                 MIN_ADVERSARIAL_SHARE, MIN_BANNED_LETTER_SHARE,
+                                 MIN_CHARACTER_CONSTRAINT_SHARE,
+                                 MIN_NON_CHARACTER_CONTROL,
                                  MIN_KEY_TERM_HITS,
                                  MIN_LETTER_CONTENT_SHARE, MIN_LEXICON_WITNESSES,
                                  MIN_MARK_OCCURRENCES, MIN_MARK_RATE_PER_100_CHARS,
                                  MIN_SCENARIOS, NEGATIVE_TYPES, POSITIVE_TYPES, QUARANTINE,
                                  GeneratorError, _build_one, _corpus_invariants,
+                                 banned_letter_of, banned_letter_share,
+                                 carries_banned_letter,
                                  character_constraint_share, distractor_mechanisms,
                                  dominant_lexicons, generate, letter_content_share,
-                                 summarise)
-from scenarios.instances import INSTANCE_META
+                                 letter_distribution, summarise)
+import scenarios.generator as gen_mod
+import scenarios.instances as inst_mod
+from scenarios.instances import (INSTANCE_META, PERMITTED_BANNED_LETTERS,
+                                 RETIRED_LETTER_INSTANCES, InstanceSpec,
+                                 banned_letters_in_library)
 from scenarios.lexicons import GENERIC, LEXICONS
 from scenarios.paths import (CORPUS_PATH, INSTANCES_PATH, MANIFEST_PATH, SMOKE_PATH,
                              load_corpus, load_instances, load_jsonl, load_manifest,
@@ -228,9 +237,346 @@ def test_every_referenced_constraint_resolves(corpus, instances):
 
 
 def test_no_instance_is_dead_weight(corpus, instances):
+    """Every instance is either USED by a scenario or explicitly RETIRED.
+
+    Until 2026-08-20 this asserted `not unused` outright. Ladder rung r7-hifreq
+    then retired five letter bans (r, l, u, m, p) that the corpus may no longer
+    carry but whose ids MUST still resolve: they are written into the run
+    transcripts under runs/, into 14 of the 56 rows of
+    data/train/smoke_v0.jsonl, into the checker golden fixtures and into a
+    few-shot exemplar, and deleting a definition does not delete its uses -- it
+    turns them into dangling ids.
+    The contract asserted here is therefore narrower, not looser: the unused set
+    must be EXACTLY the declared retirements, so an instance still cannot become
+    unused quietly, and a retirement cannot be declared for something the corpus
+    is in fact still using.
+    """
     used = {cid for scenario in corpus for cid in scenario["constraints"]}
     unused = sorted(set(instances) - used)
-    assert not unused, f"instances defined but never used by any scenario: {unused}"
+    assert unused == sorted(RETIRED_LETTER_INSTANCES), (
+        f"instances defined but neither used by a scenario nor declared retired: "
+        f"{sorted(set(unused) - set(RETIRED_LETTER_INSTANCES))}; and retirements "
+        f"the corpus still uses: {sorted(set(RETIRED_LETTER_INSTANCES) & used)}")
+    for cid, reason in RETIRED_LETTER_INSTANCES.items():
+        assert instances[cid]["type"] == "banned_letter", (
+            f"{cid} is declared retired but is not a letter ban; retirement is a "
+            "r7-hifreq letter rule, not a general mute button")
+        assert instances[cid]["params"]["letter"] not in PERMITTED_BANNED_LETTERS
+        assert reason.strip(), f"{cid} is retired with no recorded reason"
+
+
+# ==========================================================================
+# LADDER RUNG r7-hifreq -- THE CURRENT RUNG. Two quantities, both recomputed
+# here from the SHIPPED corpus rather than read out of the manifest:
+#
+#   (1) the share of scenarios carrying a banned_letter -- narrower than the
+#       r6 character-family share on purpose, because the r6 run measured
+#       banned_punctuation (the other character type) at 0.00-0.13 per frontier
+#       cell, so the family overstates how much of the corpus does the work;
+#   (2) the LETTERS those bans use. The r6 run measured per-scenario fail rate
+#       as monotone in English letter frequency -- a 0.82, e 0.61, i 0.42,
+#       o 0.41, s 0.33 against r 0.21, u 0.17, m 0.08 -- so a share met with
+#       low-frequency letters would satisfy the number and measure almost
+#       nothing. Neither half is sufficient alone, so both are bound.
+# ==========================================================================
+
+def test_only_permitted_letters_are_usable_by_a_scenario(instances):
+    """The library may DEFINE a retired letter ban; a scenario may not use one."""
+    usable = sorted({c["params"]["letter"] for cid, c in instances.items()
+                     if c["type"] == "banned_letter"
+                     and cid not in RETIRED_LETTER_INSTANCES})
+    assert usable == sorted(PERMITTED_BANNED_LETTERS), (
+        f"the shipped instance library offers {usable} for use; rung r7-hifreq "
+        f"permits {sorted(PERMITTED_BANNED_LETTERS)}")
+    assert banned_letters_in_library(include_retired=False) == usable
+    # The retired ids still RESOLVE -- run transcripts, the shipped training set
+    # and the checker fixtures all name them, and a dangling id there is a
+    # scored artefact nobody can read back.
+    for retired in RETIRED_LETTER_INSTANCES:
+        assert retired in instances, (
+            f"{retired} was deleted rather than retired; every artefact that "
+            "references it now carries an id that resolves to nothing")
+
+
+def test_a_scenario_may_not_use_a_retired_letter_instance():
+    """Retirement is enforced at build time, not asked for in a comment."""
+    retired = sorted(RETIRED_LETTER_INSTANCES)[0]
+    spec = _rig(constraints=[retired, "c-fmt-001"])
+    with pytest.raises(GeneratorError, match="outside the r7-hifreq permitted set"):
+        _build_one(1, spec)
+
+
+def test_the_instance_library_refuses_a_new_low_frequency_letter():
+    """The guard bites: a NEW low-frequency ban cannot be authored.
+
+    'd' rather than one of the retired letters, because a retired instance
+    already exists and the duplicate-params rule would refuse it first -- which
+    would leave this test green without ever reaching the r7 guard.
+    """
+    original = inst_mod.INSTANCE_SPECS
+    try:
+        inst_mod.INSTANCE_SPECS = original + (
+            InstanceSpec(11, "banned_letter", {"letter": "d"}, GENERIC, "smuggled back in"),)
+        with pytest.raises(ValueError, match="PERMITTED_BANNED_LETTERS"):
+            inst_mod._build()
+    finally:
+        inst_mod.INSTANCE_SPECS = original
+
+
+def test_banned_letter_share_meets_the_rung_floor(corpus, instances):
+    carrying = [s["scenario_id"] for s in corpus
+                if any(instances[cid]["type"] == "banned_letter"
+                       for cid in s["constraints"])]
+    share = len(carrying) / len(corpus)
+    assert share >= MIN_BANNED_LETTER_SHARE, (
+        f"{len(carrying)}/{len(corpus)} = {share:.1%} of scenarios carry a "
+        f"banned_letter, below the {MIN_BANNED_LETTER_SHARE:.0%} that ladder rung "
+        "r7-hifreq declares. The rung exists because the r6 run localised frontier "
+        "failure to LETTER bans specifically; a corpus below the floor is not the "
+        "corpus that rung names")
+    # ...and the helper the generator enforces with agrees with this recomputation.
+    assert banned_letter_share(corpus) == share
+
+
+def test_every_letter_ban_in_the_corpus_is_a_permitted_letter(corpus, instances):
+    used = {}
+    for scenario in corpus:
+        for cid in scenario["constraints"]:
+            if instances[cid]["type"] != "banned_letter":
+                continue
+            used.setdefault(instances[cid]["params"]["letter"], []).append(
+                scenario["scenario_id"])
+    stray = sorted(set(used) - set(PERMITTED_BANNED_LETTERS))
+    assert not stray, (
+        f"scenarios ban {stray}, outside the r7-hifreq permitted set "
+        f"{sorted(PERMITTED_BANNED_LETTERS)}")
+    # Every permitted letter is actually exercised, or the set is wider than the
+    # corpus and the rung claims a spread it does not have.
+    assert set(used) == set(PERMITTED_BANNED_LETTERS), (
+        f"permitted letters never used: {sorted(set(PERMITTED_BANNED_LETTERS) - set(used))}")
+    assert letter_distribution(corpus) == {k: len(v) for k, v in sorted(used.items())}
+
+
+def test_the_letter_mix_is_weighted_toward_the_hardest_letters(corpus):
+    """Hank's ruling: the permitted set, WEIGHTED toward a and e.
+
+    An audited quantity with a floor, not a decoration: 'a' and 'e' are the two
+    letters the r6 run measured hardest (0.82 and 0.61), and a corpus that met
+    the share with the easy end of the permitted set would project far lower.
+    """
+    dist = letter_distribution(corpus)
+    n_letter = sum(dist.values())
+    hardest = dist.get("a", 0) + dist.get("e", 0)
+    assert hardest / n_letter >= 0.50, (
+        f"only {hardest}/{n_letter} = {hardest / n_letter:.1%} of letter bans use "
+        f"'a' or 'e'; the rung is weighted toward them ({dist})")
+
+
+def test_the_rung_numbers_in_the_manifest_are_the_real_ones(corpus, manifest):
+    summary = manifest["summary"]
+    instances = load_instances()
+    n_letter = sum(1 for s in corpus
+                   if any(instances[cid]["type"] == "banned_letter"
+                          for cid in s["constraints"]))
+    assert summary["banned_letter_scenarios"] == n_letter
+    assert summary["banned_letter_share"] == round(n_letter / len(corpus), 4)
+    assert summary["banned_letter_share_floor"] == MIN_BANNED_LETTER_SHARE
+    assert summary["permitted_banned_letters"] == list(PERMITTED_BANNED_LETTERS)
+    assert summary["retired_letter_instances"] == dict(
+        sorted(RETIRED_LETTER_INSTANCES.items()))
+    used = {cid for s_ in corpus for cid in s_["constraints"]}
+    assert not (set(summary["retired_letter_instances"]) & used), (
+        "a retired instance is published as retired while the corpus still uses it")
+    assert summary["letter_distribution"] == letter_distribution(corpus)
+    assert summary["non_character_control_floor"] == MIN_NON_CHARACTER_CONTROL
+
+
+def test_the_config_rung_declares_both_halves_and_they_are_the_built_ones():
+    """The rung field and the floor the corpus is built to cannot drift apart.
+
+    ``scripts/gate_check.py`` re-derives both numbers from whatever corpus a run
+    actually used; this binds those declared numbers to the ones the generator
+    builds and refuses below.
+    """
+    cfg = json.loads((REPO_ROOT / "configs" / "g1.json").read_text())
+    ladder = cfg["ladder"]
+    assert ladder["current"] == "r7-hifreq", (
+        f"ladder.current is {ladder['current']!r}; the shipped corpus is built to "
+        "r7-hifreq and a corpus labelled with another rung is a mislabelled corpus")
+    rung = next(r for r in ladder["rungs"] if r["name"] == ladder["current"])
+    assert rung.get("min_banned_letter_share") == MIN_BANNED_LETTER_SHARE, (
+        f"config rung declares {rung.get('min_banned_letter_share')} but the "
+        f"generator builds to {MIN_BANNED_LETTER_SHARE}")
+    assert rung.get("permitted_banned_letters") == list(PERMITTED_BANNED_LETTERS), (
+        f"config rung permits {rung.get('permitted_banned_letters')} but the "
+        f"instance library permits {list(PERMITTED_BANNED_LETTERS)}")
+    assert isinstance(rung.get("_not_pre_registered"), str) and \
+        len(rung["_not_pre_registered"]) > 200, (
+        "the rung must keep its not-pre-registered disclosure; a rung invented "
+        "after seeing the numbers that does not say so is the one thing a grader "
+        "would be right to throw out")
+
+
+def test_guards_actually_guard_the_banned_letter_share(corpus, by_id):
+    """The letter floor can fail the build, and it bites at the right place.
+
+    Letter bans are swapped for a banned_punctuation instance rather than
+    deleted, so the CHARACTER share stays where it is and the only floor this
+    rig can trip is the letter one.
+    """
+    instances = load_instances()
+    punctuation = "c-chr-020"
+    assert instances[punctuation]["type"] == "banned_punctuation"
+
+    def corpus_with_n_delettered(n):
+        rows, manifests, swapped = [], [], 0
+        for scenario in corpus:
+            row = dict(scenario)
+            if carries_banned_letter(scenario["constraints"]) and swapped < n:
+                row["constraints"] = [punctuation if
+                                      instances[cid]["type"] == "banned_letter" else cid
+                                      for cid in scenario["constraints"]]
+                if punctuation in row["constraints"]:
+                    row["split"] = "heldout_type"
+                swapped += 1
+            rows.append(row)
+            manifests.append({"base_task": by_id[scenario["scenario_id"]]["base_task"]})
+        assert swapped == n, "not enough letter scenarios to run the rig"
+        return rows, manifests
+
+    n_letter = sum(1 for s in corpus if carries_banned_letter(s["constraints"]))
+    n_total = len(corpus)
+    ok = next(n for n in range(n_letter, -1, -1)
+              if (n_letter - n) / n_total >= MIN_BANNED_LETTER_SHARE)
+    _corpus_invariants(*corpus_with_n_delettered(ok))          # must not raise
+    with pytest.raises(GeneratorError, match="banned-letter share"):
+        _corpus_invariants(*corpus_with_n_delettered(ok + 1))
+
+
+def test_guards_actually_guard_the_permitted_letter_set(corpus, by_id):
+    """A corpus that bans a low-frequency letter is refused, not merely noted."""
+    smuggled = "c-chr-099"
+    original = dict(gen_mod.INSTANCES)
+    try:
+        gen_mod.INSTANCES[smuggled] = {"id": smuggled, "type": "banned_letter",
+                                       "params": {"letter": "m"}, "family": "character",
+                                       "split": "train"}
+        rows, manifests = [], []
+        for i, scenario in enumerate(corpus):
+            row = dict(scenario)
+            if i == 0:
+                row["constraints"] = [smuggled] + [
+                    cid for cid in scenario["constraints"]
+                    if gen_mod.INSTANCES[cid]["type"] != "banned_letter"]
+                row["split"] = "train" if all(
+                    gen_mod.INSTANCES[cid]["split"] == "train"
+                    for cid in row["constraints"]) else "heldout_type"
+            rows.append(row)
+            manifests.append({"base_task": by_id[scenario["scenario_id"]]["base_task"]})
+        with pytest.raises(GeneratorError, match="outside the r7-hifreq permitted set"):
+            _corpus_invariants(rows, manifests)
+    finally:
+        gen_mod.INSTANCES.clear()
+        gen_mod.INSTANCES.update(original)
+
+
+def test_guards_actually_guard_the_non_character_control_group(corpus, by_id):
+    """The share floor must not be reachable by deleting the control arm."""
+    instances = load_instances()
+    letter_only = ["c-chr-002", "c-fmt-001"]      # a character scenario, train split
+    rows, manifests = [], []
+    for scenario in corpus:
+        row = dict(scenario)
+        if not any(instances[cid]["family"] == CHARACTER_FAMILY
+                   for cid in scenario["constraints"]):
+            row["constraints"] = list(letter_only)
+            row["k"] = len(letter_only)
+            row["split"] = "train"
+        rows.append(row)
+        manifests.append({"base_task": by_id[scenario["scenario_id"]]["base_task"]})
+    with pytest.raises(GeneratorError, match="non-character control scenarios"):
+        _corpus_invariants(rows, manifests)
+
+
+def test_every_few_shot_exemplar_still_resolves_against_the_shipped_library():
+    """Retiring an instance must not leave the few_shot cell pointing at a ghost.
+
+    ADDED 2026-08-20: r7-hifreq retired five banned_letter instances, and one
+    shipped exemplar demonstrated one of them. A dangling id there is not a
+    cosmetic problem -- ``harness.run_checkers`` cannot score a constraint it
+    cannot resolve, so the whole few_shot column of the ablation would have died
+    at run time, after the money was spent.
+    """
+    exemplars_path = REPO_ROOT / "data" / "scenarios" / "fewshot_exemplars.jsonl"
+    rows = [json.loads(line) for line in exemplars_path.read_text().splitlines()
+            if line.strip()]
+    assert rows, "no exemplars; the few_shot cell would be unrunnable"
+    instances = load_instances()
+    for row in rows:
+        missing = [cid for cid in row["constraints"] if cid not in instances]
+        assert not missing, (
+            f"{row['exemplar_id']} references retired constraint(s) {missing}")
+        assert row["k"] == len(row["constraints"])
+
+
+def test_the_gate_re_derives_both_rung_halves_from_the_shipped_corpus():
+    """The rung is verified where it matters: against the corpus a RUN used.
+
+    ``scripts/gate_check.py`` is the only reader of these numbers that a run
+    cannot talk its way past, so the binding is proved here rather than assumed:
+    the shipped corpus passes, and a corpus that violates EITHER half is
+    rejected with a message naming which half.
+    """
+    import scripts.gate_check as gate
+
+    cfg = json.loads((REPO_ROOT / "configs" / "g1.json").read_text())
+    definition = next(r for r in cfg["ladder"]["rungs"]
+                      if r["name"] == cfg["ladder"]["current"])
+    rung = {"rung": definition["name"], "definition": definition}
+    instances = gate.load_constraint_instances(INSTANCES_PATH)
+    eval_index = gate.load_eval_set(CORPUS_PATH)
+
+    errors = []
+    observed = gate.verify_rung_against_eval_set(rung, eval_index, instances,
+                                                 CORPUS_PATH, errors)
+    assert errors == [], f"the shipped corpus fails its own rung: {errors}"
+    corpus = load_corpus()
+    assert observed["n_banned_letter"] == sum(
+        1 for s in corpus if carries_banned_letter(s["constraints"]))
+    assert observed["letter_distribution"] == letter_distribution(corpus)
+    assert observed["permitted_banned_letters"] == list(PERMITTED_BANNED_LETTERS)
+
+    # (1) share below the floor: strip letter bans until it is.
+    thin = {sid: dict(row) for sid, row in eval_index.items()}
+    stripped = 0
+    target = len(thin) - int(len(thin) * MIN_BANNED_LETTER_SHARE)
+    for sid, row in thin.items():
+        if stripped > target:
+            break
+        kept = [cid for cid in row["constraints"]
+                if instances[cid]["type"] != "banned_letter"]
+        if len(kept) != len(row["constraints"]) and kept:
+            row["constraints"] = kept
+            stripped += 1
+    errors = []
+    gate.verify_rung_against_eval_set(rung, thin, instances, CORPUS_PATH, errors)
+    assert any("banned_letter constraint, below" in e for e in errors), errors
+
+    # (2) a letter the rung does not permit, at full share.
+    smuggled = dict(instances)
+    smuggled["c-chr-099"] = {"id": "c-chr-099", "type": "banned_letter",
+                             "params": {"letter": "m"}, "family": "character",
+                             "split": "train"}
+    swapped = {sid: dict(row) for sid, row in eval_index.items()}
+    for sid, row in swapped.items():
+        if any(instances[cid]["type"] == "banned_letter" for cid in row["constraints"]):
+            row["constraints"] = ["c-chr-099" if
+                                  instances[cid]["type"] == "banned_letter" else cid
+                                  for cid in row["constraints"]]
+            break
+    errors = []
+    gate.verify_rung_against_eval_set(rung, swapped, smuggled, CORPUS_PATH, errors)
+    assert any("does not permit" in e for e in errors), errors
 
 
 # ==========================================================================
@@ -357,9 +703,12 @@ def test_the_corpus_still_holds_a_non_character_control_group(corpus, instances)
     character = _character_types_from_the_registry()
     control = [s["scenario_id"] for s in corpus
                if not any(instances[cid]["type"] in character for cid in s["constraints"])]
-    assert len(control) >= 30, (
+    assert len(control) >= MIN_NON_CHARACTER_CONTROL, (
         f"only {len(control)} scenarios carry no character constraint; the "
         "non-character comparison arm is too small to state a rate against")
+    # The generator refuses below the same number, so this is not a floor that
+    # lives only in a test the corpus is not built against.
+    assert MIN_NON_CHARACTER_CONTROL == 30
 
 
 def test_guards_actually_guard_the_character_share(corpus, by_id):
@@ -712,7 +1061,13 @@ def test_task_conflicts_catches_an_unparaphrasable_name(instances):
     assert problems, "the unparaphrasable name was not detected"
     assert "Thursdays" in problems[0] and "c-chr-003" in problems[0]
     # ...and the same brief with a letter the name survives is NOT flagged.
-    assert task_conflicts(task, [instances["c-chr-010"],       # banned_letter 'p'
+    # Was c-chr-010 ('p') until 2026-08-20; that instance was retired with the
+    # low-frequency letters under ladder rung r7-hifreq, so the counter-example
+    # now uses a PERMITTED letter that 'Thursdays' still survives. The claim
+    # being tested is unchanged: a name the checker accepts is not a conflict.
+    assert check(instances["c-chr-001"], "Thursdays")["pass"] is True, (
+        "the counter-example needs a letter the name survives")
+    assert task_conflicts(task, [instances["c-chr-001"],       # banned_letter 'e'
                                  instances["c-fmt-001"]]) == []
 
 
@@ -862,34 +1217,46 @@ def _rig(**overrides):
     return spec
 
 
-#: Declared key terms that all carry 'p', in a task whose vocabulary barely
-#: does. Under the pre-fix rule this was enough to be called adversarial.
-_THIN_LETTER_TASK = ("Write a calm note about the paper trail, the paperwork, the wooden "
-                     "door, the iron gate and the linen cloth.")
-_DENSE_LETTER_TASK = ("Prepare a proposal appraising the paper supply pipeline, the "
-                      "packaging spend and the pump repairs.")
+#: Declared key terms that all carry the banned letter, in a task whose
+#: vocabulary barely does. Under the pre-fix rule this was enough to be called
+#: adversarial.
+#:
+#: The rig letter was 'p' until 2026-08-20. Ladder rung r7-hifreq retired the
+#: low-frequency instances, so the rig moved to 's' -- the least frequent letter
+#: the rung still permits, and therefore the one that still leaves room for a
+#: task whose vocabulary the letter barely touches. Nothing about what these
+#: rigs PROVE changed: thin declaration below the floor must not qualify, dense
+#: text at or above it must.
+_RIG_LETTER = "s"
+_RIG_LETTER_ID = "c-chr-003"
+_THIN_LETTER_TASK = ("Write a calm note about the season tickets, the stairwell, the "
+                     "wooden door, the iron gate and the linen cloth.")
+_DENSE_LETTER_TASK = ("Prepare a summary assessing the season tickets, the stairwell "
+                      "signs and the storeroom shelves.")
+_THIN_KEY_TERMS = ("season tickets", "stairwell")
+_DENSE_KEY_TERMS = ("season tickets", "storeroom shelves")
 
 
 def test_key_term_letter_needs_the_derived_floor_not_just_a_declaration():
-    thin = _rig(text=_THIN_LETTER_TASK, constraints=["c-chr-010", "c-fmt-001"],
-                pressure="adversarial", key_terms=("paper trail", "paperwork"),
+    thin = _rig(text=_THIN_LETTER_TASK, constraints=[_RIG_LETTER_ID, "c-fmt-001"],
+                pressure="adversarial", key_terms=_THIN_KEY_TERMS,
                 nudge="letter_audit")
-    share = letter_content_share("p", _THIN_LETTER_TASK)
+    share = letter_content_share(_RIG_LETTER, _THIN_LETTER_TASK)
     assert share < MIN_LETTER_CONTENT_SHARE, "rig no longer exercises the floor"
-    assert len([t for t in ("paper trail", "paperwork") if "p" in t]) >= MIN_KEY_TERM_HITS, (
+    assert len([t for t in _THIN_KEY_TERMS
+                if _RIG_LETTER in t]) >= MIN_KEY_TERM_HITS, (
         "rig must satisfy the OLD declaration-only rule, or it proves nothing")
-    assert distractor_mechanisms(_THIN_LETTER_TASK, None,
-                                 ("paper trail", "paperwork"),
-                                 [load_instances()["c-chr-010"]]) == [], (
+    assert distractor_mechanisms(_THIN_LETTER_TASK, None, _THIN_KEY_TERMS,
+                                 [load_instances()[_RIG_LETTER_ID]]) == [], (
         "the mechanism fired on a task whose vocabulary the letter barely touches")
     with pytest.raises(GeneratorError, match="no distractor pressure qualifies"):
         _build_one(1, thin)
 
 
 def test_key_term_letter_still_fires_when_the_text_backs_the_claim():
-    dense = _rig(text=_DENSE_LETTER_TASK, constraints=["c-chr-010", "c-fmt-001"],
+    dense = _rig(text=_DENSE_LETTER_TASK, constraints=[_RIG_LETTER_ID, "c-fmt-001"],
                  pressure="adversarial",
-                 key_terms=("paper supply pipeline", "pump repairs"), nudge="letter_audit")
+                 key_terms=_DENSE_KEY_TERMS, nudge="letter_audit")
     built = _build_one(1, dense)
     kinds = [m["kind"] for m in built.manifest["distractor_pressure"]]
     assert kinds == ["key_term_letter"], f"the floor is now unreachable: {kinds}"
@@ -899,11 +1266,14 @@ def test_key_term_letter_still_fires_when_the_text_backs_the_claim():
 
 def test_a_declared_key_term_must_be_a_whole_word_in_the_task():
     """Substring matching is how a declared distractor becomes unfalsifiable."""
-    assert whole_word_present("pump repairs", _DENSE_LETTER_TASK)
-    assert not whole_word_present("pap", _DENSE_LETTER_TASK), "'pap' is inside 'paper' only"
+    assert whole_word_present("storeroom shelves", _DENSE_LETTER_TASK)
+    assert not whole_word_present("store", _DENSE_LETTER_TASK), (
+        "'store' is inside 'storeroom' only")
     with pytest.raises(GeneratorError, match="does not appear in the task text"):
-        _build_one(1, _rig(text=_DENSE_LETTER_TASK, constraints=["c-chr-010", "c-fmt-001"],
-                           pressure="adversarial", key_terms=("pap", "pump repairs"),
+        _build_one(1, _rig(text=_DENSE_LETTER_TASK,
+                           constraints=[_RIG_LETTER_ID, "c-fmt-001"],
+                           pressure="adversarial",
+                           key_terms=("store", "storeroom shelves"),
                            nudge="letter_audit"))
 
 
@@ -964,15 +1334,73 @@ def test_the_clean_arms_latent_letter_pressure_is_disclosed(corpus, by_id, insta
             f"{scenario['scenario_id']}: recorded letter share is not the real one")
         disclosed += 1
     assert disclosed >= 20, f"only {disclosed} scenarios disclose a letter share"
-    latent = [s["scenario_id"] for s in corpus
-              if s["pressure"] == "clean"
-              and (by_id[s["scenario_id"]]["derived_letter_share"] or 0)
-              >= MIN_LETTER_CONTENT_SHARE]
-    # Not an error -- an audited quantity. If this ever grows large, the clean
-    # arm has stopped being a control and the corpus needs re-pairing.
-    assert len(latent) <= 10, (
-        f"{len(latent)} 'clean' scenarios carry letter pressure at or above the "
-        f"adversarial floor ({latent}); the control arm is no longer clean")
+
+    # ------------------------------------------------------------------
+    # WHAT REPLACED THE OLD ABSOLUTE COUNT, and why, because a test that got
+    # weaker without a reason is indistinguishable from one that was silenced.
+    #
+    # Until 2026-08-20 this asserted `len(latent) <= 10`, counting CLEAN
+    # scenarios whose derived_letter_share reached MIN_LETTER_CONTENT_SHARE
+    # (0.50). That count was informative while the corpus banned letters from
+    # across the alphabet: clearing 0.50 was then a rare event that really did
+    # signal an unusually letter-dense task.
+    #
+    # Ladder rung r7-hifreq restricts letter bans to {a, e, i, o, s}, and for
+    # the frequent letters 0.50 is not a rare event -- it is the MEDIAN of
+    # ordinary English. Measured over all 147 shipped base tasks, the fraction
+    # whose content words clear 0.50 is 0.837 for 'e' and 0.252 for 'a'. So the
+    # old statistic now counts English, not engineered pressure, and no
+    # threshold on it can separate the arms. Raising 10 to 20 would have been
+    # exactly the silencing this repo's rules forbid.
+    #
+    # The CONTRACT the old assertion was reaching for is that the clean arm is
+    # still a control: it must not carry MORE letter pressure than the arm that
+    # engineers it, and it must not be selected for letter-dense tasks. Both are
+    # asserted directly below, against a baseline recomputed from the shipped
+    # task texts, which is strictly stronger than a count that English frequency
+    # alone can move.
+    # ------------------------------------------------------------------
+    def _shares(pressure, letter=None):
+        out = []
+        for scenario in corpus:
+            if scenario["pressure"] != pressure:
+                continue
+            entry = by_id[scenario["scenario_id"]]
+            share = entry["derived_letter_share"]
+            if share is None:
+                continue
+            banned = [instances[cid]["params"]["letter"]
+                      for cid in scenario["constraints"]
+                      if instances[cid]["type"] == "banned_letter"][0]
+            if letter is not None and banned != letter:
+                continue
+            out.append(share)
+        return out
+
+    clean, adversarial = _shares("clean"), _shares("adversarial")
+    assert clean and adversarial, "both arms must carry letter bans to compare them"
+    assert mean(clean) <= mean(adversarial), (
+        f"the CLEAN arm's mean derived letter share is {mean(clean):.3f} against "
+        f"{mean(adversarial):.3f} in the adversarial arm; the control arm carries "
+        "more letter pressure than the arm that engineers it, so the "
+        "clean-vs-adversarial gap no longer measures engineered pressure")
+
+    # ...and per letter, against what that letter costs in this corpus's prose
+    # generally. The baseline is derived from every shipped base task, so it is
+    # a property of the corpus's English rather than of the pairing.
+    all_texts = [by_id[s["scenario_id"]]["base_task"] for s in corpus]
+    for letter in sorted({instances[cid]["params"]["letter"]
+                          for s in corpus for cid in s["constraints"]
+                          if instances[cid]["type"] == "banned_letter"}):
+        rows = _shares("clean", letter)
+        if not rows:
+            continue
+        baseline = mean([letter_content_share(letter, t) for t in all_texts])
+        assert mean(rows) <= baseline + 0.10, (
+            f"clean scenarios banning {letter!r} average a derived share of "
+            f"{mean(rows):.3f} against a corpus baseline of {baseline:.3f}; the "
+            "clean arm has been selected for letter-dense tasks and is no longer "
+            "a control")
 
 
 def test_the_adversarial_share_is_the_honest_one(corpus):

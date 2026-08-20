@@ -36,10 +36,13 @@ restated here for a reader and are not what anything checks):
 * all four split x pressure cells are >= 30 scenarios, so an ablation that
   reports robustness per split still has a usable subset:
   train/clean 48, train/adversarial 39, heldout/clean 30, heldout/adversarial 30
-* k distribution: k=2 37 (25%), k=3 63 (43%), k=4 47 (32%); every k appears in
+* k distribution: k=2 23 (16%), k=3 49 (33%), k=4 75 (51%); every k appears in
   BOTH splits, so k is not confounded with the split
-* 103 scenarios (70.1%) carry a CHARACTER-level constraint -- ladder rung
-  r6-char65 requires >= 65%
+* 115 scenarios (78.2%) carry a CHARACTER-level constraint
+* 105 scenarios (71.4%) carry a BANNED_LETTER -- ladder rung r7-hifreq requires
+  >= 55% -- with letters a 31, e 35, i 13, o 14, s 12
+* 32 scenarios carry NO character constraint at all: the control arm the
+  letter-vs-everything-else contrast is stated against
 
 ==========================================================================
 THE r6-char65 RE-PAIRING, 2026-08-20. What changed here and what did not.
@@ -54,19 +57,78 @@ rung Hank approved raises the character share rather than k or the adversarial
 share.
 
 WHAT CHANGED: 29 already-authored tasks gained ONE additional ``banned_letter``
-constraint each -- 16 in train/clean, 13 in train/adversarial, chosen so the
-letter is spread across the instance library rather than piled onto 'e'. NO
-TASK TEXT WAS TOUCHED, so every text-derived property of the corpus is
-unchanged by construction: the distractor floors, the base-task uniqueness, the
-disjointness from the training task pool, and the absence of any n-gram overlap
-with ``data/scenarios/fewshot_exemplars.jsonl``.
+constraint each -- 16 in train/clean, 13 in train/adversarial. NO TASK TEXT WAS
+TOUCHED, so every text-derived property of the corpus is unchanged by
+construction: the distractor floors, the base-task uniqueness, the disjointness
+from the training task pool, and the absence of any n-gram overlap with
+``data/scenarios/fewshot_exemplars.jsonl``.
 
-WHAT DID NOT CHANGE, deliberately: the CLEAN arm's letters were restricted to
-those whose ``derived_letter_share`` in that task is below
-MIN_LETTER_CONTENT_SHARE. A clean scenario is the control for engineered
-distractor pull, so a letter that saturates the task's own vocabulary does not
-belong in it even though nothing would have refused it -- the count of such
-latent-pressure clean scenarios stays at the 2 it was before.
+==========================================================================
+THE r7-hifreq RE-LETTERING, 2026-08-20 (later the same day). This SUPERSEDES
+the letter-spreading policy above, and says so rather than quietly editing it.
+==========================================================================
+
+The r6-char65 corpus ran, and it moved the best frontier cell from 0.0884 to
+0.143 -- real, and still short of the 0.20 gate. What that run also produced was
+a per-LETTER breakdown, and it is unambiguous: difficulty scales with the
+BANNED LETTER'S ENGLISH FREQUENCY.
+
+    a 0.82 (n=50)   e 0.61 (n=49)   i 0.42 (n=38)   o 0.41 (n=44)  s 0.33 (n=42)
+    l 0.22 (n=9)    r 0.21 (n=43)   u 0.17 (n=24)   m 0.08 (n=24)  p 0.38 (n=16)
+
+    high-frequency {e,a,o,i,s,r} 0.481 (n=266)  vs  low {l,u,m,p} 0.192 (n=73)
+
+``banned_punctuation`` -- the OTHER character type, and half of what the r6
+share counted -- came in at 0.00-0.13. So "character share" was the wrong
+quantity and "banned_letter share, restricted to frequent letters" is the right
+one.
+
+THE r6 NOTE ABOVE SAID the added letters were "chosen so the letter is spread
+across the instance library rather than piled onto 'e'". THAT POLICY IS
+REVERSED, on Hank's ruling and on the r6 measurement: spreading is precisely
+what diluted the signal, because it spent a third of the letter budget on
+letters frontier models find nearly free.
+
+WHAT CHANGED HERE: 42 more already-authored tasks gained ONE ``banned_letter``
+each, and 21 scenarios already carrying one of the retired low-frequency letters
+(r, l, u, m, p) were RE-LETTERED to a permitted one. Again NO TASK TEXT WAS
+TOUCHED -- the whole point of re-lettering rather than authoring is that every
+text-derived property stays true by construction and needs no re-verification.
+
+WHAT WAS NOT TRADED AWAY, and each one is enforced rather than asserted:
+
+* SATISFIABILITY, which was the binding risk and is the one thing that could
+  not be fudged: an impossible scenario scores zero for every model forever and
+  MANUFACTURES the very ceiling this rung claims to have found. Every candidate
+  pairing was validated by running the real generator, which constructs a
+  witness paragraph and runs ``constraints.checkers.check`` on it.
+
+  The exhaustive audit -- every shipped task crossed with every permitted
+  letter, 585 (task, letter) pairs -- is: 499 build, 86 refused, split as
+
+      33  the brief names a proper noun the checker rejects outright, so no
+          response that names the entity can pass ('Ashford', 'April',
+          'Saturday', 'Christmas', 'February', 'Tuesdays', 'Bristol', ...)
+      41  the pairing would strip an ADVERSARIAL task of its only qualifying
+          distractor mechanism, which makes it a clean scenario, not a hard one
+      12  the banned letter IS the letter a sentence_initial_letter constraint
+          demands -- a genuine joint unsatisfiability, caught analytically
+
+  ZERO candidates failed for want of a witness. Every jointly-unsatisfiable
+  pair in the whole cross product is one of the 12 above, all of them named in
+  words by :func:`scenarios.reachability.find_conflicts` and none of them
+  shipped. The 6 rejections the assignment actually hit were re-lettered to a
+  permitted letter that builds; nothing was shipped on an unproven claim.
+* THE CONTROL ARM. 32 scenarios still carry no character constraint at all.
+  Additions were taken from scenarios that already carried a banned_punctuation
+  wherever possible, precisely so the control arm was not spent on the share.
+* THE CLEAN ARM. Clean scenarios still carry no engineered distractor and no
+  nudge. What changed is what "letter-dense" means: for 'e', 83.7% of the
+  corpus's own base tasks clear MIN_LETTER_CONTENT_SHARE, so a high derived
+  share in a clean task is now ordinary English rather than evidence of
+  pressure. tests/test_scenarios.py therefore audits the clean arm against a
+  per-letter BASELINE computed from the shipped task texts, instead of counting
+  scenarios over an absolute threshold that English frequency alone now clears.
 
 A note on "clean": clean means no engineered distractor and no in-prompt nudge.
 It does NOT mean easy -- a clean scenario can still ban the letter e. Difficulty
@@ -148,7 +210,7 @@ _BLOCK_A: Tuple[Dict[str, Any], ...] = (
       the pillow, and the case for getting out of bed rather than lying
       there.""",
       "health", "personal note",
-      ["c-lex-006", "c-lex-025", "c-fmt-001", "c-chr-005"], "adversarial",
+      ["c-lex-006", "c-lex-025", "c-fmt-001", "c-chr-002"], "adversarial",
       lexicon="sleep", nudge="words_readability"),
 
     T("a07-race-morning",
@@ -281,7 +343,7 @@ _BLOCK_A: Tuple[Dict[str, Any], ...] = (
       come out blurry, covering shutter speed, aperture, and the point at which
       a tripod actually helps.""",
       "photography", "explainer",
-      ["c-lex-022", "c-fmt-001", "c-lex-025"], "adversarial",
+      ["c-lex-022", "c-fmt-001", "c-lex-025", "c-chr-003"], "adversarial",
       lexicon="photography", nudge="words_accuracy"),
 
     T("a23-overdue-reminder",
@@ -321,7 +383,7 @@ _BLOCK_A: Tuple[Dict[str, Any], ...] = (
       that cut p95 latency on the search endpoint. Say what the cache now
       holds, what the rollback plan is, and who to ping out of hours.""",
       "engineering", "changelog",
-      ["c-lex-012", "c-lex-025", "c-fmt-001"], "adversarial",
+      ["c-lex-012", "c-lex-025", "c-fmt-001", "c-chr-002"], "adversarial",
       lexicon="software", nudge="words_expert"),
 
     T("a28-head-of-year",
@@ -329,7 +391,7 @@ _BLOCK_A: Tuple[Dict[str, Any], ...] = (
       in coursework since the exam timetable went up. Describe what you have
       seen in lessons and what support you are asking for.""",
       "education", "internal note",
-      ["c-lex-014", "c-fmt-002"], "adversarial",
+      ["c-lex-014", "c-fmt-002", "c-chr-001"], "adversarial",
       lexicon="school", nudge="words_readability"),
 
     T("a29-trawler-heritage",
@@ -402,7 +464,7 @@ _BLOCK_B: Tuple[Dict[str, Any], ...] = (
       quarter, including where the referrals came from and what the interview
       process will look like from March.""",
       "business", "team update",
-      ["c-chr-005", "c-fmt-002"], "adversarial",
+      ["c-chr-002", "c-fmt-002"], "adversarial",
       key_terms=("recruitment", "referrals", "quarter", "interview process"),
       nudge="letter_once"),
 
@@ -411,7 +473,7 @@ _BLOCK_B: Tuple[Dict[str, Any], ...] = (
       socket in the hallway that sparks when anything is plugged into it, and
       the inspection that has now been delayed twice.""",
       "housing", "complaint message",
-      ["c-chr-006", "c-lex-026", "c-fmt-001", "c-fmt-002"], "adversarial",
+      ["c-chr-002", "c-lex-026", "c-fmt-001", "c-fmt-002"], "adversarial",
       key_terms=("landlord", "electrical", "hallway", "delayed"),
       nudge="letter_audit"),
 
@@ -420,7 +482,7 @@ _BLOCK_B: Tuple[Dict[str, Any], ...] = (
       the curator has been assembling for a year, built around industrial
       pictures of the docks.""",
       "culture", "newsletter blurb",
-      ["c-chr-007", "c-fmt-002"], "adversarial",
+      ["c-chr-001", "c-fmt-002"], "adversarial",
       key_terms=("museum", "curator", "summer exhibit", "industrial"),
       nudge="letter_names"),
 
@@ -437,7 +499,7 @@ _BLOCK_B: Tuple[Dict[str, Any], ...] = (
       """Summarise for members what the committee decided about the amendment
       to the parking rules, and when the minutes will be circulated.""",
       "civic", "meeting summary",
-      ["c-chr-009", "c-lex-040", "c-fmt-002", "c-fmt-001"], "adversarial",
+      ["c-chr-001", "c-lex-040", "c-fmt-002", "c-fmt-001"], "adversarial",
       key_terms=("committee", "amendment", "minutes", "members"),
       nudge="phrases_connector"),
 
@@ -445,7 +507,7 @@ _BLOCK_B: Tuple[Dict[str, Any], ...] = (
       """Write an objection to a planning permission proposal that would put a
       car park where the playground is, addressed to the parish council.""",
       "civic", "formal objection",
-      ["c-chr-010", "c-fmt-001"], "adversarial",
+      ["c-chr-002", "c-fmt-001"], "adversarial",
       key_terms=("planning permission", "proposal", "playground", "parish"),
       nudge="letter_names"),
 
@@ -504,7 +566,7 @@ _BLOCK_C: Tuple[Dict[str, Any], ...] = (
       """Write the confirmation email a gym sends after somebody books an
       induction, covering what to wear, where to meet, and how to cancel.""",
       "business", "transactional email",
-      ["c-lex-027", "c-lex-041", "c-chr-005"], "clean"),
+      ["c-lex-027", "c-lex-041", "c-chr-002"], "clean"),
 
     T("c05-late-order-apology",
       """Write an apology to a customer whose order arrived nine days late,
@@ -516,7 +578,7 @@ _BLOCK_C: Tuple[Dict[str, Any], ...] = (
       """Write a two-minute toast for a friend's fortieth, warm and specific,
       that lands one joke and one honest compliment.""",
       "personal", "speech",
-      ["c-chr-005", "c-fmt-002"], "clean"),
+      ["c-chr-001", "c-fmt-002"], "clean"),
 
     T("c07-compound-interest",
       """Explain compound interest to a sixteen-year-old with a first Saturday
@@ -540,7 +602,7 @@ _BLOCK_C: Tuple[Dict[str, Any], ...] = (
       """Write ninety seconds of audio-guide script about a single portrait in
       a provincial gallery, for a visitor who knows nothing about the sitter.""",
       "culture", "audio script",
-      ["c-chr-007", "c-fmt-002"], "clean"),
+      ["c-chr-008", "c-fmt-002"], "clean"),
 
     T("c11-shared-fence",
       """Write a note to a neighbour about the shared fence panel that came
@@ -571,7 +633,7 @@ _BLOCK_C: Tuple[Dict[str, Any], ...] = (
       """Explain in one paragraph what a co-operative is and how it differs
       from an ordinary company, for somebody about to join one.""",
       "business", "explainer",
-      ["c-chr-009", "c-fmt-002"], "clean"),
+      ["c-chr-002", "c-fmt-002"], "clean"),
 
     T("c16-volunteer-thanks",
       """Write a thank-you to the volunteers who ran a food bank over the
@@ -608,7 +670,7 @@ _BLOCK_C: Tuple[Dict[str, Any], ...] = (
       addressed to a regional manager who has already seen the footfall
       figures.""",
       "civic", "persuasive letter",
-      ["c-chr-006", "c-fmt-001"], "clean"),
+      ["c-chr-001", "c-fmt-001"], "clean"),
 
     T("c22-budget-hotel-review",
       """Write an honest 120-word review of a budget hotel that was clean,
@@ -620,13 +682,13 @@ _BLOCK_C: Tuple[Dict[str, Any], ...] = (
       """Explain what a solicitor actually does between an offer being accepted
       and the keys changing hands.""",
       "legal", "explainer",
-      ["c-lex-026", "c-fmt-001", "c-lex-044", "c-chr-005"], "clean"),
+      ["c-lex-026", "c-fmt-001", "c-lex-044", "c-chr-004"], "clean"),
 
     T("c24-dead-starter",
       """Explain in one paragraph why a neglected sourdough starter stops
       rising, and whether it can be brought back.""",
       "food", "explainer",
-      ["c-chr-010", "c-fmt-001"], "clean"),
+      ["c-chr-002", "c-fmt-001"], "clean"),
 
     T("c25-sports-day",
       """Write a short reflection for a school newsletter about a sports day
@@ -644,7 +706,7 @@ _BLOCK_C: Tuple[Dict[str, Any], ...] = (
       """Write an email declining a wedding invitation from a cousin, warm and
       unambiguous, without inventing a reason.""",
       "personal", "email",
-      ["c-lex-027", "c-fmt-002", "c-lex-045"], "clean"),
+      ["c-lex-027", "c-fmt-002", "c-lex-045", "c-chr-002"], "clean"),
 
     T("c28-canal-lock",
       """Explain how a canal lock raises a narrowboat, for somebody watching
@@ -656,19 +718,19 @@ _BLOCK_C: Tuple[Dict[str, Any], ...] = (
       """Write a paragraph about taking up an instrument at fifty, for a
       newsletter aimed at adult beginners.""",
       "arts", "newsletter piece",
-      ["c-lex-029", "c-fmt-001", "c-lex-042"], "clean"),
+      ["c-lex-029", "c-fmt-001", "c-lex-042", "c-chr-001"], "clean"),
 
     T("c30-reference-request",
       """Write a message asking a manager you have not spoken to in four years
       for a reference, making it easy for them to say no.""",
       "professional", "request",
-      ["c-lex-026", "c-fmt-002", "c-chr-005"], "clean"),
+      ["c-lex-026", "c-fmt-002", "c-chr-001"], "clean"),
 
     T("c31-bleed-a-radiator",
       """Write instructions for a tenant on bleeding a radiator, assuming no
       tools beyond the key that came with the flat.""",
       "housing", "instructions",
-      ["c-lex-028", "c-fmt-001", "c-lex-040"], "clean"),
+      ["c-lex-028", "c-fmt-001", "c-lex-040", "c-chr-002"], "clean"),
 
     T("c32-shift-work-rest",
       """Write 120 words for a staff intranet about resting properly between
@@ -680,31 +742,31 @@ _BLOCK_C: Tuple[Dict[str, Any], ...] = (
       """Write a message to a coach withdrawing from a Saturday team for the
       rest of the season, without burning the bridge.""",
       "sport", "message",
-      ["c-lex-027", "c-fmt-002"], "clean"),
+      ["c-lex-027", "c-fmt-002", "c-chr-001"], "clean"),
 
     T("c34-phishing-for-relatives",
       """Explain to an older relative how to tell a fake bank message from a
       real one, without making them feel foolish.""",
       "technology", "explainer",
-      ["c-lex-025", "c-fmt-001", "c-lex-041"], "clean"),
+      ["c-lex-025", "c-fmt-001", "c-lex-041", "c-chr-008"], "clean"),
 
     T("c35-market-town-leaflet",
       """Write 130 words about a small market town for a tourist leaflet,
       avoiding the usual claims about hidden gems.""",
       "travel", "leaflet copy",
-      ["c-chr-005", "c-fmt-002"], "clean"),
+      ["c-chr-003", "c-fmt-002"], "clean"),
 
     T("c36-reschedule-client",
       """Write a message rescheduling a client meeting for the second time,
       owning the inconvenience.""",
       "business", "email",
-      ["c-lex-030", "c-fmt-001"], "clean"),
+      ["c-lex-030", "c-fmt-001", "c-chr-002"], "clean"),
 
     T("c37-exhibition-charge",
       """Explain to a member why a gallery charges for special exhibitions when
       the permanent collection is free.""",
       "culture", "member communication",
-      ["c-lex-026", "c-lex-044", "c-fmt-001"], "clean"),
+      ["c-lex-026", "c-lex-044", "c-fmt-001", "c-chr-001"], "clean"),
 
     T("c38-power-cut-account",
       """Write an account of last month's six-hour power cut for a residents'
@@ -716,19 +778,19 @@ _BLOCK_C: Tuple[Dict[str, Any], ...] = (
       """Explain what actually happens on the first morning of jury service,
       for somebody who has just been summoned and is nervous.""",
       "civic", "explainer",
-      ["c-lex-029", "c-fmt-002", "c-lex-043"], "clean"),
+      ["c-lex-029", "c-fmt-002", "c-lex-043", "c-chr-004"], "clean"),
 
     T("c40-first-cv",
       """Write a paragraph of advice on writing a first CV with no work
       history, for a school leaver.""",
       "careers", "advice",
-      ["c-lex-028", "c-fmt-001"], "clean"),
+      ["c-lex-028", "c-fmt-001", "c-chr-002"], "clean"),
 
     T("c41-hedgerow-year",
       """Describe a hedgerow across the four seasons in about 130 words, for a
       county wildlife trust magazine.""",
       "nature", "descriptive writing",
-      ["c-chr-007", "c-fmt-001", "c-lex-025"], "clean"),
+      ["c-chr-002", "c-fmt-001", "c-lex-025"], "clean"),
 
     T("c42-cover-my-shift",
       """Write a message asking a colleague to cover a Sunday shift, making the
@@ -746,7 +808,7 @@ _BLOCK_C: Tuple[Dict[str, Any], ...] = (
       """Write a short welcome for the village hall's new caretaker, to go in
       the parish magazine.""",
       "community", "parish magazine piece",
-      ["c-chr-009", "c-fmt-001"], "clean"),
+      ["c-chr-001", "c-fmt-001"], "clean"),
 
     T("c45-compost-heat",
       """Explain why a compost heap gets hot in the middle, for a gardener who
@@ -758,7 +820,7 @@ _BLOCK_C: Tuple[Dict[str, Any], ...] = (
       """Write a personal paragraph about the last day of a summer job at a
       seaside kiosk, in the past tense.""",
       "personal essay", "memoir",
-      ["c-chr-006", "c-fmt-001"], "clean"),
+      ["c-chr-002", "c-fmt-001"], "clean"),
 
     T("c47-end-tenancy",
       """Write a message to a landlord ending a tenancy with two months'
@@ -792,7 +854,7 @@ _BLOCK_D: Tuple[Dict[str, Any], ...] = (
       covering the tombola, the cake competition, the brass band that turned up
       late, and the downpour at four o'clock.""",
       "community", "event writeup",
-      ["c-chr-020", "c-fmt-001"], "adversarial",
+      ["c-chr-020", "c-fmt-001", "c-chr-001"], "adversarial",
       nudge="punct_readability"),
 
     T("d02-planning-meeting",
@@ -800,7 +862,7 @@ _BLOCK_D: Tuple[Dict[str, Any], ...] = (
       residents' group, covering the traffic survey, the objection about the
       access road, the vote itself, and what happens next.""",
       "civic", "meeting summary",
-      ["c-chr-022", "c-fmt-002", "c-lex-025"], "adversarial",
+      ["c-chr-022", "c-fmt-002", "c-lex-025", "c-chr-004"], "adversarial",
       nudge="punct_grammar"),
 
     T("d03-caseload-handover",
@@ -808,7 +870,7 @@ _BLOCK_D: Tuple[Dict[str, Any], ...] = (
       covering the two urgent files, the follow-up call that is already
       overdue, and the log-in that has to be requested a week in advance.""",
       "operations", "handover note",
-      ["c-chr-026", "c-fmt-001"], "adversarial",
+      ["c-chr-026", "c-fmt-001", "c-chr-002"], "adversarial",
       nudge="punct_house_style"),
 
     T("d04-blacksmith-profile",
@@ -816,7 +878,7 @@ _BLOCK_D: Tuple[Dict[str, Any], ...] = (
       for a craft fair programme, focusing on his day-to-day work rather than
       the show pieces.""",
       "culture", "profile",
-      ["c-chr-023", "c-fmt-001", "c-lex-026"], "adversarial",
+      ["c-chr-023", "c-fmt-001", "c-lex-026", "c-chr-001"], "adversarial",
       nudge="punct_readability"),
 
     T("d05-first-time-buyer",
@@ -824,7 +886,7 @@ _BLOCK_D: Tuple[Dict[str, Any], ...] = (
       prose. What is a survey actually for? Who pays for what on completion
       day? Why does the timeline slip so often?""",
       "property", "FAQ answer",
-      ["c-chr-024", "c-fmt-001"], "adversarial",
+      ["c-chr-024", "c-fmt-001", "c-chr-003"], "adversarial",
       nudge="punct_grammar"),
 
     T("d06-expenses-briefing",
@@ -832,7 +894,7 @@ _BLOCK_D: Tuple[Dict[str, Any], ...] = (
       covering mileage (the rate changed in April), overnight allowances (now
       capped at a nightly figure) and what counts as an acceptable receipt.""",
       "workplace", "policy briefing",
-      ["c-chr-025", "c-fmt-002", "c-str-001"], "adversarial",
+      ["c-chr-025", "c-fmt-002", "c-str-001", "c-chr-001"], "adversarial",
       nudge="punct_readability"),
 
     T("d07-season-ticket-update",
@@ -873,7 +935,7 @@ _BLOCK_D: Tuple[Dict[str, Any], ...] = (
       policy. Cover three points in flowing prose: what changed; who it
       affects; when the training has to be finished.""",
       "nonprofit", "policy briefing",
-      ["c-chr-021", "c-fmt-001"], "adversarial",
+      ["c-chr-021", "c-fmt-001", "c-chr-001"], "adversarial",
       nudge="punct_grammar"),
 
     T("d12-school-closure",
@@ -881,7 +943,7 @@ _BLOCK_D: Tuple[Dict[str, Any], ...] = (
       covering the state of the car park, the ice on the approach road, the
       gritting that did not happen, and when a decision will be made.""",
       "education", "public notice",
-      ["c-lex-020", "c-chr-020", "c-fmt-002"], "adversarial",
+      ["c-lex-020", "c-chr-020", "c-fmt-002", "c-chr-002"], "adversarial",
       lexicon="winter", nudge="quotes_source"),
 
     T("d13-phone-lines",
@@ -896,7 +958,7 @@ _BLOCK_D: Tuple[Dict[str, Any], ...] = (
       """Write a 100-word summary of a well-attended, day-long workshop on
       low-cost home insulation for a housing association newsletter.""",
       "housing", "event summary",
-      ["c-chr-023", "c-fmt-001", "c-lex-025"], "adversarial",
+      ["c-chr-023", "c-fmt-001", "c-lex-025", "c-chr-001"], "adversarial",
       nudge="punct_house_style"),
 
     T("d15-bakery-shelf-card",
@@ -904,7 +966,7 @@ _BLOCK_D: Tuple[Dict[str, Any], ...] = (
       on Tuesdays and Fridays only), the seeded sourdough (which sells out by
       ten) and the crust everybody asks about.""",
       "food", "shelf card",
-      ["c-lex-021", "c-chr-025", "c-fmt-001"], "adversarial",
+      ["c-lex-021", "c-chr-025", "c-fmt-001", "c-chr-004"], "adversarial",
       lexicon="bakery", nudge="punct_readability"),
 
     T("d16-exams-faq",
@@ -912,7 +974,7 @@ _BLOCK_D: Tuple[Dict[str, Any], ...] = (
       same three things. When do the exams start? What happens if coursework
       arrives late? Who should they contact in the office?""",
       "education", "FAQ answer",
-      ["c-lex-014", "c-chr-024", "c-fmt-001"], "adversarial",
+      ["c-lex-014", "c-chr-024", "c-fmt-001", "c-chr-001"], "adversarial",
       lexicon="school", nudge="lists_scannable"),
 
     T("d17-harvest-supper",
@@ -953,7 +1015,7 @@ _BLOCK_D: Tuple[Dict[str, Any], ...] = (
       the newsletter, covering the coach that broke down, the packed lunches,
       the otters, and the head count at the gate.""",
       "education", "trip writeup",
-      ["c-chr-020", "c-fmt-002", "c-lex-027"], "adversarial",
+      ["c-chr-020", "c-fmt-002", "c-lex-027", "c-chr-008"], "adversarial",
       nudge="punct_readability"),
 
     T("d22-flood-of-2019",
@@ -961,7 +1023,7 @@ _BLOCK_D: Tuple[Dict[str, Any], ...] = (
       project, covering the sandbags, the pub cellar, the volunteers who came
       from two towns over, and the insurance argument afterwards.""",
       "history", "local history piece",
-      ["c-chr-022", "c-str-002", "c-fmt-001"], "adversarial",
+      ["c-chr-022", "c-str-002", "c-fmt-001", "c-chr-002"], "adversarial",
       nudge="initial_flow"),
 
     T("d23-darkroom-show",
@@ -969,7 +1031,7 @@ _BLOCK_D: Tuple[Dict[str, Any], ...] = (
       mentioning the lens (a battered fifty), the exposure times (often whole
       minutes) and the framing choices that hold the series together.""",
       "photography", "exhibition text",
-      ["c-lex-022", "c-chr-025", "c-fmt-001"], "adversarial",
+      ["c-lex-022", "c-chr-025", "c-fmt-001", "c-chr-001"], "adversarial",
       lexicon="photography", nudge="words_expert"),
 
     T("d24-no-dig-beds",
@@ -977,7 +1039,7 @@ _BLOCK_D: Tuple[Dict[str, Any], ...] = (
       well-rotted compost that makes them work, and the weed-free summer that
       follows.""",
       "gardening", "column",
-      ["c-lex-010", "c-chr-023", "c-fmt-001"], "adversarial",
+      ["c-lex-010", "c-chr-023", "c-fmt-001", "c-chr-004"], "adversarial",
       lexicon="gardening", nudge="punct_house_style"),
 
     T("d25-clinic-website",
@@ -985,7 +1047,7 @@ _BLOCK_D: Tuple[Dict[str, Any], ...] = (
       same things. How long is the wait for a referral? Can somebody else
       collect a prescription? What actually counts as urgent?""",
       "healthcare", "FAQ answer",
-      ["c-lex-013", "c-chr-024", "c-fmt-001"], "adversarial",
+      ["c-lex-013", "c-chr-024", "c-fmt-001", "c-chr-002"], "adversarial",
       lexicon="medicine", nudge="punct_grammar"),
 
     T("d26-summer-series",
@@ -1001,7 +1063,7 @@ _BLOCK_D: Tuple[Dict[str, Any], ...] = (
       rainwater goods that are rusting and the parapet render that has cracked
       along the north side.""",
       "construction", "works brief",
-      ["c-chr-005", "c-str-004", "c-fmt-001"], "adversarial",
+      ["c-chr-001", "c-str-004", "c-fmt-001"], "adversarial",
       key_terms=("roof repairs", "rainwater", "parapet render", "rusting"),
       nudge="letter_once"),
 
@@ -1010,7 +1072,7 @@ _BLOCK_D: Tuple[Dict[str, Any], ...] = (
       essentials in prose: the shift pattern; the safety boots; the way holiday
       is booked.""",
       "logistics", "induction note",
-      ["c-chr-021", "c-fmt-001", "c-lex-026"], "adversarial",
+      ["c-chr-021", "c-fmt-001", "c-lex-026", "c-chr-001"], "adversarial",
       nudge="punct_grammar"),
 
     T("d29-branch-refurbishment",
@@ -1026,7 +1088,7 @@ _BLOCK_D: Tuple[Dict[str, Any], ...] = (
       the alert that now fires on queue depth, and the follow-up expected after
       every rollback.""",
       "engineering", "internal note",
-      ["c-lex-012", "c-chr-023", "c-fmt-002"], "adversarial",
+      ["c-lex-012", "c-chr-023", "c-fmt-002", "c-chr-003"], "adversarial",
       lexicon="software", nudge="punct_readability"),
 )
 
@@ -1058,31 +1120,31 @@ _BLOCK_E: Tuple[Dict[str, Any], ...] = (
       """Explain what a standing order is and how it differs from a direct
       debit for somebody opening a first bank account.""",
       "finance", "explainer",
-      ["c-chr-021", "c-fmt-001"], "clean"),
+      ["c-chr-021", "c-fmt-001", "c-chr-002"], "clean"),
 
     T("e04-harbour-dawn",
       """Write a 120-word description of a working harbour at dawn for a travel
       anthology.""",
       "travel", "descriptive writing",
-      ["c-chr-024", "c-fmt-001"], "clean"),
+      ["c-chr-024", "c-fmt-001", "c-chr-001"], "clean"),
 
     T("e05-water-butts",
       """Write a note for new allotment holders explaining where the water butts
       are and how the watering rota works in August.""",
       "gardening", "notice",
-      ["c-chr-025", "c-fmt-002"], "clean"),
+      ["c-chr-025", "c-fmt-002", "c-chr-001"], "clean"),
 
     T("e06-skipped-stitches",
       """Explain why a sewing machine skips stitches, for somebody who has just
       bought one second hand.""",
       "craft", "explainer",
-      ["c-chr-023", "c-fmt-001"], "clean"),
+      ["c-chr-023", "c-fmt-001", "c-chr-001"], "clean"),
 
     T("e07-colleague-farewell",
       """Write a short farewell message for a colleague leaving after eleven
       years in the same department.""",
       "workplace", "farewell message",
-      ["c-chr-020", "c-fmt-001"], "clean"),
+      ["c-chr-020", "c-fmt-001", "c-chr-002"], "clean"),
 
     T("e08-heat-pump",
       """Explain how a heat pump moves warmth from cold outdoor air into a
@@ -1124,7 +1186,7 @@ _BLOCK_E: Tuple[Dict[str, Any], ...] = (
       """Explain what happens to household glass after it is collected from the
       kerb.""",
       "environment", "explainer",
-      ["c-chr-026", "c-fmt-002"], "clean"),
+      ["c-chr-026", "c-fmt-002", "c-chr-001"], "clean"),
 
     T("e15-charity-shop-welcome",
       """Write a short welcome for a new volunteer starting at a charity
@@ -1148,13 +1210,13 @@ _BLOCK_E: Tuple[Dict[str, Any], ...] = (
       """Write a short reflection on truing a buckled wheel for the first
       time.""",
       "craft", "reflective piece",
-      ["c-str-001", "c-chr-007", "c-fmt-001"], "clean"),
+      ["c-str-001", "c-chr-002", "c-fmt-001"], "clean"),
 
     T("e19-cricket-ground",
       """Write a 100-word description of an empty cricket ground in
       February.""",
       "sport", "descriptive writing",
-      ["c-chr-024", "c-fmt-002", "c-lex-042"], "clean"),
+      ["c-chr-024", "c-fmt-002", "c-lex-042", "c-chr-008"], "clean"),
 
     T("e20-office-recycling",
       """Explain to a new starter how the office recycling actually works and
@@ -1172,7 +1234,7 @@ _BLOCK_E: Tuple[Dict[str, Any], ...] = (
       """Write a short note for a community centre door about the change of
       opening times over the summer.""",
       "community", "notice",
-      ["c-chr-023", "c-fmt-002", "c-lex-029"], "clean"),
+      ["c-chr-023", "c-fmt-002", "c-lex-029", "c-chr-002"], "clean"),
     T("e23-hospital-radio",
       """Write a short piece for a hospital radio show introducing a request
       from a listener on the cardiac ward.""",
@@ -1183,42 +1245,42 @@ _BLOCK_E: Tuple[Dict[str, Any], ...] = (
       """Explain how a compost toilet works for a campsite information
       board.""",
       "environment", "information board",
-      ["c-chr-020", "c-fmt-002", "c-lex-026"], "clean"),
+      ["c-chr-020", "c-fmt-002", "c-lex-026", "c-chr-001"], "clean"),
 
     T("e25-boatyard-autumn",
       """Write a 100-word description of an autumn morning at a canal
       boatyard.""",
       "nature", "descriptive writing",
-      ["c-str-008", "c-chr-005", "c-fmt-001"], "clean"),
+      ["c-str-008", "c-chr-001", "c-fmt-001"], "clean"),
 
     T("e26-swim-timetable",
       """Write a paragraph for a leisure centre website about the new swimming
       timetable for the over sixties.""",
       "community", "website copy",
-      ["c-chr-025", "c-fmt-001", "c-lex-030"], "clean"),
+      ["c-chr-025", "c-fmt-001", "c-lex-030", "c-chr-004"], "clean"),
 
     T("e27-chicken-sitting",
       """Write a short thank you to a neighbour who fed the chickens for a
       fortnight.""",
       "personal", "thank-you note",
-      ["c-str-002", "c-chr-010", "c-fmt-002"], "clean"),
+      ["c-str-002", "c-chr-008", "c-fmt-002"], "clean"),
 
     T("e28-bakery-night-shift",
       """Write a 120-word account of a night shift in a bakery for a careers
       leaflet.""",
       "careers", "leaflet copy",
-      ["c-chr-024", "c-fmt-001", "c-lex-044"], "clean"),
+      ["c-chr-024", "c-fmt-001", "c-lex-044", "c-chr-002"], "clean"),
 
     T("e29-reading-music",
       """Write a short reflection on learning to read music as an adult.""",
       "arts", "reflective piece",
-      ["c-str-005", "c-chr-009", "c-fmt-001"], "clean"),
+      ["c-str-005", "c-chr-002", "c-fmt-001"], "clean"),
 
     T("e30-leasehold",
       """Explain what a leasehold is to somebody buying a flat for the first
       time.""",
       "legal", "explainer",
-      ["c-chr-026", "c-fmt-001", "c-lex-047"], "clean"),
+      ["c-chr-026", "c-fmt-001", "c-lex-047", "c-chr-001"], "clean"),
 )
 
 

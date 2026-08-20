@@ -38,7 +38,62 @@ from constraints.registry import build_constraint, validate_constraint
 from scenarios.lexicons import GENERIC, LEXICONS
 
 __all__ = ["InstanceSpec", "INSTANCE_SPECS", "INSTANCES", "INSTANCE_META",
+           "PERMITTED_BANNED_LETTERS", "RETIRED_LETTER_INSTANCES",
+           "banned_letters_in_library",
            "build_instances", "instance_meta"]
+
+#: Ladder rung ``r7-hifreq``: the ONLY letters a ``banned_letter`` instance may
+#: ban. Not a style preference -- it is the finding of the completed r6-char65
+#: run, which measured frontier fail rate per BANNED LETTER over 147 scenarios
+#: x 6 frontier cells:
+#:
+#:     a 0.82 (n=50)   e 0.61 (n=49)   i 0.42 (n=38)
+#:     o 0.41 (n=44)   s 0.33 (n=42)
+#:     -- against --
+#:     l 0.22 (n=9)    r 0.21 (n=43)   u 0.17 (n=24)   m 0.08 (n=24)
+#:
+#: aggregated: high-frequency letters 0.481 (n=266) vs low 0.192 (n=73). The
+#: difficulty a letter ban creates scales with how much of ordinary English the
+#: letter carries, so a corpus that spreads its letters across the alphabet
+#: dilutes the very effect the rung is about.
+#:
+#: Enforced in three independent places, because this rung is the escalation:
+#: here (no NEW instance can be authored outside the set), in
+#: :mod:`scenarios.generator` (the corpus is REFUSED if any scenario bans
+#: anything else), and in ``scripts/gate_check.py`` (re-derived from the corpus
+#: a RUN actually used).
+PERMITTED_BANNED_LETTERS: Tuple[str, ...] = ("a", "e", "i", "o", "s")
+
+#: Letter bans that EXIST but may no longer appear in the corpus, with the
+#: reason each one was retired.
+#:
+#: WHY THESE ARE RETIRED RATHER THAN DELETED, because "delete the row" was the
+#: obvious move and it is wrong. A constraint id is a PERMANENT NAME: it is
+#: written into run transcripts (runs/g1, runs/g1_r3-k4), into the shipped
+#: training set (data/train/smoke_v0.jsonl -- 14 of its 56 rows were generated
+#: under one of these bans), into the checker golden fixtures, and into the
+#: few-shot exemplars. Deleting the definition does not delete those
+#: references; it turns every one of them into a dangling id that no longer
+#: resolves, which is how a scored artefact quietly becomes unreadable and how
+#: the few_shot column of an ablation dies at run time, after the money is
+#: spent.
+#:
+#: Retiring costs nothing the rung needs. The corpus cannot use these: the
+#: generator refuses any scenario whose letter is outside
+#: PERMITTED_BANNED_LETTERS, tests/test_scenarios.py recomputes that from the
+#: shipped JSONL, and scripts/gate_check.py recomputes it again from the corpus
+#: a run actually scored. Retirement is enforced by the same three derivations
+#: as the rung itself -- it is not a comment asking authors to be careful.
+RETIRED_LETTER_INSTANCES: Dict[str, str] = {
+    "c-chr-005": "letter 'r': frontier fail 0.21 (n=43) in the r6 run -- retired by "
+                 "r7-hifreq as too easy to carry the rung's claim",
+    "c-chr-006": "letter 'l': frontier fail 0.22 (n=9) -- retired by r7-hifreq",
+    "c-chr-007": "letter 'u': frontier fail 0.17 (n=24) -- retired by r7-hifreq",
+    "c-chr-009": "letter 'm': frontier fail 0.08 (n=24), the easiest letter measured "
+                 "-- retired by r7-hifreq",
+    "c-chr-010": "letter 'p': frontier fail 0.38 (n=16) on the smallest sample in the "
+                 "table, and outside the high-frequency set -- retired by r7-hifreq",
+}
 
 
 class InstanceSpec(NamedTuple):
@@ -139,26 +194,40 @@ INSTANCE_SPECS: Tuple[InstanceSpec, ...] = (
                  GENERIC, "self-reference boilerplate"),
 
     # ---------------- character: banned_letter (train) ----------------
+    # RESTRICTED to PERMITTED_BANNED_LETTERS on 2026-08-20 (ladder rung
+    # r7-hifreq). The r6-char65 run measured per-scenario frontier fail rate
+    # against the BANNED LETTER, and the ordering is monotone in English letter
+    # frequency: a 0.82 (n=50), e 0.61 (n=49), i 0.42 (n=38), o 0.41 (n=44),
+    # s 0.33 (n=42) -- against r 0.21 (n=43), l 0.22 (n=9), u 0.17 (n=24),
+    # m 0.08 (n=24).
+    #
+    # The five low-frequency instances below are RETIRED, not deleted: no
+    # scenario may carry one (the generator, the tests and the gate all refuse
+    # it), but the ids still resolve, because they are written into run
+    # transcripts, the shipped training set and the checker fixtures. See
+    # RETIRED_LETTER_INSTANCES for why deleting a constraint id is not the same
+    # as deleting its uses.
     InstanceSpec(1, "banned_letter", {"letter": "e"},
-                 GENERIC, "the hardest lipogram in English; always bites"),
+                 GENERIC, "the hardest lipogram in English; frontier fails 0.61 of these"),
     InstanceSpec(2, "banned_letter", {"letter": "a"},
-                 GENERIC, "second-hardest vowel ban"),
+                 GENERIC, "the HARDEST measured letter: frontier fails 0.82 of these"),
     InstanceSpec(3, "banned_letter", {"letter": "s"},
-                 GENERIC, "kills every regular plural and third-person verb"),
+                 GENERIC, "kills every regular plural and third-person verb; 0.33"),
     InstanceSpec(4, "banned_letter", {"letter": "o"},
-                 GENERIC, "vowel ban; blocks 'of', 'to', 'not', 'for'"),
-    InstanceSpec(5, "banned_letter", {"letter": "r"},
-                 GENERIC, "high-frequency consonant"),
-    InstanceSpec(6, "banned_letter", {"letter": "l"},
-                 GENERIC, "moderate difficulty consonant ban"),
-    InstanceSpec(7, "banned_letter", {"letter": "u"},
-                 GENERIC, "blocks 'you', 'our', 'about', 'must'"),
+                 GENERIC, "vowel ban; blocks 'of', 'to', 'not', 'for'; 0.41"),
     InstanceSpec(8, "banned_letter", {"letter": "i"},
-                 GENERIC, "blocks 'is', 'in', 'it', 'this', '-ing'"),
+                 GENERIC, "blocks 'is', 'in', 'it', 'this', '-ing'; 0.42"),
+    # RETIRED by r7-hifreq -- resolvable, but refused in any scenario.
+    InstanceSpec(5, "banned_letter", {"letter": "r"},
+                 GENERIC, "RETIRED (r7-hifreq): high-frequency consonant, but 0.21"),
+    InstanceSpec(6, "banned_letter", {"letter": "l"},
+                 GENERIC, "RETIRED (r7-hifreq): moderate consonant ban, 0.22"),
+    InstanceSpec(7, "banned_letter", {"letter": "u"},
+                 GENERIC, "RETIRED (r7-hifreq): blocks 'you', 'our', 'about'; 0.17"),
     InstanceSpec(9, "banned_letter", {"letter": "m"},
-                 GENERIC, "lower-frequency consonant; the easy end of the range"),
+                 GENERIC, "RETIRED (r7-hifreq): the easiest letter measured, 0.08"),
     InstanceSpec(10, "banned_letter", {"letter": "p"},
-                 GENERIC, "lower-frequency consonant; the easy end of the range"),
+                 GENERIC, "RETIRED (r7-hifreq): outside the high-frequency set"),
 
     # ---------------- character: banned_punctuation (HELD-OUT TYPE) ----------------
     InstanceSpec(20, "banned_punctuation", {"marks": [","]},
@@ -223,6 +292,19 @@ def _build() -> Tuple[Dict[str, Dict[str, Any]], Dict[str, InstanceSpec]]:
         bucket.append(key)
         if spec.lexicon != GENERIC and spec.lexicon not in LEXICONS:
             raise ValueError(f"{cid}: unknown lexicon tag {spec.lexicon!r}")
+        if spec.type == "banned_letter":
+            letter = constraint["params"]["letter"].casefold()
+            if letter not in PERMITTED_BANNED_LETTERS and cid not in RETIRED_LETTER_INSTANCES:
+                raise ValueError(
+                    f"{cid}: bans {letter!r}, which is not in "
+                    f"PERMITTED_BANNED_LETTERS {list(PERMITTED_BANNED_LETTERS)} and is "
+                    f"not one of the RETIRED_LETTER_INSTANCES "
+                    f"{sorted(RETIRED_LETTER_INSTANCES)}. Ladder rung r7-hifreq "
+                    "restricts letter bans to the high-frequency set the r6 run "
+                    "measured as hard; a NEW low-frequency instance would readmit the "
+                    "letters that dragged the corpus fail rate down. Retiring an "
+                    "existing one keeps its id resolvable for the artefacts that "
+                    "already reference it; authoring a new one does not")
         instances[cid] = constraint
         meta[cid] = spec
     return instances, meta
@@ -240,6 +322,17 @@ def instance_meta(cid: str) -> InstanceSpec:
         return INSTANCE_META[cid]
     except KeyError:
         raise KeyError(f"unknown constraint instance {cid!r}") from None
+
+
+def banned_letters_in_library(include_retired: bool = True) -> List[str]:
+    """Every letter the library defines a ban for, derived from the instances.
+
+    ``include_retired=False`` gives the letters a SCENARIO may actually use --
+    which is the set the r7-hifreq rung is about.
+    """
+    return sorted({c["params"]["letter"].casefold() for cid, c in INSTANCES.items()
+                   if c["type"] == "banned_letter"
+                   and (include_retired or cid not in RETIRED_LETTER_INSTANCES)})
 
 
 def build_instances() -> List[Dict[str, Any]]:

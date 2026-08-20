@@ -78,7 +78,9 @@ from typing import Any, Dict, Iterable, List, NamedTuple, Optional, Sequence, Tu
 
 from constraints.registry import TYPES, family_of, validate_constraint
 
-from scenarios.instances import INSTANCES, INSTANCE_META
+from scenarios.instances import (INSTANCES, INSTANCE_META,
+                                 PERMITTED_BANNED_LETTERS,
+                                 RETIRED_LETTER_INSTANCES)
 from scenarios.lexicons import GENERIC, LEXICONS, members_present
 from scenarios.pressure import NUDGES
 from scenarios.reachability import (build_witness, content_words, find_conflicts,
@@ -91,8 +93,16 @@ __all__ = [
     "MIN_SCENARIOS",
     "MIN_ADVERSARIAL_SHARE",
     "MIN_CHARACTER_CONSTRAINT_SHARE",
+    "MIN_BANNED_LETTER_SHARE",
+    "MIN_NON_CHARACTER_CONTROL",
+    "PERMITTED_BANNED_LETTERS",
+    "RETIRED_LETTER_INSTANCES",
     "character_constraint_share",
     "carries_character_constraint",
+    "banned_letter_share",
+    "banned_letter_of",
+    "carries_banned_letter",
+    "letter_distribution",
     "MIN_PER_SPLIT",
     "MIN_LETTER_CONTENT_SHARE",
     "MIN_MARK_RATE_PER_100_CHARS",
@@ -136,25 +146,42 @@ CHARACTER_TYPES: Tuple[str, ...] = tuple(
     t for t in TYPES if family_of(t) == CHARACTER_FAMILY)
 
 #: Ladder rung ``r6-char65`` (configs/g1.json): at least this fraction of
-#: scenarios must carry a character-level constraint.
-#:
-#: WHY THIS NUMBER EXISTS AT ALL, stated here because a floor without its
-#: evidence is a preference. G1 ran the full ablation and returned ESCALATE at
-#: fail_rate 0.0884. The ablation did not fail to find difficulty -- it
-#: LOCALISED it. Across two frontier labs essentially every violation was
-#: character-level: openai violated banned_letter 39 times and no other type at
-#: all; anthropic 39 of 51. On letter-ban scenarios frontier fails 35-52%
-#: against 0.9-4.5% elsewhere, and Qwen3-1.7B fails 100% of them under all
-#: three strategies. Fail rate was FLAT across k (0.12/0.08/0.09 at k=2/3/4),
-#: so composition is not the difficulty driver the design assumed. The old
-#: corpus diluted the real effect by carrying a character constraint in only
-#: half its scenarios and a letter ban in under a quarter.
-#:
-#: The floor is enforced here, at build time, AND recomputed from the shipped
-#: JSONL by tests/test_scenarios.py AND re-derived from the corpus a run
-#: actually used by scripts/gate_check.py. Three independent derivations,
-#: because the escalation rests on this one number.
+#: scenarios must carry a character-level constraint. SUPERSEDED as the current
+#: rung by r7-hifreq below, and kept as a floor because the r6 corpus satisfied
+#: it and nothing about the new rung makes it false -- a corpus that met
+#: r7-hifreq while falling below r6-char65 would be a corpus that had quietly
+#: stopped being character-level.
 MIN_CHARACTER_CONSTRAINT_SHARE = 0.65
+
+#: Ladder rung ``r7-hifreq`` (configs/g1.json), THE CURRENT RUNG: at least this
+#: fraction of scenarios must carry a ``banned_letter`` constraint drawn from
+#: :data:`~scenarios.instances.PERMITTED_BANNED_LETTERS`.
+#:
+#: WHY THE QUANTITY CHANGED, and it is the whole point of this rung. r6-char65
+#: raised the CHARACTER-FAMILY share, and the completed r6 run then showed that
+#: the family was the wrong unit. ``banned_punctuation`` is character-level and
+#: is nearly free for frontier models (0.00-0.13 per cell); every measurable
+#: unit of difficulty sat in ``banned_letter``, and within ``banned_letter`` it
+#: scaled with the English frequency of the banned letter (see
+#: :data:`~scenarios.instances.PERMITTED_BANNED_LETTERS` for the table).
+#:
+#: The corpus fail rate the gate reads is modelled by
+#:
+#:     share * per_scenario_rate + (1 - share) * 0.01
+#:
+#: which predicted 0.144 against the 0.143 the r6 run actually returned. At the
+#: r6 corpus's 42.9% letter share and its mixed-letter rate that model tops out
+#: below the 0.20 gate; raising the share AND restricting the letters is what
+#: moves it, which is why this rung binds both and why gate_check verifies both.
+MIN_BANNED_LETTER_SHARE = 0.55
+
+#: The non-character CONTROL group. Raising the letter share must not delete the
+#: contrast that made the r6 finding legible in the first place: frontier failed
+#: letter bans 35-52% and everything else 0.9-4.5%, and that second number needs
+#: an arm big enough to carry a rate. Deliberately equal to the ticket's
+#: per-cell floor -- below 30 the control stops being a rate and becomes an
+#: anecdote.
+MIN_NON_CHARACTER_CONTROL = 30
 
 #: Distractor evidence thresholds. Two OTHER topic words in the prompt is the
 #: bar for "the task is really about this topic"; three occurrences of a banned
@@ -211,17 +238,20 @@ QUARANTINE: Dict[str, Quarantined] = {
         "scenarios whose brief collides with their own constraints.",
         "rejects the name 'Thursdays'"),
     "b05-recruitment-update": Quarantined(
-        "Task says the process applies 'from March' while c-chr-005 bans the letter "
-        "'r'. Same shape as b03: the checker rejects the month name and a month has "
-        "no synonym.",
+        "Task says the process applies 'from March' while c-chr-002 bans the letter "
+        "'a'. Same shape as b03: the checker rejects the month name and a month has "
+        "no synonym. (Re-lettered from the retired 'r' instance under r7-hifreq; "
+        "the defect is unchanged because 'March' carries an 'a' as well as an 'r'.)",
         "rejects the name 'March'"),
     "b06-landlord-socket": Quarantined(
-        "Marked adversarial on a key_term_letter distractor, but only 40.0% of the "
-        "task's content words carry the banned letter 'l' -- below "
+        "Marked adversarial on a key_term_letter distractor, but only 46.7% of the "
+        "task's content words carry the banned letter 'a' -- below "
         "MIN_LETTER_CONTENT_SHARE. Under the old rule the label rested entirely on "
         "four author-declared terms. It has no other qualifying mechanism, so it is "
         "not an adversarial scenario and shipping it would inflate the adversarial "
-        "share.",
+        "share. (Re-lettered from the retired 'l' instance under r7-hifreq, which "
+        "moved the share from 40.0% to 46.7% and left it below the floor; the "
+        "quarantine is re-proved at build time, not inherited.)",
         "no distractor pressure qualifies"),
 }
 
@@ -386,6 +416,44 @@ def character_constraint_share(scenarios: Sequence[Dict[str, Any]]) -> float:
     return n / len(scenarios)
 
 
+def banned_letter_of(constraint_ids: Iterable[str]) -> Optional[str]:
+    """The letter this scenario bans, or ``None``. Takes IDS, so it runs over a
+    row of the shipped ``corpus.jsonl`` without rebuilding anything."""
+    for cid in constraint_ids:
+        constraint = INSTANCES[cid]
+        if constraint["type"] == "banned_letter":
+            return constraint["params"]["letter"].casefold()
+    return None
+
+
+def carries_banned_letter(constraint_ids: Iterable[str]) -> bool:
+    return banned_letter_of(constraint_ids) is not None
+
+
+def banned_letter_share(scenarios: Sequence[Dict[str, Any]]) -> float:
+    """Fraction of ``scenarios`` carrying a ``banned_letter`` constraint.
+
+    THE r7-hifreq QUANTITY. Deliberately narrower than
+    :func:`character_constraint_share`: banned_punctuation is character-level
+    and nearly free, so counting the family overstates how much of the corpus
+    is doing the work the rung claims.
+    """
+    if not scenarios:
+        return 0.0
+    n = sum(1 for s in scenarios if carries_banned_letter(s["constraints"]))
+    return n / len(scenarios)
+
+
+def letter_distribution(scenarios: Sequence[Dict[str, Any]]) -> Dict[str, int]:
+    """``letter -> scenario count``, derived from the constraint ids."""
+    out: Dict[str, int] = {}
+    for scenario in scenarios:
+        letter = banned_letter_of(scenario["constraints"])
+        if letter is not None:
+            out[letter] = out.get(letter, 0) + 1
+    return dict(sorted(out.items()))
+
+
 # ==========================================================================
 # One scenario
 # ==========================================================================
@@ -427,6 +495,24 @@ def _build_one(index: int, spec: Dict[str, Any]) -> ScenarioBuild:
     for ctype in ("banned_letter", "sentence_initial_letter"):
         if types.count(ctype) > 1:
             raise GeneratorError(f"{task_id}: two {ctype} constraints in one scenario")
+
+    # Ladder rung r7-hifreq, refused per SCENARIO so the message names the task
+    # rather than reporting a corpus-level share that has drifted. A retired
+    # instance still resolves -- old run transcripts reference it -- but no
+    # scenario may carry one.
+    for constraint in constraints:
+        if constraint["type"] != "banned_letter":
+            continue
+        letter = constraint["params"]["letter"].casefold()
+        if letter in PERMITTED_BANNED_LETTERS:
+            continue
+        note = RETIRED_LETTER_INSTANCES.get(constraint["id"])
+        raise GeneratorError(
+            f"{task_id}: bans the letter {letter!r} via {constraint['id']}, outside "
+            f"the r7-hifreq permitted set {list(PERMITTED_BANNED_LETTERS)}"
+            + (f" -- {note}" if note else "")
+            + ". Re-letter the scenario; the r6 run measured the low-frequency "
+              "letters at 0.08-0.22 against 0.33-0.82 for the permitted ones")
 
     if not negative_constraints(constraints):
         raise GeneratorError(
@@ -587,6 +673,35 @@ def _corpus_invariants(scenarios: Sequence[Dict[str, Any]],
             f"character-constraint share {n_char}/{n} = {char_share:.1%} < "
             f"{MIN_CHARACTER_CONSTRAINT_SHARE:.0%} (ladder rung r6-char65)")
 
+    # Ladder rung r7-hifreq, THE CURRENT RUNG, and the two things it declares.
+    letter_share = banned_letter_share(scenarios)
+    if letter_share < MIN_BANNED_LETTER_SHARE:
+        n_letter = sum(1 for s in scenarios if carries_banned_letter(s["constraints"]))
+        problems.append(
+            f"banned-letter share {n_letter}/{n} = {letter_share:.1%} < "
+            f"{MIN_BANNED_LETTER_SHARE:.0%} (ladder rung r7-hifreq)")
+    stray_letters = sorted({letter for scenario in scenarios
+                            for letter in [banned_letter_of(scenario["constraints"])]
+                            if letter is not None
+                            and letter not in PERMITTED_BANNED_LETTERS})
+    if stray_letters:
+        problems.append(
+            f"scenarios ban letter(s) {stray_letters}, outside the r7-hifreq "
+            f"permitted set {list(PERMITTED_BANNED_LETTERS)}; a low-frequency letter "
+            "is measurably easier and dilutes the rung's own claim")
+
+    # The CONTROL arm. A share floor with no ceiling on the other side would let
+    # the corpus reach the rung by deleting the comparison that made the r6
+    # finding readable, which is the more expensive mistake of the two.
+    n_control = sum(1 for s in scenarios
+                    if not carries_character_constraint(s["constraints"]))
+    if n_control < MIN_NON_CHARACTER_CONTROL:
+        problems.append(
+            f"only {n_control} non-character control scenarios, need >= "
+            f"{MIN_NON_CHARACTER_CONTROL}; the letter-vs-everything-else contrast "
+            "is what the escalation is argued from and it needs an arm big enough "
+            "to carry a rate")
+
     # THE type-level split invariant, enforced at build time as well as tested.
     for scenario in scenarios:
         if scenario["split"] != "train":
@@ -692,6 +807,23 @@ def summarise(scenarios: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         "character_constraint_share": round(character_constraint_share(scenarios), 4),
         "character_constraint_share_floor": MIN_CHARACTER_CONSTRAINT_SHARE,
         "character_types": list(CHARACTER_TYPES),
+        # Ladder rung r7-hifreq. Published so a reader of manifest.json can see
+        # the rung's two quantities without reading this module -- and so that
+        # tests/test_scenarios.py can prove the published numbers are the real
+        # ones by recomputing them from corpus.jsonl.
+        "banned_letter_scenarios": sum(
+            1 for s in scenarios if carries_banned_letter(s["constraints"])),
+        "banned_letter_share": round(banned_letter_share(scenarios), 4),
+        "banned_letter_share_floor": MIN_BANNED_LETTER_SHARE,
+        "permitted_banned_letters": list(PERMITTED_BANNED_LETTERS),
+        # Published so the retirement is visible in the shipped artefact and not
+        # only in the source: these ids still resolve (old transcripts and the
+        # training set name them) but no scenario may carry one.
+        "retired_letter_instances": dict(sorted(RETIRED_LETTER_INSTANCES.items())),
+        "letter_distribution": letter_distribution(scenarios),
+        "non_character_control_scenarios": sum(
+            1 for s in scenarios if not carries_character_constraint(s["constraints"])),
+        "non_character_control_floor": MIN_NON_CHARACTER_CONTROL,
         "constraint_instances_used": len({cid for s in scenarios for cid in s["constraints"]}),
         # Published so a reader of manifest.json sees what was held back and
         # why, without reading this module. See QUARANTINE.

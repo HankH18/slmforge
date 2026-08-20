@@ -66,9 +66,11 @@ The previous target's pipeline was built downstream of an unproven ceiling. So:
     Python, and that bypass has defeated guards in this repo).
   * the ladder rung a run claims is verified against the eval set that run used
     (max k actually reached, adversarial share actually met, and -- where the
-    rung declares one -- the character-level constraint share actually
-    reached), because HARD_STOP is only legitimate on the last rung and because
-    a rung field nothing derives from the corpus is a claim, not a constraint.
+    rung declares them -- the character-level constraint share, the
+    BANNED-LETTER share, and that every letter ban in the corpus is drawn from
+    the rung's permitted letter set), because HARD_STOP is only legitimate on
+    the last rung and because a rung field nothing derives from the corpus is a
+    claim, not a constraint.
 
 There is deliberately NO flag that softens the threshold, and none may be added.
 The only verdict that exits 0 is PROCEED.
@@ -428,6 +430,33 @@ def load_config(path):
             raise GateError(f"{path}: ladder rung {name!r} "
                             f"min_character_constraint_share must be a number in "
                             f"[0, 1], got {describe(char_share)}")
+        # r7-hifreq. Same contract as above: OPTIONAL in shape, and meaningful
+        # only because verify_rung_against_eval_set recomputes BOTH halves from
+        # the corpus the run actually scored.
+        letter_share = rung.get("min_banned_letter_share")
+        if letter_share is not None and (not is_real_number(letter_share)
+                                         or not 0 <= letter_share <= 1):
+            raise GateError(f"{path}: ladder rung {name!r} "
+                            f"min_banned_letter_share must be a number in "
+                            f"[0, 1], got {describe(letter_share)}")
+        permitted = rung.get("permitted_banned_letters")
+        if permitted is not None:
+            if (not isinstance(permitted, list) or not permitted
+                    or not all(isinstance(x, str) and len(x) == 1 and x.isalpha()
+                               and x == x.lower() for x in permitted)
+                    or len(set(permitted)) != len(permitted)):
+                raise GateError(
+                    f"{path}: ladder rung {name!r} permitted_banned_letters must be "
+                    f"a non-empty list of distinct single lowercase letters, got "
+                    f"{describe(permitted)}")
+        if letter_share is not None and permitted is None:
+            raise GateError(
+                f"{path}: ladder rung {name!r} declares min_banned_letter_share but "
+                f"no permitted_banned_letters. The r7 finding is that a letter ban's "
+                f"difficulty scales with the letter's English frequency, so a share "
+                f"of letter bans with the letters left open is a number that can be "
+                f"met by the easy letters -- exactly the dilution the rung exists to "
+                f"stop. Declare both or neither")
     current = ladder.get("current")
     if current is not None and current not in seen:
         raise GateError(f"{path}: ladder.current {current!r} is not one of the "
@@ -1081,6 +1110,32 @@ def character_constraint_share(eval_index, instances):
     return n_char, len(eval_index)
 
 
+def banned_letter_share(eval_index, instances):
+    """``(n_scenarios banning a letter, n_scenarios, {letter: count})``.
+
+    The r7-hifreq quantity, derived from the shipped corpus and the pinned
+    instance library rather than from any manifest field. Narrower than
+    :func:`character_constraint_share` on purpose: ``banned_punctuation`` is
+    character-level and the r6 run measured it at 0.00-0.13 per frontier cell,
+    so counting the FAMILY overstates how much of the corpus carries the
+    difficulty the rung claims.
+    """
+    n_letter = 0
+    letters = {}
+    for scenario in eval_index.values():
+        for cid in scenario["constraints"]:
+            constraint = instances.get(cid)
+            if constraint is None:
+                continue          # check_constraints_resolve already refused this run
+            if constraint["type"] != "banned_letter":
+                continue
+            letter = str(constraint["params"]["letter"]).casefold()
+            letters[letter] = letters.get(letter, 0) + 1
+            n_letter += 1
+            break
+    return n_letter, len(eval_index), dict(sorted(letters.items()))
+
+
 def verify_rung_against_eval_set(rung, eval_index, instances, eval_path, errors):
     """The rung a run CLAIMS must match the corpus it actually used."""
     defn = rung["definition"]
@@ -1123,6 +1178,38 @@ def verify_rung_against_eval_set(rung, eval_index, instances, eval_path, errors)
                 f"character-level constraint, below the "
                 f"{float(required_char):.4f} that rung {rung['rung']!r} declares "
                 f"— the corpus is not the one that rung names")
+
+    # r7-hifreq: BOTH halves, because either one alone is satisfiable while the
+    # rung's claim is false. A 71% letter share built from m, p and u would meet
+    # the number and measure almost nothing (the r6 run put those letters at
+    # 0.08-0.17 per-scenario), and a permitted-letter list means nothing if only
+    # a fifth of the corpus carries a letter ban at all.
+    required_letter = defn.get("min_banned_letter_share")
+    permitted = defn.get("permitted_banned_letters")
+    if required_letter is not None or permitted is not None:
+        n_letter, _, letters = banned_letter_share(eval_index, instances)
+        observed["n_banned_letter"] = n_letter
+        observed["banned_letter_share"] = float(Fraction(n_letter, n))
+        observed["letter_distribution"] = letters
+        if required_letter is not None:
+            observed["min_banned_letter_share"] = float(required_letter)
+            if Fraction(n_letter, n) < Fraction(str(required_letter)):
+                errors.append(
+                    f"{eval_path.name}: {n_letter}/{n} = "
+                    f"{float(Fraction(n_letter, n)):.4f} of scenarios carry a "
+                    f"banned_letter constraint, below the "
+                    f"{float(required_letter):.4f} that rung {rung['rung']!r} "
+                    f"declares — the corpus is not the one that rung names")
+        if permitted is not None:
+            observed["permitted_banned_letters"] = list(permitted)
+            stray = sorted(set(letters) - set(permitted))
+            if stray:
+                errors.append(
+                    f"{eval_path.name}: scenarios ban letter(s) {stray}, which rung "
+                    f"{rung['rung']!r} does not permit (allowed: {sorted(permitted)}). "
+                    f"Letter-ban difficulty scales with the letter's English "
+                    f"frequency, so a corpus outside the declared set is not the "
+                    f"corpus that rung names")
     return observed
 
 
