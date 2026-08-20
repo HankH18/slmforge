@@ -40,6 +40,7 @@ NOTE: this reads os.environ directly and loads no dotenv. Export first:
 import argparse
 import json
 import os
+import random
 import re
 import sys
 import time
@@ -100,15 +101,39 @@ def build_prompt(strategy: str, scenario: Mapping[str, Any],
 
 
 # ---------------------------------------------------------------- generators
-def _retrying(fn, tries=3):
+# Transient provider conditions worth waiting out. A capacity 503 on a frontier
+# preview model can persist for minutes, and one raise aborts the whole cell --
+# 147 scenarios of completed work thrown away with it.
+_TRANSIENT = ("503", "UNAVAILABLE", "high demand", "429", "RESOURCE_EXHAUSTED",
+              "rate limit", "overloaded", "502", "504", "timeout", "Timeout")
+
+
+def _is_transient(exc: Exception) -> bool:
+    s = f"{type(exc).__name__}: {exc}"
+    return any(marker in s for marker in _TRANSIENT)
+
+
+def _retrying(fn, tries=3, transient_tries=8, max_sleep=60.0):
+    """Retry, waiting much longer on transient provider conditions.
+
+    A malformed request should fail fast (3 tries) so a bug surfaces immediately.
+    A 503/429 is the provider asking us to come back, so back off properly rather
+    than burning the attempt budget in four seconds and losing the cell.
+    """
     def wrapped(*a, **kw):
-        for attempt in range(tries):
+        attempt = 0
+        while True:
             try:
                 return fn(*a, **kw)
-            except Exception:  # noqa: BLE001
-                if attempt == tries - 1:
+            except Exception as exc:  # noqa: BLE001
+                attempt += 1
+                budget = transient_tries if _is_transient(exc) else tries
+                if attempt >= budget:
                     raise
-                time.sleep(2 ** attempt)
+                # jitter so parallel workers do not retry in lockstep and
+                # re-trigger the same capacity spike together
+                delay = min(max_sleep, (2 ** attempt) + random.uniform(0, 1.5))
+                time.sleep(delay)
     return wrapped
 
 
