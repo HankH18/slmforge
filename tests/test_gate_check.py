@@ -16,6 +16,7 @@ import ast
 import hashlib
 import json
 import math
+import os
 import re
 from fractions import Fraction
 from pathlib import Path
@@ -690,6 +691,104 @@ def sab_scenario_names_an_unresolvable_constraint(run_dir, best, eval_path=None,
     eval_path.write_text("".join(json.dumps(s) + "\n" for s in lines))
 
 
+
+# ------------------------------- substituting the file a cell is scored against
+def donor_run(tmp_path, scenarios, n_fail=12, name="donor"):
+    """A second, REAL run outside the run under test.
+
+    Same scenarios, same cells, same schema — but its model outputs genuinely
+    violate their constraints, so its rows survive every content check the gate
+    makes. It is the file a path substitution is trying to steal, and the reason
+    a substitution has to be caught by PATH RESOLUTION: by the time the rows are
+    read, there is nothing wrong with them.
+    """
+    d = tmp_path / name
+    d.mkdir(exist_ok=True)
+    for m in (FRONTIER_A, FRONTIER_B):
+        for s in STRATEGIES:
+            write_cell(d, scenarios, m, s, n_fail)
+    return d
+
+
+def substitute_transcripts(run_dir, model, strategy, donor, scenarios, how):
+    """Point one cell at the donor's rows by `how`, and restate its aggregate.
+
+    Every mechanism here keeps the run looking untouched from inside: the file
+    the results JSON names sits in the run directory, and the stored metrics
+    match the rows that will actually be read.
+    """
+    base = stem(model, strategy)
+    src = donor / f"{base}.transcripts.jsonl"
+    tp = run_dir / f"{base}.transcripts.jsonl"
+    if how == "symlink_file":            # the conventional name IS the symlink
+        tp.unlink()
+        tp.symlink_to(src)
+    elif how == "hardlink":              # a second name for the donor's bytes
+        tp.unlink()
+        os.link(src, tp)
+    elif how == "declared_symlink":      # an innocuous in-run name in the key
+        link = run_dir / f"{base}.audit.jsonl"
+        link.symlink_to(src)
+        rewrite_results(run_dir, model, strategy,
+                        lambda d: d.update(transcripts=link.name))
+    elif how == "symlinked_dir":         # relative, no "..", still leaves the run
+        raw = run_dir / "raw"
+        if not raw.exists():
+            raw.symlink_to(donor, target_is_directory=True)
+        rewrite_results(run_dir, model, strategy, lambda d: d.update(
+            transcripts=f"raw/{base}.transcripts.jsonl"))
+    else:                                 # pragma: no cover - test bug
+        raise AssertionError(how)
+    rows = [json.loads(ln) for ln in src.read_text().splitlines() if ln.strip()]
+    restate_aggregate(run_dir, model, strategy, rows, scenarios)
+
+
+SUBSTITUTIONS = ("symlink_file", "declared_symlink", "symlinked_dir", "hardlink")
+
+
+def sab_transcripts_symlinked_to_a_donor_file(run_dir, best, tmp_path=None,
+                                              scenarios=None, **_):
+    substitute_transcripts(run_dir, *best, donor_run(tmp_path, scenarios), scenarios,
+                           "symlink_file")
+
+
+def sab_transcripts_declared_through_a_symlinked_dir(run_dir, best, tmp_path=None,
+                                                     scenarios=None, **_):
+    substitute_transcripts(run_dir, *best, donor_run(tmp_path, scenarios), scenarios,
+                           "symlinked_dir")
+
+
+def sab_transcripts_hardlinked_to_a_donor_file(run_dir, best, tmp_path=None,
+                                               scenarios=None, **_):
+    substitute_transcripts(run_dir, *best, donor_run(tmp_path, scenarios), scenarios,
+                           "hardlink")
+
+
+def sab_results_json_symlinked_out_of_the_run(run_dir, best, tmp_path=None,
+                                              scenarios=None, **_):
+    """The summary itself comes from another run; only its NAME is in this one."""
+    donor = donor_run(tmp_path, scenarios)
+    base = stem(*best)
+    rp = run_dir / f"{base}.results.json"
+    rp.unlink()
+    rp.symlink_to(donor / f"{base}.results.json")
+
+
+def sab_manifest_symlinked_out_of_the_run(run_dir, best, tmp_path=None, **_):
+    """The manifest sets the ladder rung, so it decides ESCALATE vs HARD_STOP."""
+    foreign = tmp_path / "foreign_g1_table.json"
+    foreign.write_text(json.dumps({"run_id": "g1", "ladder_rung": LAST_RUNG}))
+    p = run_dir / "g1_table.json"
+    p.unlink()
+    p.symlink_to(foreign)
+
+
+def sab_two_cells_scoring_one_transcript_file(run_dir, best, **_):
+    """One row set counted as two cells, via a second cell's transcripts key."""
+    other = run_dir / f"{stem(FRONTIER_A, 'few_shot')}.transcripts.jsonl"
+    rewrite_results(run_dir, *best, lambda d: d.update(transcripts=other.name))
+
+
 SABOTAGE = [
     # (label, mutation, a substring of the error THIS guard must produce)
     ("stored aggregate inflated above its own rows", sab_inflate_stored_aggregate,
@@ -753,6 +852,19 @@ SABOTAGE = [
     ("a scenario naming a constraint no library holds",
      sab_scenario_names_an_unresolvable_constraint,
      "not in the pinned instance library"),
+    # THE PATH THE REPAIR OPENED — the file scored must be the file shipped
+    ("the conventional transcripts file replaced by a symlink out of the run",
+     sab_transcripts_symlinked_to_a_donor_file, "escapes the run directory"),
+    ("a declared transcripts path that hops through a symlinked directory",
+     sab_transcripts_declared_through_a_symlinked_dir, "escapes the run directory"),
+    ("transcripts hard-linked to another run's rows",
+     sab_transcripts_hardlinked_to_a_donor_file, "is a hard link"),
+    ("a results JSON that is a symlink to another run's summary",
+     sab_results_json_symlinked_out_of_the_run, "escapes the run directory"),
+    ("a run manifest symlinked to another run's manifest",
+     sab_manifest_symlinked_out_of_the_run, "escapes the run directory"),
+    ("one transcripts file scored as two cells",
+     sab_two_cells_scoring_one_transcript_file, "cannot be two cells"),
 ]
 
 
@@ -834,6 +946,120 @@ def test_a_fully_compliant_run_cannot_fabricate_its_way_to_a_proceed(tmp_path, c
         "failures it invented")
     assert "the stored verdict is fabricated" in err
     assert not (run_dir / "gate_report.json").exists()
+
+
+@pytest.mark.parametrize("how", SUBSTITUTIONS)
+def test_a_fully_compliant_run_cannot_substitute_its_way_to_a_proceed(tmp_path, capsys,
+                                                                     how):
+    """THE second way to fake a ceiling: keep honest rows, score somebody else's.
+
+    Every model output in this run genuinely satisfies every constraint, so R6's
+    ceiling claim is FALSE for it — the honest verdict is ESCALATE at fail_rate
+    0.0000. The run then points each cell at a DONOR run's rows (30% genuine
+    failures) without touching anything the gate looks at inside a row: the
+    donor's verdicts are real, its coverage is exact, and the stored aggregates
+    are restated to match. Only resolving the path can see it.
+
+    Every mechanism here defeated the previous check, which tested a declared
+    path lexically (`is_absolute()` / `".." in parts`) and nothing else: a
+    symlink, a symlink named in the transcripts key, a relative path through a
+    symlinked directory, and a hard link all satisfy it. Live, through the real
+    CLI, they turned `ESCALATE, adherence 1.0000` into `exit 0, PROCEED,
+    fail_rate 0.3000`, with the report recording the innocuous in-run filename.
+    """
+    run_dir, cfg, _, scenarios = build_run(tmp_path, best_fail=0, other_fails=(0, 0),
+                                           base_fail=0)
+    assert run_gate(run_dir, cfg) == G.EXIT_ESCALATE, "control: the truth is 0.0000"
+    control = read_report(run_dir)
+    assert control["gate_fail_rate"] == 0.0
+    (run_dir / "gate_report.json").unlink()
+    capsys.readouterr()
+
+    donor = donor_run(tmp_path, scenarios, n_fail=12)
+    for model in (FRONTIER_A, FRONTIER_B):
+        for strategy in STRATEGIES:
+            substitute_transcripts(run_dir, model, strategy, donor, scenarios, how)
+
+    code = run_gate(run_dir, cfg)
+    err = capsys.readouterr().err
+    assert code == G.EXIT_INVALID, (
+        f"{how}: a run whose outputs genuinely comply was rated {code} on another "
+        f"run's rows")
+    assert "escapes the run directory" in err or "is a hard link" in err
+    assert not (run_dir / "gate_report.json").exists()
+
+
+def test_the_report_names_the_file_actually_scored_not_the_name_it_was_given(tmp_path):
+    """The audit trail must survive a reader who checks it.
+
+    A path the gate accepted still deserves to be recorded as what it resolved
+    to, with a content hash, so 'this cell was scored against these bytes' is
+    checkable after the fact instead of resting on a filename.
+    """
+    run_dir, cfg, _, _ = build_run(tmp_path, best_fail=10)
+    assert run_gate(run_dir, cfg) == G.EXIT_PROCEED
+    report = read_report(run_dir)
+
+    for cell in report["cells"]:
+        tp = Path(cell["transcripts_jsonl_path"])
+        rp = Path(cell["results_json_path"])
+        assert tp.is_absolute() and rp.is_absolute()
+        assert tp == tp.resolve() and rp == rp.resolve(), "a recorded path is resolved"
+        assert tp.parent == run_dir.resolve(), "the file scored lives in the run"
+        assert cell["transcripts_jsonl_sha256"] == \
+            hashlib.sha256(tp.read_bytes()).hexdigest()
+        assert cell["results_json_sha256"] == \
+            hashlib.sha256(rp.read_bytes()).hexdigest()
+
+    # and the hash tracks the bytes, rather than being decoration
+    best = next(c for c in report["cells"] if c["model"] == FRONTIER_A
+                and c["strategy"] == "zero_shot")
+    path, rows = read_rows(run_dir, FRONTIER_A, "zero_shot")
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == \
+        best["transcripts_jsonl_sha256"]
+
+
+def test_a_run_directory_reached_through_a_symlink_is_still_rated(tmp_path):
+    """Containment must not become 'no symlink anywhere'.
+
+    The run dir itself is resolved first, so pointing the CLI at an alias for it
+    is ordinary usage — every file inside is still contained by the real dir.
+    """
+    run_dir, cfg, _, _ = build_run(tmp_path, best_fail=10)
+    alias = tmp_path / "alias_run"
+    alias.symlink_to(run_dir, target_is_directory=True)
+
+    assert run_gate(alias, cfg) == G.EXIT_PROCEED
+    report = read_report(run_dir)
+    assert report["run_dir"] == str(run_dir.resolve())
+    assert report["gate_fail_rate"] == pytest.approx(0.25)
+
+
+def test_a_repo_relative_pinned_path_may_not_symlink_out_of_the_repo(tmp_path,
+                                                                     monkeypatch):
+    """The eval set and the instance library are resolved the same way.
+
+    'Repo-relative by contract' is not true of a checked-in symlink that leaves
+    the tree, and the corpus is the other half of every number the gate reports.
+    """
+    fake_repo = tmp_path / "repo"
+    fake_repo.mkdir()
+    outside = tmp_path / "outside.jsonl"
+    make_eval_set(outside, n=30)
+    (fake_repo / "corpus.jsonl").symlink_to(outside)
+    honest = fake_repo / "honest.jsonl"
+    make_eval_set(honest, n=30)
+    monkeypatch.setattr(G, "REPO_ROOT", fake_repo)
+
+    with pytest.raises(G.GateError) as exc:
+        G.resolve_pinned_path("corpus.jsonl", "eval set")
+    assert "escapes" in str(exc.value) and "repo root" in str(exc.value)
+
+    # the honest pin still resolves, and resolves to a real path
+    assert G.resolve_pinned_path("honest.jsonl", "eval set") == honest.resolve()
+    # an ABSOLUTE pin is the config naming a location outright: allowed, and
+    # recorded resolved rather than second-guessed
+    assert G.resolve_pinned_path(str(outside), "eval set") == outside.resolve()
 
 
 def test_a_single_forged_row_is_enough_to_make_the_run_unratable(tmp_path, capsys):

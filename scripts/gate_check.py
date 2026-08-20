@@ -47,6 +47,20 @@ The previous target's pipeline was built downstream of an unproven ceiling. So:
     different constraint instance library) is an ERROR, not an override, and
     the content hash of the corpus actually scored is written into the report
     so the reading stays auditable after the fact.
+  * every path the gate READS is resolved, and the resolved path must lie inside
+    the tree it claims to come from: a run's transcripts, results JSON and
+    manifest inside the resolved run directory, a repo-relative pinned corpus
+    inside the repo. A lexical check is not containment — `is_absolute()` and
+    `".." in parts` are both clean for a symlink, for a hop through a symlinked
+    directory, and for a hard link, and all three let a cell be scored against a
+    donor run's rows while the report records an innocuous in-run filename. The
+    RESOLVED path and the sha256 of every file scored go into the report, so the
+    audit trail describes the bytes rather than the name they were given.
+    HONEST LIMIT: this cannot detect a COPY of another run's transcripts, and
+    nothing available to this gate can — a copy is byte-identical to a file the
+    run wrote itself. What is provable about the rows is proved (checkers re-run,
+    coverage exact, hashes recorded); "these are the rows the model produced" is
+    not among the things a static verifier can establish.
   * booleans are not numbers and strings are not numbers. Every stored scalar is
     type-checked before it is compared (`isinstance(True, int)` is True in
     Python, and that bypass has defeated guards in this repo).
@@ -202,6 +216,71 @@ def sha256_of(path):
     return h.hexdigest()
 
 
+def is_within(real, base_real):
+    """Is `real` the base directory itself or something underneath it?
+
+    Both arguments must already be RESOLVED. Compared component-wise, never as
+    strings: "/runs/g1-donor".startswith("/runs/g1") is True and would let a
+    sibling directory read as contained.
+    """
+    return real == base_real or base_real in real.parents
+
+
+def contained_path(cand, base_real, where, label, base_label):
+    """Resolve `cand` and require the REAL file to live under `base_real`.
+
+    A lexical check is NOT containment. `p.is_absolute()` is False and `".."
+    not in p.parts` is True for `donor.jsonl` when `donor.jsonl` is a SYMLINK,
+    and for `sub/rows.jsonl` when `sub` is a symlinked directory — both resolve
+    anywhere on the filesystem. Only resolving the path and testing the result
+    against the resolved base makes the containment claim true.
+
+    Returns the resolved path; raises GateError when it escapes.
+    """
+    real = Path(cand).resolve()
+    if not is_within(real, base_real):
+        raise GateError(
+            f"{where}: {label} resolves to {real}, which escapes "
+            f"the {base_label} {base_real} (a symlink, or a symlinked parent "
+            f"directory, leaves the tree while the name stays innocuous). The "
+            f"gate scores the files shipped with a run, never a file from "
+            f"somewhere else on disk, and it will not record an in-tree name for "
+            f"an out-of-tree file")
+    return real
+
+
+def require_sole_named_file(real, where, label):
+    """A run artifact must be a file with exactly ONE name on disk.
+
+    Containment stops a symlink from leaving the run tree; it cannot see a HARD
+    LINK, which puts a second name on a donor run's bytes INSIDE the run
+    directory and resolves to itself. eval.write_outputs creates its files with
+    open(..., "w"), so every honest run artifact has st_nlink == 1 (verified
+    against every file in runs/ before this check was added); more than one name
+    means the bytes the gate is about to score are also somebody else's file.
+
+    HONEST LIMIT, stated so nobody reads more into a PROCEED than is there: this
+    does NOT detect a byte-for-byte COPY of another run's transcripts, and
+    nothing available to this gate can. A copy is indistinguishable from a file
+    the run produced itself. What the gate can prove about the rows it scores is
+    what it does prove — the checkers are re-run over every output, coverage is
+    exact, and the resolved path and sha256 of every file are in the report.
+    """
+    if not real.is_file():
+        return real
+    nlink = real.stat().st_nlink
+    if nlink != 1:
+        raise GateError(
+            f"{where}: {label} is a hard link — the same bytes answer to {nlink} "
+            f"names on disk, at least one of which the gate cannot see. A run "
+            f"writes its own artifacts (eval.write_outputs opens a new file per "
+            f"cell, st_nlink == 1), so a second name means these rows are shared "
+            f"with a file somewhere else and containment cannot tell you where. "
+            f"The gate refuses to rate it rather than record an in-run name for "
+            f"bytes it cannot show are this run's")
+    return real
+
+
 def resolve_pinned_path(raw, label):
     """Resolve a CONFIG-pinned data path. Repo-relative or absolute, nothing else.
 
@@ -210,6 +289,13 @@ def resolve_pinned_path(raw, label):
     was invoked from and on what the run under test happened to ship. A pinned
     corpus resolves to exactly one place: the repo root (config paths are
     repo-relative by contract) or the absolute path given.
+
+    The returned path is RESOLVED, so the report names the file that was really
+    read. A repo-relative pin must also STAY in the repo once resolved: "pinned
+    by the config, repo-relative by contract" is not true of a checked-in
+    symlink that leaves the tree. An absolute pin is the config author naming a
+    location outright — that is a deliberate, reviewable choice, so it is
+    allowed and recorded (resolved, with its sha256) rather than second-guessed.
     """
     p = Path(raw)
     cand = p if p.is_absolute() else REPO_ROOT / p
@@ -218,15 +304,22 @@ def resolve_pinned_path(raw, label):
             f"{label} {raw!r} not found at {cand}. The gate cannot verify a run "
             f"against a corpus it cannot read, so it fails rather than rating a "
             f"slice (config paths are repo-relative to {REPO_ROOT})")
-    return cand
+    if p.is_absolute():
+        return cand.resolve()
+    return contained_path(cand, REPO_ROOT.resolve(), label,
+                          f"the repo-relative pinned path {raw!r}", "repo root")
 
 
-def resolve_transcripts_path(raw, run_dir, where):
+def resolve_transcripts_path(raw, run_dir_real, where):
     """A results JSON may name its transcripts, but only INSIDE its own run dir.
 
     eval.write_outputs never emits this key (it uses the stem convention), so a
-    declared path is pure attack surface: an absolute path or a `..` hop lets a
-    cell be scored against a transcript file from some other run.
+    declared path is pure attack surface: an absolute path, a `..` hop, a
+    symlink, or a hop through a symlinked directory all let a cell be scored
+    against a transcript file from some other run while the report records the
+    innocuous in-run name it was given.
+
+    Returns the RESOLVED path, or None when nothing is there.
     """
     p = Path(raw)
     if p.is_absolute() or ".." in p.parts:
@@ -234,8 +327,12 @@ def resolve_transcripts_path(raw, run_dir, where):
             f"{where}: declares transcripts {raw!r}, which escapes the run "
             f"directory. A cell is scored against transcripts shipped with it, "
             f"never against a file from somewhere else on disk")
-    cand = Path(run_dir) / p
-    return cand if cand.exists() else None
+    cand = run_dir_real / p
+    if not cand.exists():
+        return None
+    real = contained_path(cand, run_dir_real, where, f"declared transcripts {raw!r}",
+                          "run directory")
+    return require_sole_named_file(real, where, f"declared transcripts {raw!r}")
 
 
 def provider_of(spec):
@@ -458,7 +555,7 @@ def compare_checker_results(stored, derived, where, sid, errors):
 
 
 def score_cell(results_path, transcripts_path, model, strategy, eval_index,
-               instances, errors):
+               instances, errors, declared_transcripts=None):
     """Recompute this cell from its raw rows. Returns a stats dict or None.
 
     Nothing programmatic in the row is trusted: the checker verdicts are re-run
@@ -718,73 +815,120 @@ def score_cell(results_path, transcripts_path, model, strategy, eval_index,
         "robustness": float(robustness) if robustness is not None else None,
         "n_fail_from_checkers": n_checker_fail,
         "n_fail_from_quality_only": n_quality_only_fail,
+        # The audit trail describes the file that was actually scored: the
+        # RESOLVED path plus a content hash, not the name the run gave it. A
+        # reader can re-hash both files and get the same numbers back.
         "results_json": results_path.name,
+        "results_json_path": str(results_path),
+        "results_json_sha256": sha256_of(results_path),
         "transcripts_jsonl": transcripts_path.name,
+        "transcripts_jsonl_path": str(transcripts_path),
+        "transcripts_jsonl_sha256": sha256_of(transcripts_path),
+        "transcripts_declared_as": declared_transcripts,
         "_adherence_exact": adherence,
         "_fail_rate_exact": fail_rate,
     }
 
 
-def load_cells(run_dir, cfg, eval_index, instances, errors):
-    """Every *.results.json in run_dir, recomputed. Returns {(model, strategy): stats}."""
-    paths = sorted(run_dir.glob("*.results.json"))
+def load_cells(run_dir_real, cfg, eval_index, instances, errors):
+    """Every *.results.json in the run dir, recomputed. {(model, strategy): stats}.
+
+    `run_dir_real` is already resolved, and EVERY path read below is resolved and
+    required to stay inside it — the results JSON itself as much as the
+    transcripts it points at. One escapable resolution site is a reason to
+    distrust its siblings, not a reason to fix only the one that was demoed.
+    """
+    paths = sorted(run_dir_real.glob("*.results.json"))
     if not paths:
-        errors.append(f"{run_dir}: no *.results.json — nothing to gate on. Run "
+        errors.append(f"{run_dir_real}: no *.results.json — nothing to gate on. Run "
                       f"run_ablation.py --config configs/g1.json first")
         return {}
 
     allowed_models = set(cfg["models"]["frontier"]) | {cfg["models"]["local_base"]}
     cells = {}
-    for rp in paths:
-        results = read_json(rp)
-        if not isinstance(results, dict):
-            errors.append(f"{rp.name}: results is not a JSON object")
-            continue
-        model = results.get("model")
-        strategy = results.get("strategy")
-        if not is_nonempty_str(model) or not is_nonempty_str(strategy):
-            errors.append(f"{rp.name}: model/strategy must be non-empty strings, "
-                          f"got model={describe(model)} strategy={describe(strategy)}")
-            continue
-        # classification first: an unclassifiable provider gets told so, rather
-        # than being reported as merely "unpinned"
-        if classify_provider(model) == "unknown":
-            errors.append(f"{rp.name}: model {model!r} is neither a frontier family "
-                          f"{sorted(FRONTIER_PROVIDERS)} nor the local base "
-                          f"{sorted(LOCAL_BASE_PROVIDERS)}; it cannot be classified")
-            continue
-        if model not in allowed_models:
-            errors.append(f"{rp.name}: model {model!r} is not one of the models "
-                          f"configs/g1.json pins ({sorted(allowed_models)}) — a cell "
-                          f"from an unpinned model cannot feed the gate")
-            continue
-        if strategy not in EXPECTED_STRATEGIES:
-            errors.append(f"{rp.name}: strategy {strategy!r} is not one of "
-                          f"{list(EXPECTED_STRATEGIES)}")
-            continue
-        key = (model, strategy)
-        if key in cells:
-            errors.append(f"{rp.name}: duplicate cell for {model} x {strategy}")
-            continue
-
-        raw_tp = results.get("transcripts")
-        if is_nonempty_str(raw_tp):
-            tp = resolve_transcripts_path(raw_tp, run_dir, rp.name)
-            if tp is None:
-                errors.append(f"{rp.name}: declares transcripts {raw_tp!r}, which "
-                              f"does not exist")
-                continue
-        else:
-            tp = rp.parent / (rp.name[:-len(".results.json")] + ".transcripts.jsonl")
-            if not tp.exists():
-                errors.append(f"{tp.name}: missing — the gate re-derives every "
-                              f"aggregate from raw transcript rows and refuses to "
-                              f"rate a cell that ships only its summary")
-                continue
-
-        stats = score_cell(rp, tp, model, strategy, eval_index, instances, errors)
-        cells[key] = stats  # None marks a cell that failed; grid check still sees it
+    scored = {}          # resolved transcripts path -> the cell that already used it
+    for listed in paths:
+        try:
+            _load_one_cell(listed, run_dir_real, allowed_models, eval_index,
+                           instances, cells, scored, errors)
+        except GateError as exc:
+            # A cell whose paths do not resolve inside the run, or whose files
+            # cannot be read, is ONE reported problem — not a traceback that
+            # hides the other eight cells' problems.
+            errors.append(str(exc))
     return cells
+
+
+def _load_one_cell(listed, run_dir_real, allowed_models, eval_index, instances,
+                   cells, scored, errors):
+    """One *.results.json -> one entry in `cells` (None if it failed to score)."""
+    tag = listed.name
+    rp = contained_path(listed, run_dir_real, tag, f"results JSON {tag!r}",
+                        "run directory")
+    require_sole_named_file(rp, tag, f"results JSON {tag!r}")
+    results = read_json(rp)
+    if not isinstance(results, dict):
+        errors.append(f"{tag}: results is not a JSON object")
+        return
+    model = results.get("model")
+    strategy = results.get("strategy")
+    if not is_nonempty_str(model) or not is_nonempty_str(strategy):
+        errors.append(f"{tag}: model/strategy must be non-empty strings, "
+                      f"got model={describe(model)} strategy={describe(strategy)}")
+        return
+    # classification first: an unclassifiable provider gets told so, rather
+    # than being reported as merely "unpinned"
+    if classify_provider(model) == "unknown":
+        errors.append(f"{tag}: model {model!r} is neither a frontier family "
+                      f"{sorted(FRONTIER_PROVIDERS)} nor the local base "
+                      f"{sorted(LOCAL_BASE_PROVIDERS)}; it cannot be classified")
+        return
+    if model not in allowed_models:
+        errors.append(f"{tag}: model {model!r} is not one of the models "
+                      f"configs/g1.json pins ({sorted(allowed_models)}) — a cell "
+                      f"from an unpinned model cannot feed the gate")
+        return
+    if strategy not in EXPECTED_STRATEGIES:
+        errors.append(f"{tag}: strategy {strategy!r} is not one of "
+                      f"{list(EXPECTED_STRATEGIES)}")
+        return
+    key = (model, strategy)
+    if key in cells:
+        errors.append(f"{tag}: duplicate cell for {model} x {strategy}")
+        return
+
+    raw_tp = results.get("transcripts")
+    if is_nonempty_str(raw_tp):
+        tp = resolve_transcripts_path(raw_tp, run_dir_real, tag)
+        if tp is None:
+            errors.append(f"{tag}: declares transcripts {raw_tp!r}, which "
+                          f"does not exist")
+            return
+    else:
+        # The stem convention pairs by the name the RUN DIRECTORY lists, not by
+        # whatever a symlinked results JSON happens to resolve to.
+        stem_tp = run_dir_real / (tag[:-len(".results.json")] + ".transcripts.jsonl")
+        if not stem_tp.exists():
+            errors.append(f"{stem_tp.name}: missing — the gate re-derives every "
+                          f"aggregate from raw transcript rows and refuses to "
+                          f"rate a cell that ships only its summary")
+            return
+        tp = contained_path(stem_tp, run_dir_real, tag, "transcripts "
+                            f"{stem_tp.name!r}", "run directory")
+        require_sole_named_file(tp, tag, f"transcripts {stem_tp.name!r}")
+
+    # Two cells that resolve to the SAME rows are one measurement counted twice,
+    # however differently the two files are named.
+    if tp in scored:
+        m, s = scored[tp]
+        errors.append(f"{tag}: transcripts resolve to {tp}, already scored as the "
+                      f"{m} x {s} cell — one row set cannot be two cells")
+        return
+    scored[tp] = key
+
+    cells[key] = score_cell(rp, tp, model, strategy, eval_index, instances, errors,
+                            declared_transcripts=raw_tp if is_nonempty_str(raw_tp)
+                            else None)
 
 
 def check_grid(cells, cfg, errors):
@@ -938,14 +1082,23 @@ def build_report(run_dir, config_path, cli_rung=None):
     run_dir = Path(run_dir)
     if not run_dir.is_dir():
         return None, [f"{run_dir} does not exist or is not a directory"]
+    # Every path the gate reads is measured against the RESOLVED run directory,
+    # so a symlinked run dir is fine and a symlink that LEAVES it is not.
+    run_dir_real = run_dir.resolve()
 
     cfg = load_config(config_path)
 
     manifest, manifest_name = None, None
     for name in MANIFEST_NAMES:
-        p = run_dir / name
+        p = run_dir_real / name
         if p.exists():
-            manifest, manifest_name = read_json(p), name
+            # The manifest sets the ladder rung, and the rung decides whether a
+            # sub-threshold run ESCALATEs or HARD_STOPs. It is as much an input
+            # as the transcripts are, so it is contained the same way.
+            manifest_path = contained_path(p, run_dir_real, name,
+                                           f"run manifest {name!r}", "run directory")
+            require_sole_named_file(manifest_path, name, f"run manifest {name!r}")
+            manifest, manifest_name = read_json(manifest_path), name
             break
     if manifest is not None and not isinstance(manifest, dict):
         return None, [f"{manifest_name}: run manifest is not a JSON object"]
@@ -968,7 +1121,7 @@ def build_report(run_dir, config_path, cli_rung=None):
     if rung is not None:
         observed = verify_rung_against_eval_set(rung, eval_index, eval_path, errors)
 
-    cells = load_cells(run_dir, cfg, eval_index, instances, errors)
+    cells = load_cells(run_dir_real, cfg, eval_index, instances, errors)
     check_grid(cells, cfg, errors)
 
     good = {k: v for k, v in cells.items() if v is not None}
@@ -1005,7 +1158,7 @@ def build_report(run_dir, config_path, cli_rung=None):
         "gate": "G1",
         "spec_refs": ["docs/PIVOT_SPEC.md R6", "docs/PIVOT_SPEC.md S1"],
         "generated_utc": datetime.now(timezone.utc).isoformat(),
-        "run_dir": str(run_dir),
+        "run_dir": str(run_dir_real),
         "config": str(config_path),
         "eval_set": str(eval_path),
         "eval_set_sha256": eval_sha256,

@@ -39,3 +39,23 @@ python archive/abstainer/run_ablation.py \
 the 59.4% floor a model gets for refusing everything, at false-refusal rate 0.0%.
 The small model knew when to abstain; it could not copy spans verbatim. The
 deficit was citation fidelity, not judgment.
+
+## Reproducing this track's tests
+
+```bash
+python -m pytest archive/abstainer/tests -q     # 38 passed
+```
+
+`tests/conftest.py` loads **this directory's** `eval.py` under the name `eval`, so
+these bind the abstainer rubric (`c0adb876c3e6c4c9`) rather than the live harness,
+which now scores a different behavior. Covered: the rubric hash pin, `parse_output`
+and every scoring branch, the five mock behaviors on the real 32 scenarios
+(oracle 1.000, always_refuse 0.594/FRR 1.0, nonverbatim 0, format_breaker
+malformed=32, bad_entail entailment_fail=13), prompt construction per strategy,
+and the CLI end to end including `--compare-with`.
+
+`tests_superseded/` holds the abstainer's *tooling* tests — the phase checkers,
+the datagen pipeline, the eval-set preflight. They assert against the pre-pivot
+repo layout (a root `scripts/` and `datagen/`, and a README describing the
+abstainer), so they no longer run. Kept for reference rather than deleted; they
+are not part of the reproducibility claim above.

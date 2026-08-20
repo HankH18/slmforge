@@ -403,11 +403,29 @@ def _is_letter(ch: str) -> bool:
 #: not a letter -- so it still folds to nothing and "Zoom™" still passes a ban
 #: on 't' (fx-character-19/20).
 #:
-#: DERIVATION (run once, pasted here as data): every non-letter codepoint whose
-#: unicode NAME ends in ``LATIN {CAPITAL,SMALL} LETTER <X>`` and whose NFKD
-#: recovers <X>. Exactly 133 characters in Unicode 14.0, in seven contiguous
-#: runs, all category So. ``test_enclosed_letterform_ranges_match_their_unicode
-#: _derivation`` re-runs the derivation and fails if the table drifts from it.
+#: DERIVATION (run once, pasted here as data): every codepoint of general
+#: category So whose unicode NAME says it is one named Latin letter -- the name
+#: ends in ``LATIN {CAPITAL,SMALL} LETTER <X>``, or is ``REGIONAL INDICATOR
+#: SYMBOL LETTER <X>``, which is the same statement in the flag block's wording.
+#: 213 characters in Unicode 14.0.
+#:
+#: THE DERIVATION USED TO REQUIRE AN NFKD DECOMPOSITION and that dropped 80 of
+#: them on the floor: ``NEGATIVE CIRCLED``/``NEGATIVE SQUARED`` capitals and the
+#: regional indicators have no decomposition at all, so "🅐pple" walked past a
+#: ban on 'a' while "Ⓐpple" was correctly caught -- the identical ruling
+#: enforced for one enclosure style and not the next. Having a decomposition is
+#: a property of the unicode tables, not of what a reader sees on the page, so
+#: it cannot be what decides. The letter is now read off the NAME for every
+#: entry (``_ENCLOSED_LETTERFORM_TO_LATIN`` below), which is the same evidence
+#: the ruling already claimed to use.
+#:
+#: COST ACCEPTED, and it is a real one: the regional indicators are the halves a
+#: FLAG emoji is built from, so "🇺🇸" now folds to "US" and fails a ban on 'u' or
+#: 's'. Nobody reads a flag as two letters. It is admitted anyway because its
+#: own unicode name says LETTER U, because a single unpaired indicator renders
+#: as a boxed capital, and because leaving it out leaves a one-codepoint
+#: evasion open. Flagged for sign-off: if it is ruled the wrong way round,
+#: delete the ``REGIONAL INDICATOR`` row -- nothing else depends on it.
 ENCLOSED_LETTERFORM_RANGES: Tuple[Tuple[int, int, str], ...] = (
     (0x249C, 0x24B5, "PARENTHESIZED LATIN SMALL LETTER A..Z"),
     (0x24B6, 0x24CF, "CIRCLED LATIN CAPITAL LETTER A..Z"),
@@ -416,11 +434,45 @@ ENCLOSED_LETTERFORM_RANGES: Tuple[Tuple[int, int, str], ...] = (
     (0x1F12A, 0x1F12A, "TORTOISE SHELL BRACKETED LATIN CAPITAL LETTER S"),
     (0x1F12B, 0x1F12C, "CIRCLED ITALIC LATIN CAPITAL LETTER C..R"),
     (0x1F130, 0x1F149, "SQUARED LATIN CAPITAL LETTER A..Z"),
+    (0x1F150, 0x1F169, "NEGATIVE CIRCLED LATIN CAPITAL LETTER A..Z"),
+    (0x1F170, 0x1F18A, "NEGATIVE SQUARED LATIN CAPITAL LETTER A..Z, then "
+                       "CROSSED NEGATIVE SQUARED LATIN CAPITAL LETTER P"),
+    (0x1F1A5, 0x1F1A5, "SQUARED LATIN SMALL LETTER D"),
+    (0x1F1E6, 0x1F1FF, "REGIONAL INDICATOR SYMBOL LETTER A..Z"),
 )
 
 _ENCLOSED_LETTERFORMS = frozenset(
     chr(cp) for low, high, _name in ENCLOSED_LETTERFORM_RANGES
     for cp in range(low, high + 1))
+
+#: A2: the enclosed letterform -> the letter it encloses, read off each
+#: character's own unicode NAME rather than off its NFKD decomposition, because
+#: 80 of the 213 have no decomposition and the name is the evidence the ruling
+#: rests on. Built once at import over the pasted ranges above.
+_ENCLOSED_LETTERFORM_NAME_RE = re.compile(
+    r"^(?:.*\s)?LATIN (CAPITAL|SMALL) LETTER ([A-Z])$")
+_REGIONAL_INDICATOR_NAME_RE = re.compile(r"^REGIONAL INDICATOR SYMBOL LETTER ([A-Z])$")
+
+
+def _enclosed_letterform_map() -> Dict[str, str]:
+    mapping: Dict[str, str] = {}
+    for ch in _ENCLOSED_LETTERFORMS:
+        try:
+            name = unicodedata.name(ch)
+        except ValueError:                   # unassigned in this unicode build
+            continue
+        match = _ENCLOSED_LETTERFORM_NAME_RE.match(name)
+        if match:
+            letter = match.group(2)
+            mapping[ch] = letter if match.group(1) == "CAPITAL" else letter.lower()
+            continue
+        match = _REGIONAL_INDICATOR_NAME_RE.match(name)
+        if match:                            # drawn as a boxed capital
+            mapping[ch] = match.group(1)
+    return mapping
+
+
+_ENCLOSED_LETTERFORM_TO_LATIN: Dict[str, str] = _enclosed_letterform_map()
 
 
 def _source_is_a_letter(ch: str) -> bool:
@@ -848,6 +900,11 @@ def _fold_char(ch: str, casefold: bool) -> str:
         piece = "".join(c for c in piece if not _is_invisible(c))
     if BANNED_LETTER_FOLD_DIACRITICS:
         piece = "".join(c for c in piece if not unicodedata.combining(c))
+    # An enclosed letterform whose NFKD did NOT recover its letter (🅐, 🅰, 🇦)
+    # is still that letter to a reader; the name-derived table supplies what the
+    # decomposition does not. Entries NFKD already handled (Ⓐ) never reach here,
+    # because ``piece`` is the decomposed "A" by now, not the enclosed source.
+    piece = "".join(_ENCLOSED_LETTERFORM_TO_LATIN.get(c, c) for c in piece)
     if FOLD_LETTERFORMS:
         piece = "".join(LETTERFORM_TO_LATIN.get(c, c) for c in piece)
     if FOLD_CONFUSABLES:
@@ -1359,69 +1416,100 @@ PERIOD_REQUIRES_TRAILING_SPACE = True
 #: A5: a '.' between two digits is a decimal point.
 DECIMAL_POINT_IS_NOT_A_TERMINATOR = True
 
-#: A5: tokens that end in '.' without ending the sentence, ALWAYS -- none of
-#: these is also an ordinary English word, so a '.' after one is never a
-#: sentence end. Compared lowercased, including the dot. A token that already
-#: contains a '.' (``e.g.``, ``U.S.``, ``a.m.``) is an abbreviation by rule and
-#: is handled CONTEXTUALLY by ``MULTI_DOT_ABBREVIATION_CAN_END_A_SENTENCE``
-#: below, so this list only needs the ordinary ones. The words that are BOTH an
-#: abbreviation and an ordinary word live in the two contextual tables below --
-#: putting them here is what let "Sam said no. Tom left." read as one sentence
-#: and made the whole constraint dodgeable (fx-str-08).
-SENTENCE_ABBREVIATIONS: Tuple[str, ...] = (
-    "mr.", "mrs.", "ms.", "dr.", "prof.", "mt.", "rev.", "hon.",
-    "jr.", "sr.", "col.", "capt.", "lt.", "sgt.", "gov.", "sen.",
-    "vs.", "approx.", "fig.", "vol.", "dept.", "inc.",
-    "ltd.", "corp.", "univ.", "ave.", "blvd.", "rd.", "sq.",
-    "jan.", "feb.", "apr.", "jun.", "jul.", "aug.",
-    "sep.", "sept.", "oct.", "nov.", "dec.",
-    "mon.", "tue.", "tues.", "wed.", "thu.", "thurs.", "fri.",
+#: A5 -- THE ABBREVIATION RULING. An abbreviation's '.' is a sentence boundary
+#: or not according to whether the abbreviation CAN END A SENTENCE. It is NOT
+#: decided by how many dots the token contains: dot-count is a proxy and it
+#: failed in BOTH directions at once.
+#:
+#:   * one dot, treated as never-final -> "Sales rose in Aug. Tom took the
+#:     account." was ONE sentence to the checker and two to every reader, so
+#:     every sentence after "Aug.", "Sept.", "Fri.", "Inc.", "Ave." went
+#:     ungraded. They COMPOSE: a response can switch the constraint off outright
+#:     in ordinary business prose, with no adversarial character anywhere.
+#:   * two dots, treated as follower-decides -> "Several teams already use it,
+#:     e.g. Tom's group in Denver." was split, and its second half "Tom's group
+#:     in Denver." was reported as a sentence beginning with T. That is a FALSE
+#:     FAIL on ordinary prose: "e.g." and "i.e." are clause-OPENING, they
+#:     introduce what follows and never end an English sentence.
+#:
+#: Both errors are expensive and in opposite directions -- one makes the
+#: constraint look easier than it is, the other harder -- and
+#: sentence_initial_letter is the HELD-OUT type whose score IS the project's
+#: generalisation claim. So the tables below are tiered by the property that
+#: actually decides, in three tiers, one rule each. Tokens are compared
+#: lowercased, dot included.
+
+#: TIER 1 -- NEVER FINAL. **A '.' after one of these is never a sentence
+#: boundary, whatever follows.** Each one introduces the thing after it (a name,
+#: an example, a figure number) and so cannot be the last token of a sentence.
+#: Multi-dot members are here BY NAME, not by dot-count: "e.g." and "i.e." are
+#: the two that used to split ordinary prose.
+#: Cost accepted and named: "as shown by Smith et al. Tom reproduced it." keeps
+#: the boundary suppressed, because "al." is listed here.
+NEVER_FINAL_ABBREVIATIONS: Tuple[str, ...] = (
+    # titles and honorifics -- always followed by the name they modify
+    "mr.", "mrs.", "ms.", "dr.", "prof.", "rev.", "hon.",
+    "jr.", "sr.", "col.", "capt.", "lt.", "sgt.", "gov.", "sen.", "mt.",
+    # reference and comparison markers -- always followed by what they point at
+    "vs.", "approx.", "fig.", "vol.", "al.",
+    # clause-OPENING connectives; these are the multi-dot false-fail carriers
+    "e.g.", "i.e.", "cf.", "viz.",
 )
 
-#: A5/fx-str-08: abbreviations that are ALSO ordinary English words. The ruling:
-#: **a '.' after one of these ends the sentence only when the token is written in
-#: its ordinary-word (lowercase) form AND the next word starts with a capital.**
-#: Defence in one line: the abbreviation form introduces the thing it modifies
-#: and is written capitalised ("St. Louis", "No. 7 Station", "Co. Ltd",
+#: TIER 2 -- CAN BE FINAL. **A '.' after one of these is a boundary exactly when
+#: the FOLLOWER begins a new sentence** (whitespace, then an uppercase letter).
+#: These really do end English sentences ("Sales rose in Aug."), and they really
+#: do continue them ("Feb. 3", "Inc. of Delaware"), so nothing about the token
+#: itself decides -- only what comes next.
+#: Residual ambiguity, stated rather than hidden: "Sales rose in Aug. Tom took
+#: it." is ambiguous to a human too. CAN-BE-FINAL plus a capitalised follower is
+#: the best rule available to a segmenter, not a perfect one; it splits "the
+#: U.S. Navy liaison" and "9 a.m. Monday morning", which are the same surface
+#: shape as "in the U.S. Tom signed for them." and "at 9 a.m. Tom never
+#: arrives." -- texts this file's own tests require to be split.
+CAN_BE_FINAL_ABBREVIATIONS: Tuple[str, ...] = (
+    # months
+    "jan.", "feb.", "apr.", "jun.", "jul.", "aug.",
+    "sep.", "sept.", "oct.", "nov.", "dec.",
+    # weekdays
+    "mon.", "tue.", "tues.", "wed.", "thu.", "thurs.", "fri.",
+    # organisation, address and unit suffixes -- they END a name
+    "inc.", "ltd.", "corp.", "univ.", "ave.", "blvd.", "rd.", "sq.", "dept.",
+    # list-closing
+    "etc.",
+    # inner-dotted members, listed by name for the auditor; any OTHER inner-
+    # dotted token ("U.S.A.", "Ph.D.") gets this same rule by default below.
+    "u.s.", "u.k.", "a.m.", "p.m.",
+)
+
+#: TIER 3 -- CAN BE FINAL ONLY IN ITS ORDINARY-WORD FORM. These are abbreviations
+#: that are ALSO ordinary English words. **A '.' after one of these is a boundary
+#: when the token is written in its ordinary-word (lowercase) form AND the
+#: follower begins a new sentence.** The abbreviation form is written capitalised
+#: and introduces what follows ("St. Louis", "No. 7 Station", "Acme Co. Ltd",
 #: "Rep. Smith"), while the word form ends a clause in lowercase ("Sam said no.",
 #: "Sam sat."), so the pair (own case, follower's case) separates them without
 #: removing any entry -- removal would re-break "No. 7 Station", and keeping them
-#: unconditional hides every sentence after "no.", "co." or "sat.".
+#: unconditional hides every sentence after "no.", "co." or "sat." (fx-str-08).
+#: This tier is TIER 2 plus one extra piece of evidence, not a different ruling.
 #: Cost accepted: lowercase "no. 7" keeps its boundary suppressed (the follower
 #: is a digit, not a capital), and a capitalised "No." that genuinely ends a
 #: sentence stays glued.
-SENTENCE_ABBREVIATIONS_ALSO_ORDINARY_WORDS: Tuple[str, ...] = (
+CAN_BE_FINAL_ONLY_AS_ORDINARY_WORD: Tuple[str, ...] = (
     "no.", "co.", "st.", "sat.", "sun.", "est.", "rep.", "gen.", "mar.",
 )
 
-#: A5/fx-str-08: abbreviations that never introduce the token they modify --
-#: "etc." always closes a list, it never precedes the item it abbreviates. So its
-#: OWN case carries no information and only the follower decides: a capital after
-#: it starts a new sentence ("...and so on, etc. Tom left."), a lowercase word or
-#: digit continues this one ("apples, oranges, etc. were on the table"). This is
-#: the tier that kills the "end every sentence with etc." recipe, capitalised
-#: "Etc." included.
-SENTENCE_ABBREVIATIONS_CLAUSE_FINAL: Tuple[str, ...] = (
-    "etc.",
-)
-
-#: A5: an inner-dotted abbreviation ("p.m.", "a.m.", "U.S.", "e.g.", "i.e.")
-#: ENDS the sentence when the next word starts a new one -- exactly the rule
-#: already used for ``etc.``, and for the same reason: these tokens close a
-#: clause, they do not introduce the token after them.
-#:
-#: This was unconditional ("a token with two dots never terminates") and that is
-#: a 30-character reward hack, not an edge case: "The meeting is at 3 p.m. Sales
-#: rose." made EVERY following sentence invisible to sentence_initial_letter, in
-#: ordinary prose, with no adversarial intent -- and sentence_initial_letter is
-#: the HELD-OUT type whose score is the project's generalisation claim. One
-#: swallowed boundary hides an unbounded amount of text; a spurious boundary
-#: adds exactly one extra graded segment, and that asymmetry decides it.
-#:
-#: Cost accepted, same shape as the ordinary-word tier: "The U.S. Senate voted."
-#: splits into two graded segments. "Sam left the U.S.A. so nobody noticed."
-#: does not -- the follower is lowercase, so the sentence stays open. Name
-#: initials ("J. R. R. Tolkien") are decided earlier, by ``_is_name_initial``.
+#: A5: the DEFAULT for an inner-dotted token that is in no table above
+#: ("U.S.A.", "Ph.D.", "3.p.m."): treat it as TIER 2, i.e. the follower decides.
+#: The alternative -- "a token with two dots never terminates" -- is a
+#: 30-character reward hack, not an edge case: "The meeting is at 3 p.m. Sales
+#: rose." made EVERY following sentence invisible to sentence_initial_letter.
+#: One swallowed boundary hides an unbounded amount of text; a spurious boundary
+#: adds exactly one extra graded segment, and that asymmetry decides the default.
+#: Setting this False restores the old behaviour for every inner-dotted token,
+#: listed or not; it does NOT affect TIER 1, whose members are never final for a
+#: reason that has nothing to do with dot-count.
+#: Name initials ("J. R. R. Tolkien") are decided earlier, by ``_is_name_initial``.
 MULTI_DOT_ABBREVIATION_CAN_END_A_SENTENCE = True
 
 #: A5/fx-str-09: titles that make a following one-letter token a name initial
@@ -1564,24 +1652,24 @@ def _is_sentence_end(text: str, start: int, run_end: int) -> bool:
             return False
     token = _preceding_token(text, run_end)
     lowered = token.lower()
-    if lowered in SENTENCE_ABBREVIATIONS:
+    if lowered in NEVER_FINAL_ABBREVIATIONS:
+        # TIER 1: "Dr.", "e.g." -- introduces what follows, so never a boundary.
         return False
-    if lowered in SENTENCE_ABBREVIATIONS_ALSO_ORDINARY_WORDS:
-        # abbreviation form ("St. Louis") keeps the sentence open; ordinary-word
-        # form followed by a new capitalised word ("Sam said no. Tom left.")
-        # ends it.
+    if lowered in CAN_BE_FINAL_ONLY_AS_ORDINARY_WORD:
+        # TIER 3: abbreviation form ("St. Louis") keeps the sentence open;
+        # ordinary-word form followed by a new capitalised word ("Sam said no.
+        # Tom left.") ends it.
         written_as_word = not token[:1].isupper()
         return written_as_word and _next_word_starts_a_new_sentence(text, run_end)
-    if lowered in SENTENCE_ABBREVIATIONS_CLAUSE_FINAL:
-        # "etc." never introduces what follows, so only the follower decides.
-        return _next_word_starts_a_new_sentence(text, run_end)
     if _is_name_initial(text, run_end, lowered):
         return False
-    if lowered.count(".") > 1:          # "u.s.", "e.g.", "a.m.", "p.m."
-        # Clause-closing by nature, so only the follower decides -- see
-        # MULTI_DOT_ABBREVIATION_CAN_END_A_SENTENCE.
-        return (MULTI_DOT_ABBREVIATION_CAN_END_A_SENTENCE
-                and _next_word_starts_a_new_sentence(text, run_end))
+    inner_dotted = lowered.count(".") > 1        # "u.s.", "a.m.", "U.S.A."
+    if inner_dotted and not MULTI_DOT_ABBREVIATION_CAN_END_A_SENTENCE:
+        return False
+    if lowered in CAN_BE_FINAL_ABBREVIATIONS or inner_dotted:
+        # TIER 2, and the same rule as the default for an unlisted inner-dotted
+        # token: the follower decides.
+        return _next_word_starts_a_new_sentence(text, run_end)
     return True
 
 

@@ -14,10 +14,10 @@ one fixture text is a fix to the fixture, not to the checker.
 import pytest
 
 from constraints.checkers import (
+    CAN_BE_FINAL_ABBREVIATIONS,
+    CAN_BE_FINAL_ONLY_AS_ORDINARY_WORD,
     NAME_TITLE_ABBREVIATIONS,
-    SENTENCE_ABBREVIATIONS,
-    SENTENCE_ABBREVIATIONS_ALSO_ORDINARY_WORDS,
-    SENTENCE_ABBREVIATIONS_CLAUSE_FINAL,
+    NEVER_FINAL_ABBREVIATIONS,
     SENTENCE_LINE_BREAK_CHARS,
     _sentence_spans,
     check_sentence_initial_letter,
@@ -117,23 +117,119 @@ def test_the_abbreviation_reading_still_suppresses_the_boundary(text, why):
 
 def test_abbreviation_tiers_are_disjoint_and_lowercased():
     """Three tables, one ruling each; an entry in two tiers would make the
-    ruling depend on which membership test runs first."""
-    tiers = (SENTENCE_ABBREVIATIONS, SENTENCE_ABBREVIATIONS_ALSO_ORDINARY_WORDS,
-             SENTENCE_ABBREVIATIONS_CLAUSE_FINAL)
+    ruling depend on which membership test runs first. Note what is NOT asserted
+    any more: that every entry has exactly one dot. Dot-count was the old tiering
+    proxy and it was wrong in both directions, so multi-dot tokens are now placed
+    by name in whichever tier their behaviour belongs to."""
+    tiers = (NEVER_FINAL_ABBREVIATIONS, CAN_BE_FINAL_ABBREVIATIONS,
+             CAN_BE_FINAL_ONLY_AS_ORDINARY_WORD)
     for tier in tiers:
         for token in tier:
             assert token == token.lower() and token.endswith("."), token
-            assert token.count(".") == 1, f"{token}: multi-dot tokens are handled by rule"
     for i, left in enumerate(tiers):
         for right in tiers[i + 1:]:
             assert not set(left) & set(right), sorted(set(left) & set(right))
 
 
+def test_the_tiers_are_cut_by_finality_not_by_dot_count():
+    """The ruling in one assertion. Dot-count was a proxy that failed BOTH ways,
+    so each tier must contain a counterexample to it: a one-dot token that CAN
+    end a sentence, and a two-dot token that never can."""
+    assert "aug." in CAN_BE_FINAL_ABBREVIATIONS, "one dot, yet 'Sales rose in Aug.' ends there"
+    assert "e.g." in NEVER_FINAL_ABBREVIATIONS, "two dots, yet it never ends a sentence"
+    assert "i.e." in NEVER_FINAL_ABBREVIATIONS
+    assert "u.s." in CAN_BE_FINAL_ABBREVIATIONS
+
+
 def test_the_words_that_caused_fx_str_08_left_the_unconditional_tier():
-    """The exact entries the audit named. If one of these is ever moved back
-    into ``SENTENCE_ABBREVIATIONS``, every sentence after it goes ungraded."""
+    """The exact entries the audit named. If one of these is ever moved into
+    ``NEVER_FINAL_ABBREVIATIONS``, every sentence after it goes ungraded."""
     for token in ("no.", "co.", "st.", "sat.", "sun.", "est.", "rep.", "etc."):
-        assert token not in SENTENCE_ABBREVIATIONS, token
+        assert token not in NEVER_FINAL_ABBREVIATIONS, token
+
+
+def test_the_month_and_company_abbreviations_left_the_unconditional_tier():
+    """The second half of the same defect, and the wider one: these were
+    UNCONDITIONALLY never-final, so "Sales rose in Aug. Tom took the account."
+    was one sentence to the checker and two to every reader. They compose, so a
+    response could switch the whole constraint off in ordinary business prose."""
+    for token in ("aug.", "sept.", "oct.", "fri.", "inc.", "ltd.", "corp.",
+                  "univ.", "ave.", "blvd."):
+        assert token not in NEVER_FINAL_ABBREVIATIONS, token
+        assert token in CAN_BE_FINAL_ABBREVIATIONS, token
+
+
+# --------------------------------------------------------------------------
+# TIER 1 -- never final: the FALSE-FAIL direction
+# --------------------------------------------------------------------------
+
+CLAUSE_OPENING_IS_ONE_SENTENCE = (
+    ("Several teams already use it, e.g. Tom's group in Denver.", "e.g. opens a clause"),
+    ("Shipping slows in winter, i.e. December through February.", "i.e. opens a clause"),
+    ("Several sources disagree, cf. Nelson on the same point.", "cf. points forward"),
+    ("Several formats work, viz. Markdown and plain text.", "viz. points forward"),
+    ("Sam met Dr. Smith so plans shifted.", "a title introduces the name"),
+    ("Some memo cited Fig. Three and stopped there.", "fig. introduces its number"),
+)
+
+
+@pytest.mark.parametrize("text,why", CLAUSE_OPENING_IS_ONE_SENTENCE, ids=[w for _, w in CLAUSE_OPENING_IS_ONE_SENTENCE])
+def test_a_never_final_abbreviation_is_not_a_boundary_even_before_a_capital(text, why):
+    """The false-FAIL direction, and the one that biases the held-out number
+    toward "harder than it is". A clause-opening abbreviation introduces what
+    follows and never ends an English sentence, so a capitalised follower is not
+    evidence of anything -- "e.g. Tom's group" is one sentence, and reporting a
+    sentence beginning with T is a violation manufactured out of ordinary prose."""
+    assert _spans(text) == [text], why
+    assert _passes(text) is True
+
+
+@pytest.mark.parametrize("token", NEVER_FINAL_ABBREVIATIONS)
+def test_every_never_final_entry_holds_the_sentence_open(token):
+    """The class, not the samples: EVERY entry means the same thing, so every
+    entry is checked against a capitalised follower -- the case that used to
+    split them."""
+    text = f"Something noted {token} Tom left the room."
+    assert _spans(text) == [text], token
+    assert _passes(text) is True
+
+
+# --------------------------------------------------------------------------
+# TIER 2 -- can be final: the FALSE-PASS direction
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("token", CAN_BE_FINAL_ABBREVIATIONS)
+def test_every_can_be_final_entry_splits_before_a_capital_and_not_before_a_lowercase(token):
+    """Both halves of the tier-2 rule over the whole table. Before the repair the
+    single-dot half of this table was UNCONDITIONALLY never-final, so each entry
+    swallowed the sentence after it; a table that only got the samples right
+    would leave the next entry open."""
+    split = f"Something ended in {token} Tom left the room."
+    assert len(_sentence_spans(split)) == 2, f"{token}: capitalised follower is a new sentence"
+    assert _passes(split) is False
+    kept = f"Something ended in {token} so nobody noticed."
+    assert _spans(kept) == [kept], f"{token}: a lowercase follower continues the sentence"
+    assert _passes(kept) is True
+
+
+ORDINARY_BUSINESS_PROSE_IS_FULLY_GRADED = (
+    ("Sales rose in Aug. Tom took the account. Shipments fell in Sept. "
+     "Rachel escalated it. Supplies ran short by Fri. Nobody noticed.", 6),
+    ("Shipments left Acme Inc. Tom signed for them.", 2),
+    ("Sam walked down Third Ave. Tom waited on the corner.", 2),
+    ("Staff met at the Univ. Nobody else came.", 2),
+)
+
+
+@pytest.mark.parametrize("text,count", ORDINARY_BUSINESS_PROSE_IS_FULLY_GRADED,
+                         ids=["composes", "inc", "ave", "univ"])
+def test_can_be_final_abbreviations_no_longer_hide_the_sentences_after_them(text, count):
+    """The defect in the shape it would really arrive in: natural business prose,
+    no adversarial characters. The six-sentence case is the one that matters --
+    the abbreviations COMPOSE, so before the repair three of the six sentences
+    were graded and the three beginning T, R and N were invisible."""
+    assert len(_sentence_spans(text)) == count
+    assert _passes(text) is False
 
 
 # --------------------------------------------------------------------------
@@ -171,8 +267,8 @@ def test_name_titles_are_recognised_abbreviations_in_their_own_right():
     """The initial rule reads ``NAME_TITLE_ABBREVIATIONS`` for evidence; each
     entry must also be handled by one of the abbreviation tiers, or "Dr." would
     end a sentence while still vouching for the initial after it."""
-    known = (set(SENTENCE_ABBREVIATIONS) | set(SENTENCE_ABBREVIATIONS_ALSO_ORDINARY_WORDS)
-             | set(SENTENCE_ABBREVIATIONS_CLAUSE_FINAL))
+    known = (set(NEVER_FINAL_ABBREVIATIONS) | set(CAN_BE_FINAL_ABBREVIATIONS)
+             | set(CAN_BE_FINAL_ONLY_AS_ORDINARY_WORD))
     assert set(NAME_TITLE_ABBREVIATIONS) <= known
 
 

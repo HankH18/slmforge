@@ -21,9 +21,9 @@ from pathlib import Path
 import pytest
 
 import eval as E
-from conftest import REPO_ROOT, SCENARIOS_PATH
+from conftest import REPO_ROOT, SCENARIOS_PATH, ABSTAINER_ROOT
 
-SCRIPTS = REPO_ROOT / "scripts"
+SCRIPTS = ABSTAINER_ROOT / "scripts"
 RUBRIC = "c0adb876c3e6c4c9"
 JUDGE = "claude-sonnet-4-6"
 

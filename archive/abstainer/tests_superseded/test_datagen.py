@@ -11,14 +11,14 @@ import subprocess
 import sys
 
 import pytest
-from conftest import REPO_ROOT
+from conftest import REPO_ROOT, ABSTAINER_ROOT
 
 import eval as E
 from datagen import generate as G
 from datagen.filter import (ExampleFilter, LeakageIndex, build_row, normalize,
                             split_user_msg)
 
-AUDIT = str(REPO_ROOT / "datagen" / "audit.py")
+AUDIT = str(ABSTAINER_ROOT / "datagen" / "audit.py")
 
 
 # ---------------------------------------------------------------- canned data

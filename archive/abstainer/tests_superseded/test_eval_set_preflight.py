@@ -16,9 +16,9 @@ import json
 import eval as E
 import pytest
 
-from conftest import REPO_ROOT
+from conftest import REPO_ROOT, ABSTAINER_ROOT
 
-CHECKER_PATH = REPO_ROOT / "scripts" / "check_eval_set.py"
+CHECKER_PATH = ABSTAINER_ROOT / "scripts" / "check_eval_set.py"
 
 _spec = importlib.util.spec_from_file_location("check_eval_set", CHECKER_PATH)
 check_eval_set = importlib.util.module_from_spec(_spec)

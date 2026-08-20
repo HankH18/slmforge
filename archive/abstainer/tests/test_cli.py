@@ -7,11 +7,11 @@ import sys
 
 import pytest
 
-from conftest import EXEMPLARS_PATH, REPO_ROOT, SCENARIOS_PATH
+from conftest import EXEMPLARS_PATH, REPO_ROOT, SCENARIOS_PATH, ABSTAINER_ROOT
 
 
 def run_cli(*args, cwd=None):
-    return subprocess.run([sys.executable, str(REPO_ROOT / "eval.py"), *args],
+    return subprocess.run([sys.executable, str(ABSTAINER_ROOT / "eval.py"), *args],
                           cwd=str(cwd or REPO_ROOT), capture_output=True, text=True)
 
 
@@ -87,7 +87,7 @@ def test_ablation_runner_sweeps_every_cell(tmp_path):
     one shared rubric, a markdown table for the Architecture Defense."""
     out = tmp_path / "ablation"
     r = subprocess.run(
-        [sys.executable, str(REPO_ROOT / "run_ablation.py"),
+        [sys.executable, str(ABSTAINER_ROOT / "run_ablation.py"),
          "--models", "mock:oracle,mock:always_refuse",
          "--strategies", "zero_shot,few_shot,structured",
          "--eval-set", str(SCENARIOS_PATH), "--exemplars", str(EXEMPLARS_PATH),

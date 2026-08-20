@@ -859,44 +859,77 @@ def test_the_manufactured_letter_guard_did_not_switch_off_real_folding():
 # proved here: a SYMBOL never manufactures a letter, a LETTER in a decorative
 # form always still folds.
 
+#: The PROPERTY the enclosed-letterform ruling is stated in: "a decorative
+#: enclosure of exactly one named Latin letter". A character has it when its own
+#: unicode name says it is one Latin letter -- in the flag block that sentence is
+#: spelled ``REGIONAL INDICATOR SYMBOL LETTER A`` instead of ``... LATIN CAPITAL
+#: LETTER A``, which is a difference in wording, not in what is on the page.
+_ENCLOSED_BY_NAME = re.compile(r"^(?:.*\s)?LATIN (CAPITAL|SMALL) LETTER ([A-Z])$")
+_REGIONAL_INDICATOR_BY_NAME = re.compile(r"^REGIONAL INDICATOR SYMBOL LETTER ([A-Z])$")
+
+
 def _base_letter_of(char):
     """The letter an enclosed form encloses, read off its own unicode name."""
     import unicodedata as _ud
 
-    match = re.search(r"LATIN (CAPITAL|SMALL) LETTER ([A-Z])$", _ud.name(char))
-    assert match, f"{char!r} ({_ud.name(char)}) is not a named Latin letterform"
-    return match.group(2).lower()
+    name = _ud.name(char)
+    match = _ENCLOSED_BY_NAME.match(name)
+    if match:
+        return match.group(2).lower()
+    match = _REGIONAL_INDICATOR_BY_NAME.match(name)
+    assert match, f"{char!r} ({name}) is not a named Latin letterform"
+    return match.group(1).lower()
 
 
-def test_enclosed_letterform_ranges_match_their_unicode_derivation():
-    """The ranges are pasted data, but the DERIVATION is the ruling: a codepoint
-    belongs only because its own unicode name ends in ``LATIN {CAPITAL,SMALL}
-    LETTER <X>`` and its NFKD recovers <X>. Re-run here over the whole of
-    Unicode, so neither a hand-widened range nor a new Unicode version can drift
-    the table away from the rule it claims to implement."""
+def test_the_enclosed_letterform_table_is_bound_to_the_property_not_to_a_decomposition():
+    """The ranges are pasted data; the PROPERTY is the ruling. A codepoint
+    belongs because it is a SYMBOL (category So) whose own unicode name says it
+    is exactly one Latin letter -- nothing else.
+
+    What this test deliberately no longer asks is whether the character has an
+    NFKD decomposition. That was the derivation the table used to be checked
+    against, and it re-ran the very rule the checker implemented, so the test
+    could not fail while the checker was wrong in the same way -- and it was:
+    the ~80 NEGATIVE CIRCLED, NEGATIVE SQUARED and REGIONAL INDICATOR letters
+    have no decomposition, so "🅐pple" walked past a ban on 'a' while "Ⓐpple"
+    was caught, and the derivation test agreed with both. Having a decomposition
+    is a property of the unicode tables, not of what a reader sees."""
     import unicodedata as _ud
 
-    named = re.compile(r"^.*?\s*LATIN (CAPITAL|SMALL) LETTER ([A-Z])$")
     derived = set()
     for cp in range(0x110000):
         ch = chr(cp)
-        if CHECKERS_MODULE._is_letter(ch):
+        if _ud.category(ch) != "So":
             continue
         try:
             name = _ud.name(ch)
         except ValueError:
             continue
-        if not named.match(name):
-            continue
-        decomposed = _ud.normalize("NFKD", ch)
-        if decomposed != ch and any(CHECKERS_MODULE._is_letter(c) for c in decomposed):
+        if _ENCLOSED_BY_NAME.match(name) or _REGIONAL_INDICATOR_BY_NAME.match(name):
             derived.add(ch)
     table = set(CHECKERS_MODULE._ENCLOSED_LETTERFORMS)
     assert table == derived, (
-        f"ENCLOSED_LETTERFORM_RANGES drifted from its derivation: "
+        f"ENCLOSED_LETTERFORM_RANGES drifted from the property it claims: "
         f"{sorted(hex(ord(c)) for c in table - derived)} listed but not derived, "
         f"{sorted(hex(ord(c)) for c in derived - table)} derived but not listed")
-    assert len(derived) == 133, f"the derivation yields {len(derived)}, not the pinned 133"
+    assert len(derived) == 213, f"the property yields {len(derived)}, not the pinned 213"
+    undecomposed = {c for c in derived if _ud.normalize("NFKD", c) == c}
+    assert len(undecomposed) == 80, (
+        "the 80 enclosures with no NFKD decomposition are the whole point of this "
+        f"test; found {len(undecomposed)}")
+
+
+@pytest.mark.parametrize("char,name", [
+    ("\U0001F150", "NEGATIVE CIRCLED LATIN CAPITAL LETTER A"),
+    ("\U0001F170", "NEGATIVE SQUARED LATIN CAPITAL LETTER A"),
+    ("\U0001F1E6", "REGIONAL INDICATOR SYMBOL LETTER A"),
+])
+def test_an_enclosure_without_a_decomposition_is_still_the_letter_it_encloses(char, name):
+    """The evasion, end to end: a reader sees "apple" in all four spellings, so a
+    ban on 'a' must catch all four. "Ⓐpple" always failed; these three did not."""
+    constraint = build_constraint("banned_letter", {"letter": "a"}, 1)
+    assert check(constraint, "Ⓐpple")["pass"] is False, "control: the decomposing form"
+    assert check(constraint, char + "pple")["pass"] is False, f"{name} evaded a ban on 'a'"
 
 
 def test_a_symbol_never_manufactures_a_letter_but_an_enclosed_letter_still_folds():
@@ -927,7 +960,7 @@ def test_a_symbol_never_manufactures_a_letter_but_an_enclosed_letter_still_folds
 
 
 def test_every_enclosed_letterform_violates_a_ban_on_the_letter_it_encloses():
-    """End to end through ``check``, not just the fold: the 133 characters the
+    """End to end through ``check``, not just the fold: the 213 characters the
     over-applied guard let through are the whole regression, so the whole class
     is asserted rather than the one fixture-shaped sample."""
     evaded = []
@@ -1021,20 +1054,43 @@ def test_the_c0_separators_are_ruled_invisible_although_python_calls_them_space(
 
 S_LETTER = build_constraint("sentence_initial_letter", {"letter": "s"}, 1)
 
-#: Every multi-dot abbreviation that ends an ordinary English sentence. Before
-#: the repair each of these hid EVERY following sentence from the checker.
+#: Abbreviations that CAN end an English sentence and here do. Before the repair
+#: each of these hid EVERY following sentence from the checker.
+#:
+#: Two rows LEFT this tuple: "Several teams use it, e.g. Tom's group in Denver."
+#: and "Sourcing is the bottleneck, i.e. Tom cannot buy the parts." both asserted
+#: ``pass is False``, and both assertions were factually wrong about English.
+#: Each text is ONE sentence, and it begins with S. "e.g." and "i.e." are
+#: clause-OPENING: they introduce what follows ("for example ...") and never end
+#: a sentence, so there is no second sentence beginning with T to fail on. They
+#: now live in NOT_A_BOUNDARY below, which asserts the opposite verdict. The
+#: reason the TEST was wrong rather than the checker is a fact about the
+#: language, not a convenience: no reading of "..., e.g. Tom's group in Denver."
+#: has two sentences in it.
 MULTI_DOT_CARRIERS = (
     "Sales rose sharply at 3 p.m. Tom left the room.",
     "Standup starts at 9 a.m. Tom never arrives on time.",
     "Shipments cleared customs in the U.S. Tom signed for them.",
-    "Several teams use it, e.g. Tom's group in Denver.",
-    "Sourcing is the bottleneck, i.e. Tom cannot buy the parts.",
     "Sam wrote the memo at 4 p.m. Everyone read it by five.",
 )
 
+#: The same defect one dot down, and the wider half of it: these were
+#: UNCONDITIONALLY never-final, so the sentence after them was never graded.
+#: Ordinary business prose, no adversarial character anywhere -- and they
+#: COMPOSE, so a whole response can be taken out of the constraint's reach.
+SINGLE_DOT_CARRIERS = (
+    "Sales rose in Aug. Tom took the account.",
+    "Shipments fell in Sept. Rachel escalated it.",
+    "Supplies ran short by Fri. Nobody noticed.",
+    "Shipments left Acme Inc. Tom signed for them.",
+    "Sam walked down Third Ave. Tom waited on the corner.",
+    ("Sales rose in Aug. Tom took the account. Shipments fell in Sept. "
+     "Rachel escalated it. Supplies ran short by Fri. Nobody noticed."),
+)
 
-@pytest.mark.parametrize("text", MULTI_DOT_CARRIERS)
-def test_a_multi_dot_abbreviation_no_longer_hides_the_sentences_after_it(text):
+
+@pytest.mark.parametrize("text", MULTI_DOT_CARRIERS + SINGLE_DOT_CARRIERS)
+def test_an_abbreviation_that_can_be_final_no_longer_hides_the_sentences_after_it(text):
     """30 characters of ordinary prose used to switch the whole constraint off,
     with no adversarial intent required -- and sentence_initial_letter is the
     HELD-OUT type whose score is the project's generalisation claim, so this
@@ -1045,19 +1101,45 @@ def test_a_multi_dot_abbreviation_no_longer_hides_the_sentences_after_it(text):
     _assert_verdict_shape(result, text)
 
 
+def test_the_composing_case_grades_every_sentence_not_merely_one_more():
+    """The verdict alone is too weak here: a single recovered boundary would
+    already turn the paragraph red. Six sentences to a human, so six graded
+    spans -- three of them beginning T, R and N."""
+    text = ("Sales rose in Aug. Tom took the account. Shipments fell in Sept. "
+            "Rachel escalated it. Supplies ran short by Fri. Nobody noticed.")
+    assert len(CHECKERS_MODULE._sentence_spans(text)) == 6
+
+
 NOT_A_BOUNDARY = (
     ("Sam left the U.S.A. so nobody noticed.", "lowercase follower continues the sentence"),
     ("Sam runs standup at 9 a.m. so the room is free.", "lowercase follower"),
     ("Sam met J. R. R. Tolkien so the story goes.", "name initials, decided earlier"),
     ("Sam cut it to 3.5 percent so nobody noticed.", "decimal point"),
     ("Sam checked example.com so nobody worried.", "domain"),
+    # --- capitalised followers: where the false FAILS live -------------------
+    # A lowercase-only table is structurally blind to the direction that
+    # over-splits, because a lowercase follower suppresses the boundary by
+    # itself no matter which tier the abbreviation is in.
+    ("Several teams use it, e.g. Tom's group in Denver.",
+     "e.g. is clause-opening, so a capitalised follower is not a new sentence"),
+    ("Sourcing is the bottleneck, i.e. Tom cannot buy the parts.",
+     "i.e. is clause-opening"),
+    ("Several sources disagree, cf. Nelson on the same point.", "cf. points forward"),
+    ("Sam met Dr. Smith so the plan shifted.", "a title introduces the name it modifies"),
+    ("Sam moved to St. Louis and stayed there.", "capitalised ordinary-word form is the abbreviation"),
+    ("Sam signed with Acme Co. Ltd so the deal closed.", "Co. Ltd, capitalised follower"),
+    ("Sam works at No. 7 Station so he walks.", "No. before a digit"),
+    ("Sam waited until Feb. 3 so the invoice cleared.", "month before a date"),
 )
 
 
 @pytest.mark.parametrize("text,why", NOT_A_BOUNDARY, ids=[w for _, w in NOT_A_BOUNDARY])
-def test_the_multi_dot_repair_does_not_split_a_continuing_sentence(text, why):
+def test_the_abbreviation_repair_does_not_split_a_continuing_sentence(text, why):
     """A spurious boundary costs one extra graded segment; the repair may not
-    buy the hidden-text fix with a wave of them."""
+    buy the hidden-text fix with a wave of them. Every row here is ONE sentence
+    beginning with S, so a False verdict is a violation manufactured out of
+    ordinary prose -- the direction that biases the held-out number toward
+    "harder than it is"."""
     assert check(S_LETTER, text)["pass"] is True, why
 
 
