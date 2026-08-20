@@ -22,13 +22,31 @@ The previous target's pipeline was built downstream of an unproven ceiling. So:
 
   * spec_adherence is RECOMPUTED from the raw transcript rows. A stored
     aggregate is only ever compared, never trusted; disagreement is a failure.
-  * spec_pass is itself recomputed from each row's own checker_results and
+  * checker_results are themselves RE-DERIVED from (constraint, output) by
+    calling the pinned constraints.checkers.check on the row's own output, with
+    the constraint ids resolved against the pinned instance library. Re-deriving
+    spec_pass from a stored checker_results block only proves the row is
+    self-consistent: a run whose outputs genuinely satisfy every constraint
+    could fabricate its own failures and manufacture a passing gate. The stored
+    verdict is COMPARED to the re-derived one, and any disagreement — pass flag
+    or evidence — makes the run unratable.
+  * spec_pass is recomputed from the RE-DERIVED checker verdicts and the row's
     quality_score (the pinned definition: all checkers pass AND quality >= 3).
     A row that stores spec_pass=true while carrying a failing checker fails.
+    quality_score is the one programmatic input the gate cannot re-derive (it
+    is a judge call that cannot be replayed offline), so it is trusted as
+    stored — and the report therefore attributes every counted failure to the
+    checkers or to quality alone, so a reader can see how much of a fail rate
+    rests on the un-recomputable half.
   * the rows must COVER the eval set exactly - one row per scenario, no
     duplicates, no extras, no subset. Authentic, correctly-scored rows can still
     be selectively dropped to re-weight a cell's mean, so coverage is checked
     even when every surviving row is perfect.
+  * the CONFIG pins the corpus. The run under test does not get to choose what
+    it is graded against: a run manifest that names a different eval set (or a
+    different constraint instance library) is an ERROR, not an override, and
+    the content hash of the corpus actually scored is written into the report
+    so the reading stays auditable after the fact.
   * booleans are not numbers and strings are not numbers. Every stored scalar is
     type-checked before it is compared (`isinstance(True, int)` is True in
     Python, and that bypass has defeated guards in this repo).
@@ -44,11 +62,17 @@ Exit codes:  0 PROCEED  |  1 invalid/inconsistent run  |  2 ESCALATE  |  3 HARD_
 This module does NOT import eval.py. eval.py is mid-pivot (T-3) and its
 pre-pivot aggregate() reads gold_label/pred_class fields that no longer exist in
 the transcript contract; importing it here would couple the gate to a moving
-file and would not compute the right number anyway. The one definition this file
-restates is the pinned Design contract `spec_pass = all checkers pass AND
-quality_score >= 3`, which is the thing the gate exists to independently verify.
+file and would not compute the right number anyway. It does not import
+harness.py either: harness.run_checkers is the loop that PRODUCED the stored
+checker_results, and a verifier that reuses the producer's loop cannot see a bug
+in it. What it does import — and never reimplements — is
+constraints.checkers.check, the pinned ground-truth checker itself. The one
+definition this file restates is the pinned Design contract `spec_pass = all
+checkers pass AND quality_score >= 3`, which is the thing the gate exists to
+independently verify.
 """
 import argparse
+import hashlib
 import json
 import math
 import sys
@@ -57,6 +81,13 @@ from fractions import Fraction
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    # scripts/ is sys.path[0] when this file is run directly; the ground-truth
+    # checker lives at the repo root and is imported, never reimplemented.
+    sys.path.insert(0, str(REPO_ROOT))
+
+from constraints.checkers import check as run_checker          # noqa: E402
+from constraints.registry import ConstraintError, validate_constraint  # noqa: E402
 
 # ---------------------------------------------------------------- thresholds
 # R6. Exact rationals, not floats: 24/120 as a float is 0.19999999999999996,
@@ -88,6 +119,13 @@ EXIT_FOR_VERDICT = {
 }
 
 MANIFEST_NAMES = ("g1_table.json", "ablation_summary.json", "run_manifest.json")
+
+#: The pinned constraint instance library. The gate re-runs every checker, so it
+#: needs the constraint OBJECTS the scenario ids refer to. A config may pin a
+#: different library with "constraint_instances"; this is the repo default and
+#: the same file scenarios.paths.INSTANCES_PATH names. It is deliberately NOT a
+#: CLI flag: swapping in a laxer library would move the measurement.
+DEFAULT_INSTANCES_PATH = "data/scenarios/constraint_instances.jsonl"
 
 ROW_KEYS = ("scenario_id", "model", "strategy", "output", "checker_results",
             "quality_score", "quality_reasoning", "spec_pass")
@@ -152,16 +190,52 @@ def read_jsonl(path):
     return rows
 
 
-def resolve_path(raw, run_dir):
-    """Resolve a config/manifest path. Deterministic order, all candidates named."""
+def sha256_of(path):
+    """Content hash of the corpus actually scored, so the report is auditable."""
+    h = hashlib.sha256()
+    try:
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                h.update(chunk)
+    except OSError as exc:
+        raise GateError(f"{path}: unreadable ({exc})") from exc
+    return h.hexdigest()
+
+
+def resolve_pinned_path(raw, label):
+    """Resolve a CONFIG-pinned data path. Repo-relative or absolute, nothing else.
+
+    The old resolver SEARCHED cwd, then the run dir, then the repo root, so the
+    file that answered to `data/eval/scenarios.jsonl` depended on where the gate
+    was invoked from and on what the run under test happened to ship. A pinned
+    corpus resolves to exactly one place: the repo root (config paths are
+    repo-relative by contract) or the absolute path given.
+    """
     p = Path(raw)
-    if p.is_absolute():
-        return p if p.exists() else None
-    for base in (Path.cwd(), Path(run_dir), REPO_ROOT):
-        cand = base / p
-        if cand.exists():
-            return cand
-    return None
+    cand = p if p.is_absolute() else REPO_ROOT / p
+    if not cand.exists():
+        raise GateError(
+            f"{label} {raw!r} not found at {cand}. The gate cannot verify a run "
+            f"against a corpus it cannot read, so it fails rather than rating a "
+            f"slice (config paths are repo-relative to {REPO_ROOT})")
+    return cand
+
+
+def resolve_transcripts_path(raw, run_dir, where):
+    """A results JSON may name its transcripts, but only INSIDE its own run dir.
+
+    eval.write_outputs never emits this key (it uses the stem convention), so a
+    declared path is pure attack surface: an absolute path or a `..` hop lets a
+    cell be scored against a transcript file from some other run.
+    """
+    p = Path(raw)
+    if p.is_absolute() or ".." in p.parts:
+        raise GateError(
+            f"{where}: declares transcripts {raw!r}, which escapes the run "
+            f"directory. A cell is scored against transcripts shipped with it, "
+            f"never against a file from somewhere else on disk")
+    cand = Path(run_dir) / p
+    return cand if cand.exists() else None
 
 
 def provider_of(spec):
@@ -248,6 +322,50 @@ def expected_cells(cfg):
     return [(m, s) for m in models for s in EXPECTED_STRATEGIES]
 
 
+# ------------------------------------------------ constraint instances
+def load_constraint_instances(path):
+    """{constraint_id: constraint}. The objects the gate re-runs checkers with.
+
+    Every instance is validated by the pinned registry, so a library row that
+    has drifted from the schema (a params key the checker ignores, a family that
+    disagrees with the type) is a loud failure here rather than a checker that
+    quietly answers a question nobody asked.
+    """
+    rows = read_jsonl(path)
+    if not rows:
+        raise GateError(f"{path}: constraint instance library is empty")
+    lib = {}
+    for lineno, c in rows:
+        try:
+            validate_constraint(c)
+        except ConstraintError as exc:
+            raise GateError(f"{path}:{lineno}: invalid constraint instance "
+                            f"({exc})") from exc
+        cid = c["id"]
+        if cid in lib:
+            raise GateError(f"{path}:{lineno}: duplicate constraint id {cid!r} — "
+                            f"two objects answer to the same name and every "
+                            f"scenario referencing it is ambiguous")
+        lib[cid] = c
+    return lib
+
+
+def check_constraints_resolve(eval_index, instances, eval_path, instances_path):
+    """Every constraint id the corpus names must exist in the pinned library.
+
+    An unresolvable id would mean the gate could not re-run that checker, and a
+    skipped checker silently inflates spec_pass.
+    """
+    unknown = sorted({cid for s in eval_index.values() for cid in s["constraints"]
+                      if cid not in instances})
+    if unknown:
+        raise GateError(
+            f"{eval_path.name}: {len(unknown)} constraint id(s) are not in the "
+            f"pinned instance library {instances_path} (e.g. {unknown[:5]}) — the "
+            f"gate re-runs every checker from (constraint, output) and refuses to "
+            f"rate a scenario whose constraints it cannot resolve")
+
+
 # ------------------------------------------------------------- eval set
 def load_eval_set(path):
     """{scenario_id: scenario}. The gate needs the real corpus, not a stand-in."""
@@ -290,12 +408,62 @@ def load_eval_set(path):
 
 
 # ------------------------------------------------------------- transcripts
-def score_cell(results_path, transcripts_path, model, strategy, eval_index, errors):
+def rederive_checker_results(scenario, instances, output, where, errors):
+    """Re-run the PINNED checker over (constraint, output) for this row.
+
+    Returns {constraint_id: (pass, evidence)} or None if a constraint could not
+    be checked. This is the half of the row the gate CAN reproduce, and the
+    whole reason it can: a run whose outputs genuinely comply could otherwise
+    write itself a set of failures and manufacture a PROCEED.
+    """
+    derived = {}
+    for cid in scenario["constraints"]:
+        constraint = instances.get(cid)
+        if constraint is None:      # pre-checked by check_constraints_resolve
+            errors.append(f"{where}: constraint {cid!r} is not in the pinned "
+                          f"instance library, so its checker cannot be re-run")
+            return None
+        try:
+            verdict = run_checker(constraint, output)
+        except ConstraintError as exc:
+            errors.append(f"{where}: re-running the checker for {cid!r} raised "
+                          f"{exc} — a constraint the ground-truth layer refuses "
+                          f"cannot have produced a trustworthy verdict")
+            return None
+        derived[cid] = (bool(verdict["pass"]), str(verdict["evidence"]))
+    return derived
+
+
+def compare_checker_results(stored, derived, where, sid, errors):
+    """Stored verdicts vs the ones the pinned checker produces. Any gap fails."""
+    ok = True
+    for cr in stored:
+        cid = cr["constraint_id"]
+        want_pass, want_evidence = derived[cid]
+        if cr["pass"] != want_pass:
+            errors.append(
+                f"{where} (scenario {sid}): checker_results for {cid} stores "
+                f"pass={cr['pass']!r}, but re-running constraints.checkers.check "
+                f"on this row's own output gives pass={want_pass!r} "
+                f"(evidence: {want_evidence!r}) — the stored verdict is fabricated")
+            ok = False
+        elif cr["evidence"] != want_evidence:
+            errors.append(
+                f"{where} (scenario {sid}): checker_results for {cid} stores "
+                f"evidence {cr['evidence']!r} but the pinned checker produces "
+                f"{want_evidence!r} for this output — the verdict was not produced "
+                f"by the checker it claims")
+            ok = False
+    return ok
+
+
+def score_cell(results_path, transcripts_path, model, strategy, eval_index,
+               instances, errors):
     """Recompute this cell from its raw rows. Returns a stats dict or None.
 
-    Nothing stored in the row is trusted: spec_pass is re-derived from the row's
-    own checker_results + quality_score, and the row set must cover the eval set
-    exactly.
+    Nothing programmatic in the row is trusted: the checker verdicts are re-run
+    from (constraint, output), spec_pass is re-derived from THOSE verdicts plus
+    the row's quality_score, and the row set must cover the eval set exactly.
     """
     numbered = read_jsonl(transcripts_path)
     tag = transcripts_path.name
@@ -308,6 +476,8 @@ def score_cell(results_path, transcripts_path, model, strategy, eval_index, erro
     n_pass = 0
     n_adv = 0
     n_adv_pass = 0
+    n_checker_fail = 0
+    n_quality_only_fail = 0
     ok = True
 
     for lineno, row in numbered:
@@ -349,9 +519,15 @@ def score_cell(results_path, transcripts_path, model, strategy, eval_index, erro
             errors.append(f"{where}: row strategy {describe(row['strategy'])} != "
                           f"this cell's strategy {strategy!r}")
             ok = False
+        row_ok = True
         if not isinstance(row["output"], str):
-            errors.append(f"{where}: output is {describe(row['output'])}, not a string")
-            ok = False
+            # row_ok, not just ok: the checker is re-run over this value below,
+            # and constraints.checkers.check raises TypeError on a non-string
+            # text. A row this broken must be REPORTED, not turned into a
+            # traceback that buries the other 39 problems in the run.
+            errors.append(f"{where}: output is {describe(row['output'])}, not a "
+                          f"string — the gate cannot re-run the checkers over it")
+            ok = row_ok = False
         if not is_nonempty_str(row["quality_reasoning"]):
             errors.append(f"{where}: quality_reasoning is "
                           f"{describe(row['quality_reasoning'])} — an unexplained "
@@ -360,7 +536,8 @@ def score_cell(results_path, transcripts_path, model, strategy, eval_index, erro
 
         # --- checker results must cover exactly this scenario's constraints
         crs = row["checker_results"]
-        row_ok = True
+        # NB: row_ok is NOT reset here — a row whose output is unusable is
+        # already disqualified from re-derivation above.
         if not isinstance(crs, list) or not crs:
             errors.append(f"{where}: checker_results is {describe(crs)}, expected a "
                           f"non-empty list")
@@ -412,18 +589,44 @@ def score_cell(results_path, transcripts_path, model, strategy, eval_index, erro
             ok = row_ok = False
         if not row_ok:
             continue
-        recomputed = all(cr["pass"] for cr in crs) and q >= QUALITY_SCORE_MIN
+
+        # --- the checker verdicts, RE-DERIVED from (constraint, output)
+        # Everything above only proved the row is self-consistent. This is where
+        # the row is compared to what the pinned checker actually says about the
+        # output it shipped.
+        derived = rederive_checker_results(scen, instances, row["output"], where,
+                                           errors)
+        if derived is None:
+            ok = False
+            continue
+        if not compare_checker_results(crs, derived, where, sid, errors):
+            ok = False
+            continue
+
+        # Deliberate redundancy: the derived verdicts are the authority even
+        # though compare_checker_results has just proved the stored block equals
+        # them. If that comparison is ever downgraded, spec_pass still comes
+        # from the checker rather than from the transcript.
+        checkers_pass = all(p for p, _ in derived.values())
+        recomputed = checkers_pass and q >= QUALITY_SCORE_MIN
         if recomputed != stored:
             errors.append(
                 f"{where} (scenario {sid}): spec_pass == {stored!r} but the pinned "
                 f"definition (all checkers pass AND quality_score >= "
-                f"{QUALITY_SCORE_MIN}) gives {recomputed!r} from this row's own "
-                f"checker_results/quality_score")
+                f"{QUALITY_SCORE_MIN}) gives {recomputed!r} from the re-derived "
+                f"checker verdicts and this row's quality_score")
             ok = False
             continue
 
         if recomputed:
             n_pass += 1
+        elif not checkers_pass:
+            n_checker_fail += 1
+        else:
+            # A failure the gate cannot reproduce: the checkers all pass and the
+            # judge's score is the only thing holding it down. Counted in the
+            # metric (it is the pinned definition) and surfaced in the report.
+            n_quality_only_fail += 1
         if scen["pressure"] == "adversarial":
             n_adv += 1
             if recomputed:
@@ -513,6 +716,8 @@ def score_cell(results_path, transcripts_path, model, strategy, eval_index, erro
         "fail_rate": float(fail_rate),
         "n_adversarial": n_adv,
         "robustness": float(robustness) if robustness is not None else None,
+        "n_fail_from_checkers": n_checker_fail,
+        "n_fail_from_quality_only": n_quality_only_fail,
         "results_json": results_path.name,
         "transcripts_jsonl": transcripts_path.name,
         "_adherence_exact": adherence,
@@ -520,7 +725,7 @@ def score_cell(results_path, transcripts_path, model, strategy, eval_index, erro
     }
 
 
-def load_cells(run_dir, cfg, eval_index, errors):
+def load_cells(run_dir, cfg, eval_index, instances, errors):
     """Every *.results.json in run_dir, recomputed. Returns {(model, strategy): stats}."""
     paths = sorted(run_dir.glob("*.results.json"))
     if not paths:
@@ -564,7 +769,7 @@ def load_cells(run_dir, cfg, eval_index, errors):
 
         raw_tp = results.get("transcripts")
         if is_nonempty_str(raw_tp):
-            tp = resolve_path(raw_tp, run_dir)
+            tp = resolve_transcripts_path(raw_tp, run_dir, rp.name)
             if tp is None:
                 errors.append(f"{rp.name}: declares transcripts {raw_tp!r}, which "
                               f"does not exist")
@@ -577,7 +782,7 @@ def load_cells(run_dir, cfg, eval_index, errors):
                               f"rate a cell that ships only its summary")
                 continue
 
-        stats = score_cell(rp, tp, model, strategy, eval_index, errors)
+        stats = score_cell(rp, tp, model, strategy, eval_index, instances, errors)
         cells[key] = stats  # None marks a cell that failed; grid check still sees it
     return cells
 
@@ -692,7 +897,42 @@ def decide(fail_rate, adherence, ladder_exhausted):
 
 
 # ----------------------------------------------------------------- report
-def build_report(run_dir, config_path, eval_set_arg=None, cli_rung=None):
+def pinned_corpus_path(cfg, config_path, manifest, manifest_name, key, label,
+                       default=None):
+    """The CONFIG pins the corpus; the run does not get to choose.
+
+    The manifest may RECORD what the run used — that is useful provenance — but
+    it is checked against the config, never allowed to outrank it. A run that
+    scored a different (softer) corpus than the one the config pins is a run the
+    gate cannot rate, not a run the gate re-points at.
+    """
+    raw = cfg.get(key, default)
+    if not is_nonempty_str(raw):
+        raise GateError(
+            f"{config_path}: '{key}' is {describe(cfg.get(key))} — the {label} is "
+            f"pinned by the config and by nothing else. There is no flag and no "
+            f"manifest key that supplies one")
+    path = resolve_pinned_path(raw, f"{label} (pinned by {config_path}:{key})")
+
+    recorded = (manifest or {}).get(key)
+    if recorded is not None:
+        if not is_nonempty_str(recorded):
+            raise GateError(f"{manifest_name}: records {key} {describe(recorded)}, "
+                            f"which is not a path")
+        rec_path = Path(recorded)
+        rec_path = rec_path if rec_path.is_absolute() else REPO_ROOT / rec_path
+        same = rec_path.exists() and path.exists() and rec_path.samefile(path)
+        if not same:
+            raise GateError(
+                f"{manifest_name}: the run records {key} {recorded!r} but "
+                f"{config_path} pins {raw!r} ({path}). The config pins the {label}; "
+                f"a run that scored a different corpus than the pinned one is "
+                f"unratable — rerun it against the pinned {label} or change the "
+                f"config deliberately. A manifest is provenance, not an override")
+    return path
+
+
+def build_report(run_dir, config_path, cli_rung=None):
     """(report, errors). A report is returned only when the run is fully consistent."""
     errors = []
     run_dir = Path(run_dir)
@@ -710,26 +950,25 @@ def build_report(run_dir, config_path, eval_set_arg=None, cli_rung=None):
     if manifest is not None and not isinstance(manifest, dict):
         return None, [f"{manifest_name}: run manifest is not a JSON object"]
 
-    raw_eval = (eval_set_arg
-                or (manifest or {}).get("eval_set")
-                or cfg.get("eval_set"))
-    if not is_nonempty_str(raw_eval):
-        return None, ["no eval set path: not given with --eval-set, not recorded in "
-                      "the run manifest, not pinned in the config"]
-    eval_path = resolve_path(raw_eval, run_dir)
-    if eval_path is None:
-        return None, [
-            f"eval set {raw_eval!r} not found (looked in {Path.cwd()}, {run_dir}, "
-            f"{REPO_ROOT}). The gate cannot check that the transcripts cover the "
-            f"eval set without it, so it fails rather than rating a slice"]
+    eval_path = pinned_corpus_path(cfg, config_path, manifest, manifest_name,
+                                   "eval_set", "eval set")
+    instances_path = pinned_corpus_path(cfg, config_path, manifest, manifest_name,
+                                        "constraint_instances",
+                                        "constraint instance library",
+                                        default=DEFAULT_INSTANCES_PATH)
+    eval_sha256 = sha256_of(eval_path)
+    instances_sha256 = sha256_of(instances_path)
+
     eval_index = load_eval_set(eval_path)
+    instances = load_constraint_instances(instances_path)
+    check_constraints_resolve(eval_index, instances, eval_path, instances_path)
 
     rung = resolve_rung(cfg, manifest, cli_rung, errors)
     observed = None
     if rung is not None:
         observed = verify_rung_against_eval_set(rung, eval_index, eval_path, errors)
 
-    cells = load_cells(run_dir, cfg, eval_index, errors)
+    cells = load_cells(run_dir, cfg, eval_index, instances, errors)
     check_grid(cells, cfg, errors)
 
     good = {k: v for k, v in cells.items() if v is not None}
@@ -769,6 +1008,10 @@ def build_report(run_dir, config_path, eval_set_arg=None, cli_rung=None):
         "run_dir": str(run_dir),
         "config": str(config_path),
         "eval_set": str(eval_path),
+        "eval_set_sha256": eval_sha256,
+        "eval_set_source": f"pinned by {config_path}:eval_set",
+        "constraint_instances": str(instances_path),
+        "constraint_instances_sha256": instances_sha256,
         "run_manifest": manifest_name,
         "n_scenarios": len(eval_index),
         "definition": (
@@ -776,7 +1019,12 @@ def build_report(run_dir, config_path, eval_set_arg=None, cli_rung=None):
             f"{QUALITY_SCORE_MIN}; spec_adherence = mean(spec_pass) over the eval "
             "set; fail_rate = 1 - spec_adherence; the gate reads the BEST frontier "
             "cell only (the local base row is excluded from the ceiling claim). "
-            "Every number here was recomputed from raw transcript rows."),
+            "Every number here was recomputed from raw transcript rows, and every "
+            "checker verdict was re-derived by running constraints.checkers.check "
+            "on each row's own output; the stored verdicts were compared to those, "
+            "never trusted. quality_score is the one input that cannot be replayed "
+            "offline, so n_fail_from_quality_only records how many counted "
+            "failures rest on the judge alone."),
         "thresholds": {
             "proceed_fail_rate_min": float(PROCEED_FAIL_RATE_MIN),
             "proceed_boundary": "inclusive: fail_rate == 0.20 PROCEEDs",
@@ -813,6 +1061,8 @@ def build_report(run_dir, config_path, eval_set_arg=None, cli_rung=None):
             "fail_rate": best["fail_rate"],
             "n": best["n"],
             "n_spec_pass": best["n_spec_pass"],
+            "n_fail_from_checkers": best["n_fail_from_checkers"],
+            "n_fail_from_quality_only": best["n_fail_from_quality_only"],
         },
         "gate_fail_rate": float(fail_rate),
         "gate_spec_adherence": float(adherence),
@@ -835,8 +1085,10 @@ def main(argv=None):
     ap.add_argument("run_dir", nargs="?", default="runs/g1",
                     help="the G1 run directory (a file inside it also works)")
     ap.add_argument("--config", default=str(REPO_ROOT / "configs" / "g1.json"))
-    ap.add_argument("--eval-set", default=None,
-                    help="override the eval set path recorded in the run manifest")
+    # There is deliberately no --eval-set. The config pins the corpus; letting
+    # the invocation (or the run manifest) name a different one is how a run
+    # picks the exam it sits, and the report's eval_set_sha256 would then be
+    # auditing whatever the caller chose.
     ap.add_argument("--rung", default=None,
                     help="ladder rung that produced this run, when the run manifest "
                          "does not record one (recorded in the report as cli)")
@@ -850,8 +1102,7 @@ def main(argv=None):
         run_dir = run_dir.parent
 
     try:
-        report, errors = build_report(run_dir, Path(args.config), args.eval_set,
-                                      args.rung)
+        report, errors = build_report(run_dir, Path(args.config), args.rung)
     except GateError as exc:
         errors, report = [str(exc)], None
 
@@ -885,6 +1136,10 @@ def main(argv=None):
           f"({', '.join(cls['local_base_providers'])}) recorded and excluded")
     print(f"  ok   every cell recomputed from raw transcript rows over all "
           f"{report['n_scenarios']} eval-set scenarios")
+    print(f"  ok   every checker verdict re-derived from (constraint, output) "
+          f"against {report['constraint_instances']}")
+    print(f"  ok   eval set {report['eval_set']} "
+          f"sha256:{report['eval_set_sha256'][:16]}… (pinned by the config)")
     print(f"  ok   report -> {dest}")
     print(report["verdict_line"])
     return EXIT_FOR_VERDICT[report["verdict"]]

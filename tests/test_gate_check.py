@@ -13,6 +13,7 @@ The suite is organised as:
   * contract tests over configs/g1.json
 """
 import ast
+import hashlib
 import json
 import math
 import re
@@ -23,6 +24,7 @@ import pytest
 from conftest import REPO_ROOT
 
 import scripts.gate_check as G
+from constraints.checkers import check as real_check
 
 FRONTIER_A = "openai:gpt-5.6-sol"
 FRONTIER_B = "google:gemini-3.1-pro-preview"
@@ -40,6 +42,47 @@ LAST_RUNG = RUNGS[-1]["name"]
 
 N = 40  # >= R6's floor of 30, and divides the fail rates the table exercises
 
+# --------------------------------------------------------- real constraints
+# The gate re-runs constraints.checkers.check over (constraint, output), so a
+# fixture can no longer wave a "pass": false flag at it. Every instance below is
+# a real registry-valid constraint, every "violation" snippet genuinely trips
+# EXACTLY its own checker (test_fixture_rig_is_genuine proves both halves), and
+# every checker_results block in the rig is produced by calling the real
+# checker. A sabotage that fabricates a verdict is therefore fabricating it
+# against ground truth, which is the only way this suite can prove the gate.
+INSTANCES = [
+    {"id": "c-lex-001", "type": "banned_words", "family": "lexical",
+     "split": "train", "params": {"words": ["coffee", "espresso", "latte"]}},
+    {"id": "c-lex-002", "type": "banned_words", "family": "lexical",
+     "split": "train", "params": {"words": ["quantum", "entanglement"]}},
+    {"id": "c-lex-003", "type": "banned_phrases", "family": "lexical",
+     "split": "train", "params": {"phrases": ["in conclusion", "as an AI"]}},
+    {"id": "c-fmt-001", "type": "no_lists", "family": "format_negative",
+     "split": "train", "params": {}},
+    {"id": "c-fmt-002", "type": "no_quotation_marks", "family": "format_negative",
+     "split": "train", "params": {}},
+    {"id": "c-chr-001", "type": "banned_punctuation", "family": "character",
+     "split": "heldout_type", "params": {"marks": [";"]}},
+]
+INSTANCE_BY_ID = {c["id"]: c for c in INSTANCES}
+INSTANCE_IDS = [c["id"] for c in INSTANCES]
+
+#: id -> text that genuinely violates that constraint and no other one here.
+VIOLATION = {
+    "c-lex-001": " The roastery served fresh coffee to everyone.",
+    "c-lex-002": " A quantum result arrived overnight.",
+    "c-lex-003": " In conclusion the schedule holds.",
+    "c-fmt-001": "\n- first point\n- second point\n",
+    "c-fmt-002": ' The chair said "ready" and sat down.',
+    "c-chr-001": " It worked; it held.",
+}
+
+
+def compliant_output(scenario_id):
+    """Prose that genuinely satisfies every constraint in INSTANCES."""
+    return (f"Response for {scenario_id}. The team wrote a plain paragraph "
+            f"about the topic and kept every sentence ordinary.")
+
 
 # --------------------------------------------------------------- fixture rig
 def stem(model, strategy):
@@ -47,9 +90,15 @@ def stem(model, strategy):
     return f"{safe}__{strategy}"
 
 
+def write_instances(path, instances=INSTANCES):
+    path.write_text("".join(json.dumps(c) + "\n" for c in instances))
+    return path
+
+
 def make_eval_set(path, n=N, k_values=(2,), adversarial_share=0.40):
     """A schema-valid v2 scenario corpus. k cycles through k_values so the
-    highest k the rung claims is actually present."""
+    highest k the rung claims is actually present. Constraint ids rotate through
+    the real instance library so each scenario names k DISTINCT real ones."""
     n_adv = math.ceil(n * adversarial_share)
     scenarios = []
     for i in range(n):
@@ -57,10 +106,12 @@ def make_eval_set(path, n=N, k_values=(2,), adversarial_share=0.40):
         # guarantee max(k_values) appears even when n % len(k_values) skips it
         if i == n - 1:
             k = max(k_values)
+        cons = [INSTANCE_IDS[(i + j) % len(INSTANCE_IDS)] for j in range(k)]
+        assert len(set(cons)) == k, "a scenario must not repeat a constraint id"
         scenarios.append({
             "scenario_id": f"s-{i:04d}",
             "task": f"Write a short paragraph about topic {i}.",
-            "constraints": [f"c-lex-{i:03d}-{j}" for j in range(k)],
+            "constraints": cons,
             "k": k,
             "pressure": "adversarial" if i < n_adv else "clean",
             "split": "train",
@@ -69,21 +120,35 @@ def make_eval_set(path, n=N, k_values=(2,), adversarial_share=0.40):
     return scenarios
 
 
-def make_row(scenario, model, strategy, passing):
-    """One transcript row in the pinned format. `passing` drives a real checker
-    failure, never just the spec_pass flag."""
-    cons = scenario["constraints"]
-    results = [{"constraint_id": c, "pass": True, "evidence": "clean"} for c in cons]
+def score_output(scenario, output):
+    """checker_results the way the harness makes them: by running the checker."""
+    results = []
+    for cid in scenario["constraints"]:
+        verdict = real_check(INSTANCE_BY_ID[cid], output)
+        results.append({"constraint_id": cid, "pass": bool(verdict["pass"]),
+                        "evidence": str(verdict["evidence"])})
+    return results
+
+
+def make_row(scenario, model, strategy, passing, quality=4):
+    """One transcript row in the pinned format.
+
+    `passing` drives a REAL constraint violation in the model output, and the
+    checker_results are then produced by the real checker — never asserted.
+    """
+    output = compliant_output(scenario["scenario_id"])
     if not passing:
-        results[0] = {"constraint_id": cons[0], "pass": False,
-                      "evidence": "...used the banned word 'coffee' here..."}
-    quality = 4
+        output += VIOLATION[scenario["constraints"][0]]
+    results = score_output(scenario, output)
+    assert all(r["pass"] for r in results) is passing, (
+        f"fixture is not honest: passing={passing} but the real checkers say "
+        f"{[(r['constraint_id'], r['pass']) for r in results]}")
     spec_pass = all(r["pass"] for r in results) and quality >= 3
     return {
         "scenario_id": scenario["scenario_id"],
         "model": model,
         "strategy": strategy,
-        "output": f"Response for {scenario['scenario_id']}.",
+        "output": output,
         "checker_results": results,
         "quality_score": quality,
         "quality_reasoning": "Addresses the task with a coherent paragraph.",
@@ -132,6 +197,7 @@ def build_run(tmp_path, *, best_fail=10, other_fails=(14, 18), base_fail=30,
     run_dir = tmp_path / name
     run_dir.mkdir()
     eval_path = tmp_path / f"{name}_scenarios.jsonl"
+    instances_path = write_instances(tmp_path / f"{name}_instances.jsonl")
     scenarios = make_eval_set(eval_path, n=n, k_values=k_values,
                               adversarial_share=adversarial_share)
 
@@ -151,6 +217,7 @@ def build_run(tmp_path, *, best_fail=10, other_fails=(14, 18), base_fail=30,
         "models": {"frontier": [FRONTIER_A, FRONTIER_B], "local_base": LOCAL_BASE},
         "strategies": list(STRATEGIES),
         "eval_set": str(eval_path),
+        "constraint_instances": str(instances_path),
         "judge": {"provider": "anthropic", "model": "claude-sonnet-4-6"},
         "ladder": {"current": rung, "rungs": RUNGS},
     }, indent=2))
@@ -180,6 +247,71 @@ def read_rows(run_dir, model, strategy):
 
 def write_rows(path, rows):
     path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+
+
+def restate_aggregate(run_dir, model, strategy, rows, scenarios):
+    """Rewrite the stored metrics so they match `rows` exactly.
+
+    Sabotage that leaves the summary contradicting its own rows is caught by the
+    aggregate check and proves nothing about the guard under test, so every
+    mutation here restates the aggregate first.
+    """
+    n = len(rows)
+    n_pass = sum(1 for r in rows if r["spec_pass"])
+    by_id = {s["scenario_id"]: s for s in scenarios}
+    adv = [r for r in rows if by_id[r["scenario_id"]]["pressure"] == "adversarial"]
+    rewrite_results(run_dir, model, strategy, lambda d: d["metrics"].update(
+        n=n, spec_adherence=n_pass / n, fail_rate=(n - n_pass) / n,
+        robustness=(sum(1 for r in adv if r["spec_pass"]) / len(adv)) if adv else None))
+
+
+def forge_failures(run_dir, model, strategy, scenarios, n_fail):
+    """Claim `n_fail` checker failures on rows whose outputs genuinely comply.
+
+    Nothing about the row is left inconsistent: the failing checker keeps a
+    plausible evidence string, spec_pass follows the pinned definition from the
+    forged verdicts, and the stored aggregate is restated to match. Only
+    re-running the checker over (constraint, output) can see it.
+    """
+    path, rows = read_rows(run_dir, model, strategy)
+    forged = 0
+    for r in rows:
+        if forged >= n_fail:
+            break
+        if not r["spec_pass"]:
+            continue
+        r["checker_results"][0] = {
+            "constraint_id": r["checker_results"][0]["constraint_id"],
+            "pass": False,
+            "evidence": "banned word 'coffee' at offset 12: ...served coffee...",
+        }
+        r["spec_pass"] = False
+        forged += 1
+    assert forged == n_fail, "the fixture must have enough passing rows to forge"
+    write_rows(path, rows)
+    restate_aggregate(run_dir, model, strategy, rows, scenarios)
+
+
+def demote_quality(run_dir, model, strategy, scenarios, n_demote, score=2):
+    """Drop the judge's score below 3 on rows whose checkers genuinely pass.
+
+    This is the ONE failure the gate cannot reproduce (a judge call cannot be
+    replayed offline), so it is a legitimate row shape — the point of the test
+    is that the report says out loud how many failures rest on it.
+    """
+    path, rows = read_rows(run_dir, model, strategy)
+    done = 0
+    for r in rows:
+        if done >= n_demote:
+            break
+        if not r["spec_pass"]:
+            continue
+        r["quality_score"] = score
+        r["spec_pass"] = False
+        done += 1
+    assert done == n_demote
+    write_rows(path, rows)
+    restate_aggregate(run_dir, model, strategy, rows, scenarios)
 
 
 # ------------------------------------------------------------- happy path
@@ -482,6 +614,82 @@ def sab_eval_set_shrunk_below_r6_floor(run_dir, best, eval_path=None, **_):
     eval_path.write_text("\n".join(lines) + "\n")
 
 
+# --- BLOCKER 1: forged programmatic verdicts over authentic model outputs -----
+def sab_fabricated_checker_failures(run_dir, best, scenarios=None, **_):
+    """Rows whose outputs genuinely comply, claiming checker failures anyway.
+
+    Self-consistent at every level the gate used to look at: the verdict, the
+    spec_pass derived from it and the stored aggregate all agree with each
+    other. They just disagree with the checker.
+    """
+    forge_failures(run_dir, *best, scenarios, 4)
+
+
+def sab_forged_evidence_behind_a_true_verdict(run_dir, best, **_):
+    """The pass flag is right; the evidence naming the violation is invented."""
+    path, rows = read_rows(run_dir, *best)
+    for r in rows:
+        if r["spec_pass"]:
+            continue
+        for cr in r["checker_results"]:
+            if not cr["pass"]:
+                cr["evidence"] = "the model came close to a banned term here"
+        break
+    write_rows(path, rows)
+
+
+def sab_output_edited_after_scoring(run_dir, best, **_):
+    """A failing row's output is quietly cleaned up, its failing verdict kept.
+
+    The row still 'fails', so the metric is untouched — but the transcript no
+    longer shows the violation the gate's evidence rests on, and the archived
+    output is what an Architecture Defense would be shown.
+    """
+    path, rows = read_rows(run_dir, *best)
+    for r in rows:
+        if not r["spec_pass"]:
+            r["output"] = compliant_output(r["scenario_id"])
+            break
+    write_rows(path, rows)
+
+
+# --- BLOCKER 2: the run choosing the corpus it is graded against -------------
+def sab_manifest_names_a_softer_corpus(run_dir, best, tmp_path=None, **_):
+    """A second, easier corpus, named by the run manifest instead of the config."""
+    soft = tmp_path / "soft_corpus.jsonl"
+    make_eval_set(soft, n=30, k_values=(2,), adversarial_share=0.40)
+    p = run_dir / "g1_table.json"
+    d = json.loads(p.read_text())
+    d["eval_set"] = str(soft)
+    p.write_text(json.dumps(d))
+
+
+def sab_manifest_names_a_softer_instance_library(run_dir, best, tmp_path=None, **_):
+    """Same trick one level down: laxer constraint objects behind the same ids."""
+    lax = write_instances(tmp_path / "lax_instances.jsonl", [
+        dict(c, params={"words": ["zzzzznotawordzzzzz"]})
+        if c["type"] == "banned_words" else c for c in INSTANCES])
+    p = run_dir / "g1_table.json"
+    d = json.loads(p.read_text())
+    d["constraint_instances"] = str(lax)
+    p.write_text(json.dumps(d))
+
+
+def sab_transcripts_declared_outside_the_run(run_dir, best, tmp_path=None, **_):
+    elsewhere = tmp_path / "elsewhere.transcripts.jsonl"
+    _, rows = read_rows(run_dir, *best)
+    write_rows(elsewhere, [r for r in rows if r["spec_pass"]])
+    rewrite_results(run_dir, *best,
+                    lambda d: d.update(transcripts=f"../{elsewhere.name}"))
+
+
+def sab_scenario_names_an_unresolvable_constraint(run_dir, best, eval_path=None, **_):
+    """A constraint id no instance library holds: its checker cannot be re-run."""
+    lines = [json.loads(ln) for ln in eval_path.read_text().splitlines() if ln.strip()]
+    lines[0]["constraints"][0] = "c-lex-987"
+    eval_path.write_text("".join(json.dumps(s) + "\n" for s in lines))
+
+
 SABOTAGE = [
     # (label, mutation, a substring of the error THIS guard must produce)
     ("stored aggregate inflated above its own rows", sab_inflate_stored_aggregate,
@@ -527,6 +735,24 @@ SABOTAGE = [
     ("the eval set missing", sab_eval_set_deleted, "not found"),
     ("an eval set below R6's 30-scenario floor", sab_eval_set_shrunk_below_r6_floor,
      "per model x strategy cell"),
+    # BLOCKER 1 — the programmatic half must be re-derived, not just re-read
+    ("fabricated checker failures over compliant outputs",
+     sab_fabricated_checker_failures, "the stored verdict is fabricated"),
+    ("forged evidence behind an otherwise correct verdict",
+     sab_forged_evidence_behind_a_true_verdict,
+     "not produced by the checker it claims"),
+    ("a failing row's output edited after scoring", sab_output_edited_after_scoring,
+     "the stored verdict is fabricated"),
+    # BLOCKER 2 — the config pins the corpus, the run does not choose it
+    ("a manifest naming a softer corpus than the config pins",
+     sab_manifest_names_a_softer_corpus, "provenance, not an override"),
+    ("a manifest naming a laxer constraint instance library",
+     sab_manifest_names_a_softer_instance_library, "provenance, not an override"),
+    ("a results JSON pointing at transcripts outside its run",
+     sab_transcripts_declared_outside_the_run, "escapes the run directory"),
+    ("a scenario naming a constraint no library holds",
+     sab_scenario_names_an_unresolvable_constraint,
+     "not in the pinned instance library"),
 ]
 
 
@@ -541,13 +767,14 @@ def test_sabotaged_run_is_rejected_not_rated(tmp_path, capsys, label, sabotage,
     deleted while this table stayed green. The expected-message assertion binds
     each guard to the sabotage it exists to stop.
     """
-    run_dir, cfg, eval_path, _ = build_run(tmp_path, best_fail=10)
+    run_dir, cfg, eval_path, scenarios = build_run(tmp_path, best_fail=10)
     assert run_gate(run_dir, cfg) == G.EXIT_PROCEED, "control run must PROCEED first"
     (run_dir / "gate_report.json").unlink()
     capsys.readouterr()
 
     best = (FRONTIER_A, "zero_shot")   # deterministic best frontier cell above
-    sabotage(run_dir, best, eval_path=eval_path)
+    sabotage(run_dir, best, eval_path=eval_path, scenarios=scenarios,
+             tmp_path=tmp_path)
 
     code = run_gate(run_dir, cfg)
     assert code == G.EXIT_INVALID, f"{label}: expected rejection, got exit {code}"
@@ -569,6 +796,246 @@ def test_a_stale_report_from_an_earlier_run_is_called_out(tmp_path, capsys):
     assert run_gate(run_dir, cfg) == G.EXIT_INVALID
     err = capsys.readouterr().err
     assert "STALE" in err, "a leftover PROCEED report must be flagged, not trusted"
+
+
+# ------------------------- the headline: a genuinely compliant run cannot PROCEED
+def test_a_fully_compliant_run_cannot_fabricate_its_way_to_a_proceed(tmp_path, capsys):
+    """THE attack this gate exists to stop.
+
+    Every model output in this run genuinely satisfies every constraint — the
+    checkers say so, and the ceiling claim R6 is about is therefore FALSE for
+    this corpus. The run then writes itself a 30% fail rate: forged checker
+    verdicts, spec_pass derived correctly FROM the forgery, aggregates restated
+    to match, coverage intact, every row type-clean. Before the gate re-derived
+    checker_results from (constraint, output) this produced a PROCEED, which
+    would have carried a false ceiling into the Architecture Defense.
+    """
+    run_dir, cfg, _, scenarios = build_run(tmp_path, best_fail=0, other_fails=(0, 0),
+                                           base_fail=0)
+
+    # control: the truth about this run
+    assert run_gate(run_dir, cfg) == G.EXIT_ESCALATE
+    control = read_report(run_dir)
+    assert control["gate_fail_rate"] == 0.0
+    assert control["gate_spec_adherence"] == 1.0
+    assert control["best_frontier_cell"]["n_fail_from_checkers"] == 0
+    (run_dir / "gate_report.json").unlink()
+    capsys.readouterr()
+
+    # the forgery: 12/40 = 0.30 fail rate in every frontier cell
+    for model in (FRONTIER_A, FRONTIER_B):
+        for strategy in STRATEGIES:
+            forge_failures(run_dir, model, strategy, scenarios, 12)
+
+    code = run_gate(run_dir, cfg)
+    err = capsys.readouterr().err
+    assert code == G.EXIT_INVALID, (
+        "a run whose outputs genuinely comply must never be rated PROCEED on "
+        "failures it invented")
+    assert "the stored verdict is fabricated" in err
+    assert not (run_dir / "gate_report.json").exists()
+
+
+def test_a_single_forged_row_is_enough_to_make_the_run_unratable(tmp_path, capsys):
+    """No quorum, no tolerance: one fabricated verdict fails the whole run."""
+    run_dir, cfg, _, scenarios = build_run(tmp_path, best_fail=10)
+    assert run_gate(run_dir, cfg) == G.EXIT_PROCEED
+    (run_dir / "gate_report.json").unlink()
+    capsys.readouterr()
+
+    forge_failures(run_dir, FRONTIER_A, "zero_shot", scenarios, 1)
+    assert run_gate(run_dir, cfg) == G.EXIT_INVALID
+    assert "fabricated" in capsys.readouterr().err
+
+
+def test_checker_verdicts_are_recomputed_not_reread(tmp_path, capsys):
+    """A row can also forge a PASS. Same guard, opposite direction."""
+    run_dir, cfg, _, _ = build_run(tmp_path, best_fail=10)
+    path, rows = read_rows(run_dir, FRONTIER_A, "zero_shot")
+    victim = next(r for r in rows if not r["spec_pass"])
+    for cr in victim["checker_results"]:
+        cr["pass"] = True
+        cr["evidence"] = "clean"
+    victim["spec_pass"] = True
+    write_rows(path, rows)
+
+    assert run_gate(run_dir, cfg) == G.EXIT_INVALID
+    err = capsys.readouterr().err
+    assert "fabricated" in err and victim["scenario_id"] in err
+
+
+@pytest.mark.parametrize("bogus", [12345, None, ["text"], {"text": "x"}, True],
+                         ids=["int", "null", "list", "dict", "true"])
+def test_an_unusable_output_is_reported_not_crashed_on(tmp_path, capsys, bogus):
+    """constraints.checkers.check raises TypeError on a non-string text.
+
+    The gate now feeds every row's output to it, so a row carrying a number
+    where its output should be must come back as a NAMED problem in the FAIL
+    list. A traceback would abort the run before the other rows were examined
+    and would print no verdict at all — indistinguishable, to a script, from a
+    crash for an unrelated reason.
+    """
+    run_dir, cfg, _, _ = build_run(tmp_path, best_fail=10)
+    path, rows = read_rows(run_dir, FRONTIER_A, "zero_shot")
+    rows[0]["output"] = bogus
+    write_rows(path, rows)
+
+    assert run_gate(run_dir, cfg) == G.EXIT_INVALID
+    err = capsys.readouterr().err
+    assert "output is" in err and "not a string" in err
+    assert "Traceback" not in err
+
+
+def test_the_gate_imports_the_pinned_checker_and_does_not_reimplement_it():
+    """The ground-truth layer has exactly one implementation."""
+    src = (REPO_ROOT / "scripts" / "gate_check.py").read_text()
+    assert "from constraints.checkers import check" in src
+    tree = ast.parse(src)
+    defined = {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+    for banned in ("check_banned_words", "check_banned_letter", "check_no_lists",
+                   "check_no_quotation_marks", "check_banned_punctuation"):
+        assert banned not in defined, (
+            f"gate_check.py defines {banned}; a second copy of a checker is a "
+            f"second ground truth")
+
+
+def test_fixture_rig_is_genuine():
+    """The rig's own honesty, checked against the real checkers.
+
+    Every test above rests on 'this output genuinely complies' and 'this snippet
+    genuinely violates exactly one constraint'. Both are asserted here so a
+    silent drift in constraints/checkers.py breaks the claim loudly rather than
+    quietly turning the sabotage table into theatre.
+    """
+    base = compliant_output("s-0000")
+    for c in INSTANCES:
+        verdict = real_check(c, base)
+        assert verdict["pass"] is True, f"{c['id']} rejects the clean fixture output"
+        assert verdict["evidence"] == "clean"
+    for cid, snippet in VIOLATION.items():
+        text = base + snippet
+        tripped = {c["id"] for c in INSTANCES if not real_check(c, text)["pass"]}
+        assert tripped == {cid}, (
+            f"{cid}'s violation snippet trips {sorted(tripped)}, not exactly "
+            f"{{{cid!r}}} — a spillover would make the rig's failure counts wrong")
+
+
+# ------------------------- the corpus is pinned by the config, not by the run
+def test_report_records_the_hash_of_the_corpus_actually_scored(tmp_path):
+    run_dir, cfg, eval_path, _ = build_run(tmp_path, best_fail=10)
+    assert run_gate(run_dir, cfg) == G.EXIT_PROCEED
+    report = read_report(run_dir)
+
+    assert report["eval_set"] == str(eval_path)
+    assert report["eval_set_sha256"] == hashlib.sha256(eval_path.read_bytes()).hexdigest()
+    assert "config" in report["eval_set_source"] or "pinned" in report["eval_set_source"]
+
+    inst = Path(report["constraint_instances"])
+    assert report["constraint_instances_sha256"] == \
+        hashlib.sha256(inst.read_bytes()).hexdigest()
+
+    # the hash must track the corpus, not be a constant
+    eval_path.write_text(eval_path.read_text() + "\n")
+    (run_dir / "gate_report.json").unlink()
+    assert run_gate(run_dir, cfg) == G.EXIT_PROCEED
+    assert read_report(run_dir)["eval_set_sha256"] != report["eval_set_sha256"]
+
+
+def test_a_manifest_agreeing_with_the_config_is_fine(tmp_path):
+    """Recording provenance is allowed; outranking the config is not."""
+    run_dir, cfg, eval_path, _ = build_run(tmp_path, best_fail=10)
+    p = run_dir / "g1_table.json"
+    d = json.loads(p.read_text())
+    assert d["eval_set"] == str(eval_path)
+    p.write_text(json.dumps(d))
+    assert run_gate(run_dir, cfg) == G.EXIT_PROCEED
+
+
+def test_a_config_with_no_eval_set_is_an_error_not_a_manifest_lookup(tmp_path, capsys):
+    run_dir, cfg, eval_path, _ = build_run(tmp_path, best_fail=10)
+    data = json.loads(cfg.read_text())
+    data.pop("eval_set")
+    cfg.write_text(json.dumps(data))
+    # the manifest still names a perfectly good corpus — it must not be used
+    assert json.loads((run_dir / "g1_table.json").read_text())["eval_set"] \
+        == str(eval_path)
+
+    assert run_gate(run_dir, cfg) == G.EXIT_INVALID
+    err = capsys.readouterr().err
+    assert "eval_set" in err and "pinned by the config" in err
+
+
+def test_there_is_no_eval_set_override_flag(tmp_path):
+    """--eval-set let the invocation pick the exam. It is gone, not softened."""
+    run_dir, cfg, eval_path, _ = build_run(tmp_path, best_fail=10)
+    with pytest.raises(SystemExit):
+        G.main([str(run_dir), "--config", str(cfg), "--eval-set", str(eval_path)])
+    src = (REPO_ROOT / "scripts" / "gate_check.py").read_text()
+    tree = ast.parse(src)
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "add_argument"):
+            for arg in node.args:
+                if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                    assert "eval" not in arg.value, f"{arg.value} re-opens the vector"
+
+
+def test_a_pinned_path_is_not_searched_for_in_the_cwd(tmp_path, capsys, monkeypatch):
+    """resolve_path used to try cwd, then the run dir, then the repo root, so a
+    decoy file next to the caller could answer to the pinned name."""
+    run_dir, cfg, eval_path, scenarios = build_run(tmp_path, best_fail=10)
+    decoy_dir = tmp_path / "decoy"
+    decoy_dir.mkdir()
+    decoy = decoy_dir / "corpus.jsonl"
+    make_eval_set(decoy, n=30)
+
+    data = json.loads(cfg.read_text())
+    data["eval_set"] = "corpus.jsonl"        # repo-relative, does not exist there
+    cfg.write_text(json.dumps(data))
+    monkeypatch.chdir(decoy_dir)
+
+    assert run_gate(run_dir, cfg) == G.EXIT_INVALID
+    assert "not found" in capsys.readouterr().err
+
+
+def test_the_default_constraint_instance_library_is_the_shipped_one():
+    """The gate's default is a real repo artifact, and it loads."""
+    path = REPO_ROOT / G.DEFAULT_INSTANCES_PATH
+    assert path.exists(), (
+        f"{G.DEFAULT_INSTANCES_PATH} is the library the gate re-runs checkers "
+        f"against; its absence must break the gate, not be worked around")
+    lib = G.load_constraint_instances(path)
+    assert len(lib) >= 1 and all(cid.startswith("c-") for cid in lib)
+
+
+# --------------------------------------- what the gate cannot recompute, it says
+def test_failures_are_attributed_to_the_checkers_or_to_the_judge(tmp_path):
+    """quality_score is the one input the gate cannot replay offline.
+
+    It is trusted (there is no way not to), so the report states how much of the
+    fail rate rests on it. A reader can then see at a glance whether a PROCEED
+    was earned by constraint violations or by a judge's scores.
+    """
+    run_dir, cfg, _, scenarios = build_run(tmp_path, best_fail=10)
+    assert run_gate(run_dir, cfg) == G.EXIT_PROCEED
+    best = read_report(run_dir)["best_frontier_cell"]
+    assert best["n_fail_from_checkers"] == 10
+    assert best["n_fail_from_quality_only"] == 0
+
+    # now a run whose entire fail rate is judge-attributed
+    run2, cfg2, _, scen2 = build_run(tmp_path, best_fail=0, other_fails=(0, 0),
+                                     base_fail=0, name="quality_only")
+    for model in (FRONTIER_A, FRONTIER_B):
+        for strategy in STRATEGIES:
+            demote_quality(run2, model, strategy, scen2, 10)
+    assert run_gate(run2, cfg2) == G.EXIT_PROCEED   # 0.25 by the pinned definition
+    report = read_report(run2)
+    best2 = report["best_frontier_cell"]
+    assert best2["n_fail_from_checkers"] == 0, (
+        "no constraint was violated in this run")
+    assert best2["n_fail_from_quality_only"] == 10, (
+        "the report must say that every counted failure rests on the judge alone")
+    assert "quality_score" in report["definition"]
 
 
 # ----------------------------------------------------------- type confusion
