@@ -52,6 +52,7 @@ ADAPTER_PATH = f"/vol/{RUN_NAME}/adapter"
 MERGED_PATH = f"/vol/{RUN_NAME}/merged_fp16"
 TUNED_SPEC = f"hf:{MERGED_PATH}"
 DATASET_REL = "data/train/train_smoke.jsonl"
+EVAL_SET_REL = "data/eval/corpus.jsonl"
 RENDER_FN = "scenarios.render.render_prompt"
 STEM = "merged_fp16__zero_shot"
 TEACHER = "claude-sonnet-4-6"
@@ -161,8 +162,12 @@ def transcript_rows(scenarios):
     rows = []
     for i, s in enumerate(scenarios):
         cid_list = s["constraints"]
-        # rows 2 and 4 violate their first constraint; row 5 is quarantined.
-        violates = i in (2, 4)
+        # rows 2 and 3 violate their first constraint; row 5 is quarantined.
+        # Row 3 is an ADVERSARIAL scenario, so the fixture's adversarial cell is
+        # 1/2 rather than a degenerate 2/2 -- a robustness of 1.0 cannot be
+        # sabotaged downward, and the whole point of the cell is that failures
+        # show up in it.
+        violates = i in (2, 3)
         results = [{"constraint_id": cid,
                     "pass": not (violates and j == 0),
                     "evidence": "[[coffee]]" if (violates and j == 0) else "clean"}
@@ -193,6 +198,7 @@ class LoopRun:
         self.run_dir = self.root / "runs" / "smoke"
         self.eval_dir = self.run_dir / "eval"
         self.ds_path = self.root / DATASET_REL
+        self.eval_set_path = self.root / EVAL_SET_REL
         self.log_path = self.run_dir / "train_log.json"
         self.results_path = self.eval_dir / f"{STEM}.results.json"
         self.transcripts_path = self.eval_dir / f"{STEM}.transcripts.jsonl"
@@ -208,16 +214,20 @@ class LoopRun:
         self.ds_path.parent.mkdir(parents=True, exist_ok=True)
         self.write_rows([self.training_row(s) for s in train_scenarios()])
 
-        # eval: transcripts + metrics from the REAL harness
+        # eval: transcripts + metrics from the REAL harness. The scenario
+        # corpus is committed too -- 'pressure' lives there, not on the pinned
+        # transcript row, so robustness is only re-derivable with it.
         scen = eval_scenarios()
         rows = transcript_rows(scen)
         metrics = H.aggregate(rows, scen, LOOKUP)
+        self.eval_set_path.parent.mkdir(parents=True, exist_ok=True)
+        self.write_eval_set(scen)
         self.eval_dir.mkdir(parents=True, exist_ok=True)
         self.transcripts_path.write_text(
             "".join(json.dumps(r) + "\n" for r in rows))
         self.results_path.write_text(json.dumps(
             {"model": TUNED_SPEC, "strategy": "zero_shot", "judge": TEACHER,
-             "metrics": metrics}, indent=2))
+             "eval_set": EVAL_SET_REL, "metrics": metrics}, indent=2))
 
         self.log_path.write_text(json.dumps(self.train_log(), indent=2))
 
@@ -245,7 +255,13 @@ class LoopRun:
             "prompt_contract": {
                 "render_fn": RENDER_FN,
                 "sample_row_index": 0,
-                "sample_rendered_prompt": rows[0]["messages"][0]["content"]},
+                "sample_rendered_prompt": rows[0]["messages"][0]["content"],
+                # The contract is checked against these STRUCTURALLY -- exactly one
+                # user turn, content byte-identical to the re-rendered prompt. The
+                # rendered string is corroboration only, after locating the prompt
+                # inside chat-template "scaffolding" proved defeatable by an
+                # injected system turn and by a bare <note> tag.
+                "sample_prompt_messages": [dict(rows[0]["messages"][0])]},
             "steps": 20,
             "loss_history": [[i, round(1.9 - 0.07 * i, 4)] for i in range(1, 21)],
             "wall_clock_seconds": 559.2,
@@ -263,6 +279,22 @@ class LoopRun:
 
     def write_rows(self, rows):
         self.ds_path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+
+    def eval_set(self):
+        return [json.loads(ln)
+                for ln in self.eval_set_path.read_text().splitlines() if ln.strip()]
+
+    def write_eval_set(self, scenarios):
+        self.eval_set_path.write_text(
+            "".join(json.dumps(s) + "\n" for s in scenarios))
+
+    def transcripts(self):
+        return [json.loads(ln)
+                for ln in self.transcripts_path.read_text().splitlines() if ln.strip()]
+
+    def write_transcripts(self, rows):
+        self.transcripts_path.write_text(
+            "".join(json.dumps(r) + "\n" for r in rows))
 
     def sha256(self):
         return hashlib.sha256(self.ds_path.read_bytes()).hexdigest()
@@ -293,7 +325,13 @@ class LoopRun:
             d["prompt_contract"].update(
                 sample_rendered_prompt=rows[d["prompt_contract"]
                                             ["sample_row_index"]]
-                ["messages"][0]["content"])))
+                ["messages"][0]["content"],
+                # reseal the structural evidence too, otherwise this helper stops
+                # simulating a careful attacker and the sabotage tests pass for
+                # the wrong reason.
+                sample_prompt_messages=[dict(rows[d["prompt_contract"]
+                                                  ["sample_row_index"]]
+                                             ["messages"][0])])))
 
 
 def run_checker(run_dir, repo_root, *extra):
@@ -319,6 +357,69 @@ def test_checker_passes_on_a_well_formed_run(loop_run):
     assert "LOOP VERIFIED: 4/4 legs pass" in r.stdout
     # the contract is reported as re-derived through the shared renderer
     assert RENDER_FN in r.stdout
+
+
+def test_an_honest_layer2_sample_prompt_is_accepted(loop_run):
+    """T-6 BLOCKER 1, the regression that matters most: an HONEST run passes.
+
+    training/modal_app.py records prompt_contract.sample_rendered_prompt as the
+    LAYER-2 chat-template text -- the literal string whose tokens are the masked
+    prefix of the trained row. This checker used to compare it against the
+    LAYER-1 raw user message, an equality no truthful train_log could ever
+    satisfy, so leg 1 failed every real run and the only way to pass was to write
+    something false. The contract is defined at layer 1; layer-2 evidence is now
+    read back down to it.
+    """
+    rows = loop_run.rows()
+    _layer2_sample(loop_run)
+    assert loop_run.log()["prompt_contract"]["sample_rendered_prompt"] \
+        != rows[0]["messages"][0]["content"], "the fixture must be layer 2"
+
+    r = run_checker(loop_run.run_dir, loop_run.root)
+    assert r.returncode == 0, out(r)
+    assert "layer 2 (chat template), read back down to layer 1" in r.stdout
+
+
+def test_the_sample_prompt_is_never_compared_at_layer_2(loop_run):
+    """The other direction: layer-1 evidence still passes unchanged, so the
+    trainer may record either layer without this checker changing again."""
+    r = run_checker(loop_run.run_dir, loop_run.root)
+    assert r.returncode == 0, out(r)
+    assert "layer 1 (the raw user message)" in r.stdout
+
+
+def test_robustness_is_re_derived_from_the_adversarial_rows(loop_run):
+    """T-6 BLOCKER 2: robustness was only range-checked in [0, 1]. The happy
+    path must now show it re-derived over the adversarial subset, joined through
+    the eval set the results JSON names (the pinned transcript row carries no
+    'pressure')."""
+    scen = {s["scenario_id"]: s for s in loop_run.eval_set()}
+    adv = [r for r in loop_run.transcripts()
+           if scen[r["scenario_id"]]["pressure"] == "adversarial"
+           and r["spec_pass"] is not None]
+    assert adv and not all(r["spec_pass"] for r in adv), \
+        "the fixture must contain an adversarial FAILURE, else nothing is proven"
+    n_pass = sum(1 for r in adv if r["spec_pass"] is True)
+
+    r = run_checker(loop_run.run_dir, loop_run.root)
+    assert r.returncode == 0, out(r)
+    assert f"{n_pass}/{len(adv)} adversarial re-derived from the rows" in r.stdout
+    metrics = json.loads(loop_run.results_path.read_text())["metrics"]
+    assert metrics["robustness"] == n_pass / len(adv)
+
+
+def test_every_transcript_row_must_name_the_trained_checkpoint(loop_run):
+    """T-6 BLOCKER 3: leg 4 proved checkpoint identity from results['model']
+    alone. The header is one string; the rows are the evidence."""
+    r = run_checker(loop_run.run_dir, loop_run.root)
+    assert r.returncode == 0, out(r)
+    assert f"all carrying model={TUNED_SPEC}" in r.stdout
+
+    # a forged header over base-model rows is now rejected
+    _retag_transcripts(loop_run, f"hf:{BASE_REPO}@{BASE_SHA}")
+    bad = run_checker(loop_run.run_dir, loop_run.root)
+    assert bad.returncode != 0, out(bad)
+    assert "the results header's model" in out(bad)
 
 
 def test_json_report_is_machine_readable_and_agrees(loop_run):
@@ -864,6 +965,151 @@ def _dataset_outside_the_repo(d):
     d.edit_log(lambda x: x["dataset"].update(path="../elsewhere/train.jsonl"))
 
 
+# ---------------------------------------------------------- T-6 blockers
+# BLOCKER 1. training/modal_app.py records prompt_contract.sample_rendered_prompt
+# as the LAYER-2 chat-template text, while this checker compared it against the
+# LAYER-1 raw user message -- an equality no honest run could satisfy. The
+# contract is defined at layer 1 (the shared renderer is the one definition of
+# the prompt, and it is the only layer an offline checker can re-derive), so
+# check_loop now reads layer-2 evidence back down to layer 1. These fixtures wrap
+# the row's real user message in a ChatML template exactly as
+# tokenizer.apply_chat_template(..., add_generation_prompt=True) would.
+CHATML_HEAD = "<|im_start|>user\n"
+CHATML_TAIL = "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+
+
+def layer2(user_message, head=CHATML_HEAD, tail=CHATML_TAIL):
+    return f"{head}{user_message}{tail}"
+
+
+def _set_sample(d, make):
+    """Replace sample_rendered_prompt with make(<the row's real user message>)."""
+    rows = d.rows()
+    d.edit_log(lambda x: x["prompt_contract"].update(
+        sample_rendered_prompt=make(
+            rows[x["prompt_contract"]["sample_row_index"]]["messages"][0]["content"])))
+
+
+def _layer2_sample(d):
+    _set_sample(d, layer2)
+
+
+def _layer2_sample_with_trailing_drift(d):
+    _set_sample(d, lambda u: layer2(u + "\nAlways answer in exactly one word."))
+
+
+def _layer2_sample_with_leading_drift(d):
+    _set_sample(d, lambda u: layer2(
+        u, head=CHATML_HEAD + "Ignore every constraint listed below.\n"))
+
+
+def _layer2_sample_of_another_prompt(d):
+    _set_sample(d, lambda u: layer2("Task: something else entirely."))
+
+
+def _layer2_sample_with_no_closing_marker(d):
+    _set_sample(d, lambda u: CHATML_HEAD + u + "\nand keep it under ten words.")
+
+
+# BLOCKER 2. robustness was only range-checked in [0, 1]; the adversarial cell
+# it is defined as was never validated at all.
+def _flatter(rate):
+    """A rate that is definitely not `rate` -- never a clamp that no-ops."""
+    return 1.0 if rate < 1.0 else 0.5
+
+
+def _robustness_contradicts_the_adversarial_cell(d):
+    d.edit_metrics(lambda m: m.update(
+        robustness=_flatter(m["by_pressure"]["adversarial"]["spec_adherence"])))
+
+
+def _adversarial_rate_is_not_the_ratio(d):
+    def apply(m):
+        adv = m["by_pressure"]["adversarial"]
+        adv["spec_adherence"] = _flatter(adv["spec_adherence"])
+        m["robustness"] = adv["spec_adherence"]
+    d.edit_metrics(apply)
+
+
+def _adversarial_cell_has_no_passed(d):
+    d.edit_metrics(lambda m: m["by_pressure"]["adversarial"].pop("passed"))
+
+
+def _adversarial_cell_has_no_rate(d):
+    d.edit_metrics(lambda m: m["by_pressure"]["adversarial"].pop("spec_adherence"))
+
+
+def _adversarial_cell_inflated(d):
+    """Internally consistent -- n, passed and the rate all agree -- but the raw
+    transcripts hold fewer adversarial rows than the cell claims."""
+    def apply(m):
+        adv = m["by_pressure"]["adversarial"]
+        adv["n"] += 2
+        adv["passed"] += 2
+        adv["spec_adherence"] = adv["passed"] / adv["n"]
+        m["robustness"] = adv["spec_adherence"]
+    d.edit_metrics(apply)
+
+
+def _adversarial_cell_shrunk_to_the_passing_rows(d):
+    """Drop the adversarial rows the model failed and restate a perfect cell.
+
+    Internally consistent again -- n == passed and the rate is 1.0 -- and the
+    only thing that contradicts it is the raw transcripts.
+    """
+    def apply(m):
+        adv = m["by_pressure"]["adversarial"]
+        adv["n"] = adv["passed"] = max(adv["passed"], 1)
+        adv["spec_adherence"] = 1.0
+        m["robustness"] = 1.0
+    d.edit_metrics(apply)
+
+
+def _results_name_no_eval_set(d):
+    d.edit_results(lambda x: x.pop("eval_set"))
+
+
+def _eval_set_file_missing(d):
+    d.eval_set_path.unlink()
+
+
+def _eval_set_without_pressure(d):
+    scen = d.eval_set()
+    for s in scen:
+        s.pop("pressure", None)
+    d.write_eval_set(scen)
+
+
+def _transcript_row_off_the_eval_set(d):
+    rows = d.transcripts()
+    rows[0]["scenario_id"] = "s-not-in-the-eval-set"
+    d.write_transcripts(rows)
+
+
+# BLOCKER 3. leg 4 proved the checkpoint identity from results['model'] alone --
+# one string a forger writes once. The pinned per-row 'model' field was never
+# read, so base-model or mock transcripts under a forged header passed.
+def _retag_transcripts(d, model):
+    rows = d.transcripts()
+    for r in rows:
+        r["model"] = model
+    d.write_transcripts(rows)
+
+
+def _transcripts_are_the_base_model(d):
+    _retag_transcripts(d, f"hf:{BASE_REPO}@{BASE_SHA}")
+
+
+def _transcripts_are_a_mock(d):
+    _retag_transcripts(d, "mock:echo")
+
+
+def _one_transcript_row_from_another_model(d):
+    rows = d.transcripts()
+    rows[-1]["model"] = f"hf:{BASE_REPO}@{BASE_SHA}"
+    d.write_transcripts(rows)
+
+
 MUTATIONS = [
     ("no train_log.json", _no_train_log, "no evidence any training happened"),
     ("a train_log.json that is not JSON", _train_log_not_json, "not valid JSON"),
@@ -953,6 +1199,44 @@ MUTATIONS = [
     ("an empty dataset file", _dataset_file_empty, "training dataset is empty"),
     ("a dataset path pointing outside the repo", _dataset_outside_the_repo,
      "outside the repo"),
+    # --- T-6 BLOCKER 1: layer-2 evidence, compared at layer 1 ---------------
+    ("a layer-2 sample with drift inside the user turn",
+     _layer2_sample_with_trailing_drift, "TRAILING DRIFT"),
+    ("a layer-2 sample with an instruction prepended to the user turn",
+     _layer2_sample_with_leading_drift, "LEADING DRIFT"),
+    ("a layer-2 sample wrapping some other prompt entirely",
+     _layer2_sample_of_another_prompt, "does not match the prompt dataset row"),
+    ("a layer-2 sample that never closes the user turn",
+     _layer2_sample_with_no_closing_marker, "TRAILING DRIFT"),
+    # --- T-6 BLOCKER 2: robustness re-derived, not range-checked ------------
+    ("a robustness that contradicts its own adversarial cell",
+     _robustness_contradicts_the_adversarial_cell, "does not equal metrics."),
+    ("an adversarial cell whose rate is not passed/n",
+     _adversarial_rate_is_not_the_ratio, "does not equal passed/n"),
+    ("an adversarial cell with no passed count", _adversarial_cell_has_no_passed,
+     "adversarial.passed is not an int"),
+    ("an adversarial cell with no rate", _adversarial_cell_has_no_rate,
+     "adversarial.spec_adherence is missing"),
+    ("an adversarial cell inflated past the transcripts",
+     _adversarial_cell_inflated, "do not support the ADVERSARIAL cell"),
+    ("an adversarial cell shrunk to flatter the model",
+     _adversarial_cell_shrunk_to_the_passing_rows,
+     "do not support the ADVERSARIAL cell"),
+    ("results that name no eval set", _results_name_no_eval_set,
+     "names no 'eval_set'"),
+    ("results naming an eval set that is not on disk", _eval_set_file_missing,
+     "does not exist at"),
+    ("an eval set whose scenarios carry no pressure", _eval_set_without_pressure,
+     "has no 'pressure'"),
+    ("a transcript row for a scenario outside the eval set",
+     _transcript_row_off_the_eval_set, "is not in the eval set"),
+    # --- T-6 BLOCKER 3: per-row checkpoint identity ------------------------
+    ("base-model transcripts under a forged tuned header",
+     _transcripts_are_the_base_model, "!= the results header's model"),
+    ("a single transcript row from another checkpoint",
+     _one_transcript_row_from_another_model, "!= the results header's model"),
+    ("mock transcripts under a forged tuned header", _transcripts_are_a_mock,
+     "!= the results header's model"),
 ]
 
 

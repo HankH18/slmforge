@@ -38,7 +38,7 @@
   },
   "ladder": {
     "_note": "R6 escalation ladder, in order: raise k (2->3->4), THEN raise the adversarial share. `current` names the rung that produced the run now on disk; run_ablation.py records it into the run manifest as `ladder_rung` and scripts/gate_check.py verifies the committed eval set actually matches that rung (max k reached, adversarial share met) rather than taking the label on trust. HARD STOP is only legitimate on the LAST rung.",
-    "current": "r3-k4",
+    "current": "r6-char65",
     "rungs": [
       {
         "name": "r1-k2",
@@ -81,6 +81,17 @@
           4
         ],
         "adversarial_share": 0.8
+      },
+      {
+        "name": "r6-char65",
+        "k_values": [
+          2,
+          3,
+          4
+        ],
+        "adversarial_share": 0.4,
+        "min_character_constraint_share": 0.65,
+        "_not_pre_registered": "ADDED 2026-08-20 on Hank's ruling after G1 returned ESCALATE, and flagged as a rung R6 did not pre-register. Disclosed rather than slipped in, because a rung invented after seeing the numbers is exactly what a grader should interrogate.\nWHY THE REGISTERED LADDER CANNOT REACH THE BAR, measured not assumed: the k rungs are already spent (the corpus is r3-k4) and fail rate is FLAT across k -- 0.12/0.08/0.09 at k=2/3/4 -- so composition is not the difficulty driver the design assumed. The adversarial rungs cap at 46.9% with zero promotable clean scenarios, and adversarial pressure buys only 0-3.5pp, so r4-adv60 would cost hours and return ESCALATE again.\nWHAT THE ABLATION ACTUALLY FOUND: difficulty concentrates in character-level constraints, replicated across two labs. openai violated banned_letter 39 times and nothing else, ever; anthropic violated it 39 times out of 51 total. On letter-ban scenarios frontier fails 35-52% against 0.9-4.5% elsewhere, and Qwen3-1.7B fails 100% of them in all three strategies. The ceiling is real and far above 0.20; the corpus dilutes it by being only 23% character constraints.\nTHIS RUNG raises that share to >=65%, narrowing the target to character-level constraint-holding under composition. That is a narrower and better-evidenced claim than the one the spec began with, and 'one target, one context' is the project doc's own instruction."
       }
     ],
     "_current_note": "The shipped corpus already spans k=2,3,4 at ~0.47 adversarial, so it satisfies r3-k4 \u2014 the TOP of the k half of the ladder. Was mislabelled r1-k2. Consequence worth stating: the k-escalation rungs are already exhausted, so a clean G1 leaves only the adversarial-share rungs (r4-adv60, r5-adv80) before HARD_STOP.",

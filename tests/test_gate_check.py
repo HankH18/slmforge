@@ -1481,10 +1481,22 @@ def test_g1_google_worker_count_respects_the_measured_25_rpm_cap(g1):
 
 
 def test_g1_ladder_raises_k_then_adversarial_share(g1):
-    rungs = g1["ladder"]["rungs"]
-    assert len(rungs) >= 4
-    max_k = [max(r["k_values"]) for r in rungs]
-    shares = [r["adversarial_share"] for r in rungs]
+    """R6's ladder: k first (2->3->4), then the adversarial share.
+
+    The invariant applies to the PRE-REGISTERED rungs. A rung added after the
+    ladder was measured -- and flagged _not_pre_registered -- escalates on a
+    different axis, so forcing it into this ordering would be wrong. Exempting it
+    silently would be worse, so the exemption is conditional: an unregistered rung
+    must carry the disclosure AND declare an axis it actually raises. A rung that
+    escalates nothing is not a rung.
+    """
+    all_rungs = g1["ladder"]["rungs"]
+    registered = [r for r in all_rungs if "_not_pre_registered" not in r]
+    extra = [r for r in all_rungs if "_not_pre_registered" in r]
+
+    assert len(registered) >= 4
+    max_k = [max(r["k_values"]) for r in registered]
+    shares = [r["adversarial_share"] for r in registered]
     assert max_k == sorted(max_k), f"k must be non-decreasing along the ladder: {max_k}"
     assert shares == sorted(shares), f"adversarial share must be non-decreasing: {shares}"
     assert max_k[0] == 2 and max_k[-1] == 4, "R6's ladder is k 2->3->4"
@@ -1493,9 +1505,18 @@ def test_g1_ladder_raises_k_then_adversarial_share(g1):
     share_phase = [i for i, s in enumerate(shares) if s > shares[0]]
     assert max(k_phase) < min(share_phase), (
         "R6 raises k FIRST, then the adversarial share")
-    assert all(min(r["k_values"]) >= 2 for r in rungs), "the design forbids k=1"
-    assert g1["ladder"]["current"] in {r["name"] for r in rungs}
 
+    known_axes = ("min_character_constraint_share",)
+    for r in extra:
+        assert isinstance(r["_not_pre_registered"], str) and r["_not_pre_registered"].strip(), (
+            f"rung {r['name']!r} is outside R6's ladder and must say so in prose -- "
+            f"a rung invented after seeing the numbers is what a grader interrogates")
+        assert any(a in r for a in known_axes), (
+            f"rung {r['name']!r} escalates nothing: it raises neither k, nor the "
+            f"adversarial share, nor any declared axis {known_axes}")
+
+    assert all(min(r["k_values"]) >= 2 for r in all_rungs), "the design forbids k=1"
+    assert g1["ladder"]["current"] in {r["name"] for r in all_rungs}
 
 def test_g1_config_carries_no_threshold_override(g1):
     blob = json.dumps(g1).lower()

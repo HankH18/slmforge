@@ -65,8 +65,10 @@ The previous target's pipeline was built downstream of an unproven ceiling. So:
     type-checked before it is compared (`isinstance(True, int)` is True in
     Python, and that bypass has defeated guards in this repo).
   * the ladder rung a run claims is verified against the eval set that run used
-    (max k actually reached, adversarial share actually met), because HARD_STOP
-    is only legitimate on the last rung.
+    (max k actually reached, adversarial share actually met, and -- where the
+    rung declares one -- the character-level constraint share actually
+    reached), because HARD_STOP is only legitimate on the last rung and because
+    a rung field nothing derives from the corpus is a claim, not a constraint.
 
 There is deliberately NO flag that softens the threshold, and none may be added.
 The only verdict that exits 0 is PROCEED.
@@ -101,7 +103,8 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from constraints.checkers import check as run_checker          # noqa: E402
-from constraints.registry import ConstraintError, validate_constraint  # noqa: E402
+from constraints.registry import (ConstraintError, family_of,  # noqa: E402
+                                  validate_constraint)
 
 # ---------------------------------------------------------------- thresholds
 # R6. Exact rationals, not floats: 24/120 as a float is 0.19999999999999996,
@@ -111,6 +114,11 @@ HARD_STOP_ADHERENCE_MIN = Fraction("0.90")  # adherence >= 0.90 after the full l
 QUALITY_SCORE_MIN = 3                      # Design: spec_pass needs quality >= 3
 QUALITY_SCORE_RANGE = (1, 5)
 MIN_SCENARIOS_PER_CELL = 30                # R6: ">= 30 scenarios per cell"
+# The constraint FAMILY the r6-char65 rung is about. Taken from the registry
+# (constraints.registry.FAMILIES) rather than a list of type names typed out
+# here, so a character type added later counts automatically instead of
+# silently deflating the share this gate verifies.
+CHARACTER_FAMILY = "character"
 # A row the generator or judge could not produce a verdict for is excluded from
 # the rate. Beyond this share the cell stops being evidence about the model.
 MAX_QUARANTINE_SHARE = 0.10
@@ -410,6 +418,16 @@ def load_config(path):
         if not is_real_number(share) or not 0 <= share <= 1:
             raise GateError(f"{path}: ladder rung {name!r} adversarial_share must "
                             f"be a number in [0, 1], got {describe(share)}")
+        # OPTIONAL, and only meaningful because verify_rung_against_eval_set
+        # recomputes it from the shipped corpus. A rung field nothing derives
+        # is a claim, not a constraint, so the shape is pinned here and the
+        # number is checked there.
+        char_share = rung.get("min_character_constraint_share")
+        if char_share is not None and (not is_real_number(char_share)
+                                       or not 0 <= char_share <= 1):
+            raise GateError(f"{path}: ladder rung {name!r} "
+                            f"min_character_constraint_share must be a number in "
+                            f"[0, 1], got {describe(char_share)}")
     current = ladder.get("current")
     if current is not None and current not in seen:
         raise GateError(f"{path}: ladder.current {current!r} is not one of the "
@@ -1041,7 +1059,29 @@ def resolve_rung(cfg, manifest, cli_rung, errors):
     }
 
 
-def verify_rung_against_eval_set(rung, eval_index, eval_path, errors):
+def character_constraint_share(eval_index, instances):
+    """``(n_scenarios carrying a CHARACTER-family constraint, n_scenarios)``.
+
+    Derived from the shipped corpus and the pinned instance library, never from
+    a manifest field: the number the r6-char65 rung rests on has to be
+    recomputable by someone who does not trust the label. Family comes from
+    :mod:`constraints.registry`, so ``banned_letter`` and ``banned_punctuation``
+    are counted because the registry says they are character-level, not because
+    they are named here.
+    """
+    n_char = 0
+    for scenario in eval_index.values():
+        for cid in scenario["constraints"]:
+            constraint = instances.get(cid)
+            if constraint is None:
+                continue          # check_constraints_resolve already refused this run
+            if family_of(constraint["type"]) == CHARACTER_FAMILY:
+                n_char += 1
+                break
+    return n_char, len(eval_index)
+
+
+def verify_rung_against_eval_set(rung, eval_index, instances, eval_path, errors):
     """The rung a run CLAIMS must match the corpus it actually used."""
     defn = rung["definition"]
     observed_k = sorted({s["k"] for s in eval_index.values()})
@@ -1062,8 +1102,28 @@ def verify_rung_against_eval_set(rung, eval_index, eval_path, errors):
         errors.append(f"{eval_path.name}: adversarial share is {n_adv}/{n} = "
                       f"{float(Fraction(n_adv, n)):.4f}, below the "
                       f"{float(required):.4f} that rung {rung['rung']!r} declares")
-    return {"k_values": observed_k, "n_adversarial": n_adv, "n_scenarios": n,
-            "adversarial_share": float(Fraction(n_adv, n))}
+    observed = {"k_values": observed_k, "n_adversarial": n_adv, "n_scenarios": n,
+                "adversarial_share": float(Fraction(n_adv, n))}
+
+    # The rung that the whole escalation rests on: >= 65% of scenarios must
+    # carry a character-level constraint. Absent on the earlier rungs, which
+    # never made the claim, so its absence is not a failure -- but where it IS
+    # declared it is derived from the corpus, exactly like k and the
+    # adversarial share, rather than taken on the label's word.
+    required_char = defn.get("min_character_constraint_share")
+    if required_char is not None:
+        n_char, _ = character_constraint_share(eval_index, instances)
+        observed["n_character"] = n_char
+        observed["character_constraint_share"] = float(Fraction(n_char, n))
+        observed["min_character_constraint_share"] = float(required_char)
+        if Fraction(n_char, n) < Fraction(str(required_char)):
+            errors.append(
+                f"{eval_path.name}: {n_char}/{n} = "
+                f"{float(Fraction(n_char, n)):.4f} of scenarios carry a "
+                f"character-level constraint, below the "
+                f"{float(required_char):.4f} that rung {rung['rung']!r} declares "
+                f"— the corpus is not the one that rung names")
+    return observed
 
 
 # --------------------------------------------------------------- verdict
@@ -1173,7 +1233,8 @@ def build_report(run_dir, config_path, cli_rung=None):
     rung = resolve_rung(cfg, manifest, cli_rung, errors)
     observed = None
     if rung is not None:
-        observed = verify_rung_against_eval_set(rung, eval_index, eval_path, errors)
+        observed = verify_rung_against_eval_set(rung, eval_index, instances,
+                                                eval_path, errors)
 
     cells = load_cells(run_dir_real, cfg, eval_index, instances, errors)
     check_grid(cells, cfg, errors)

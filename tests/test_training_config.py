@@ -875,6 +875,9 @@ def train_log_kwargs(**overrides):
         render_fn_dotted="scenarios.render.render_user_message",
         sample_row_index=3,
         sample_rendered_prompt="<bos> <user> alpha beta <end> <assistant>",
+        # The templated MESSAGES are the contract; the rendered string is only
+        # corroboration. check_loop compares these structurally and exactly.
+        sample_prompt_messages=[{"role": "user", "content": "alpha beta"}],
         steps=20,
         loss_history=[(1, 2.5), (2, 2.1)],
         wall_clock_seconds=412.5,

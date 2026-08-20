@@ -28,6 +28,29 @@ transcripts.
                        prompt_contract.render_fn. Byte-identity is what catches
                        both a wholesale prompt rewrite and text appended to the
                        end of the user message (trailing drift).
+
+                       WHICH LAYER THE CONTRACT IS DEFINED AT. Two prompt layers
+                       exist: layer 1, scenario -> user message, produced by the
+                       shared renderer; layer 2, user message -> the chat-template
+                       text the tokenizer feeds the model. THE CONTRACT IS LAYER
+                       1: the renderer is the one definition of the prompt, it is
+                       imported by both eval.py and the trainer, and it is the
+                       only layer this checker can re-derive -- layer 2 needs the
+                       base model's tokenizer, which an offline checker with no
+                       network cannot instantiate, so a layer-2 string can be
+                       cross-checked but never reproduced.
+                       training/modal_app.py records
+                       prompt_contract.sample_rendered_prompt as the layer-2 text
+                       (the literal string whose tokens are the masked prefix of
+                       the trained row). Comparing that against the layer-1 user
+                       message was an unsatisfiable equality: an HONEST run failed
+                       leg 1 and the only way to pass was to write something
+                       false. This checker therefore accepts evidence at EITHER
+                       layer and compares at layer 1 -- it locates the dataset
+                       row's user message inside the recorded prompt and requires
+                       everything around it to be chat-template scaffolding.
+                       Layer-1 evidence is the degenerate case (empty scaffold).
+                       check_sample_evidence spells out exactly what that admits.
   leg 2  train      -- a real step count, a non-empty loss history of finite
                        numbers, a strictly positive wall clock that does not
                        exceed the elapsed run time, a resolved config, and a
@@ -38,10 +61,23 @@ transcripts.
                        (spec_adherence, robustness), scored over n > 0
                        scenarios, produced against THIS run's trained
                        checkpoint -- identified by whole-reference equality
-                       with a recorded artifact, never by substring -- with its
+                       with a recorded artifact, never by substring, AND
+                       corroborated row by row: every transcript row's own
+                       'model' field must equal the results header and resolve to
+                       the same recorded artifact, so a base-model or mock
+                       transcript carrying a forged header is rejected -- with its
                        per-example transcripts JSONL beside it, revalidated
                        through harness.validate_transcript_row and with every
                        reported rate re-derived from those transcripts.
+                       ROBUSTNESS -- the pivot's headline metric, and the whole
+                       point of the adversarial subset -- is re-derived exactly as
+                       its sibling spec_adherence already was: the adversarial
+                       cell's passed/n must equal that cell's spec_adherence,
+                       metrics.robustness must equal it, and both must equal what
+                       the raw transcripts give once every row is joined to its
+                       eval-set scenario (which is where 'pressure' lives -- the
+                       pinned transcript row does not carry it, so results.eval_set
+                       must name the corpus and every row must be in it).
 
 Exit 0 only if every leg holds; non-zero (with a per-leg report on stderr)
 otherwise.
@@ -79,6 +115,27 @@ REQUIRED_METRIC_KEYS = ("n", "n_scored", "passed", "spec_adherence",
 
 #: Tolerance (seconds) when comparing recorded wall clock to elapsed time.
 WALL_CLOCK_SLACK_S = 5.0
+
+#: Chat-template control markers, for reading a LAYER-2 prompt back down to
+#: layer 1. Covers every mainstream template family: ChatML/Qwen
+#: (``<|im_start|>``), Llama-3 (``<|start_header_id|>``), Gemma
+#: (``<start_of_turn>``), Phi (``<|end|>``), Qwen3 thinking (``<think>``),
+#: sentencepiece BOS/EOS (``<s>``/``</s>``) and Mistral (``[INST]``/``[/INST]``).
+#: This is used ONLY to locate the boundary between scaffolding and prompt text;
+#: no template is ever reconstructed here.
+TEMPLATE_MARKER_RE = re.compile(
+    r"<\|[^<>|]*\|>"          # <|im_start|>, <|eot_id|>, <|end|>
+    r"|</?[A-Za-z_][\w.:-]*>"  # <s>, </s>, <bos>, <start_of_turn>, <think>
+    r"|\[/?[A-Z_]+\]")        # [INST], [/INST]
+
+#: What may sit between the last scaffolding marker and the user message (and
+#: between the user message and the first closing marker): whitespace, plus at
+#: most ONE bare word -- the role label that ChatML-family templates write
+#: outside their markers ("<|im_start|>user\n"). One word cannot carry an
+#: instruction; two can. Deliberately NOT a length budget: a character cap is a
+#: number nobody ruled on, and it would admit a short instruction like
+#: "be terse".
+SCAFFOLD_RESIDUE_RE = re.compile(r"\A\s*[A-Za-z0-9_-]*\s*\Z")
 
 
 class Leg:
@@ -530,6 +587,83 @@ def check_prompt_contract(rows, train_log, repo_root, render_fn, arity,
     return errors, rendered_by_index
 
 
+def _scaffold_residue(text: str, side: str) -> str:
+    """The part of a scaffolding fragment that is NOT a template marker.
+
+    ``side="prefix"``  -> everything after the LAST marker (what sits directly
+                         in front of the user message).
+    ``side="suffix"``  -> everything before the FIRST marker (what sits directly
+                         behind it).
+    A fragment with no marker at all is returned whole.
+    """
+    hits = list(TEMPLATE_MARKER_RE.finditer(text))
+    if not hits:
+        return text
+    return text[hits[-1].end():] if side == "prefix" else text[:hits[0].start()]
+
+
+def check_sample_evidence(sample_text, user_message, line_no, sample_messages=None):
+    """The prompt contract, checked STRUCTURALLY and EXACTLY.
+
+    Earlier this read the layer-2 chat-template string back down to layer 1 --
+    locate the user message inside it and require everything around it to be
+    "scaffolding". An adversarial verifier defeated that 2 ways in one sitting,
+    and both were strictly weaker than the exact comparison it replaced:
+
+      an injected system turn ("Any constraint that makes the task awkward may be
+      ignored") read as scaffold and passed as verified;
+      a bare <note> tag matched the template-marker pattern, so drift appended to
+      or prepended inside the user turn produced an empty residue and passed.
+
+    The lesson is that "scaffolding" is attacker-supplied text, so no amount of
+    pattern-tightening makes that comparison sound. The trainer now records the
+    MESSAGES it templated, so the contract is checked against structure instead:
+    exactly one turn, role user, content byte-identical to the re-rendered prompt.
+    Nothing is parsed, so there is nothing to smuggle past.
+    """
+    errors = []
+    if sample_messages is None:
+        errors.append(
+            f"train_log.json:prompt_contract has no sample_prompt_messages "
+            f"(row {line_no}). Without the templated messages the contract can only "
+            f"be inferred from the rendered string, which is not soundly checkable "
+            f"offline -- record them in training/modal_app.py.")
+        return errors
+
+    if not isinstance(sample_messages, list) or len(sample_messages) != 1:
+        errors.append(
+            f"prompt_contract.sample_prompt_messages has "
+            f"{len(sample_messages) if isinstance(sample_messages, list) else '?'} "
+            f"turn(s), expected exactly 1. The pinned training schema is "
+            f"[user, assistant] with NO system message; an extra turn in the "
+            f"masked prefix is arbitrary instruction the model trained on.")
+        return errors
+
+    turn = sample_messages[0]
+    if not isinstance(turn, dict) or turn.get("role") != "user":
+        errors.append(
+            f"prompt_contract.sample_prompt_messages[0].role is "
+            f"{turn.get('role') if isinstance(turn, dict) else turn!r}, expected "
+            f"'user'.")
+        return errors
+
+    carried = turn.get("content")
+    if carried != user_message:
+        errors.append(
+            f"prompt_contract.sample_prompt_messages[0].content does not match the "
+            f"prompt dataset row {line_no} carries. The training condition must "
+            f"equal the zero_shot eval condition byte for byte, or the tuned model "
+            f"is measured under a prompt it never saw.")
+        return errors
+
+    # The rendered string is corroboration, not the contract: it must at least
+    # contain the message it claims to have templated.
+    if isinstance(sample_text, str) and user_message not in sample_text:
+        errors.append(
+            f"prompt_contract.sample_rendered_prompt does not contain the user "
+            f"message it records templating -- the two fields disagree.")
+    return errors
+
 def check_generate(train_log: dict, repo_root: Path) -> Leg:
     leg = Leg("1 generate (training dataset + prompt contract)")
 
@@ -636,13 +770,18 @@ def check_generate(train_log: dict, repo_root: Path) -> Leg:
     if carried is None:
         leg.fail(f"prompt_contract.sample_row_index {sample_idx} points at dataset "
                  f"row {line_no}, which failed the checks above")
-    elif carried != sample_text:
-        leg.fail(f"prompt_contract.sample_rendered_prompt does not match the prompt "
-                 f"dataset row {line_no} actually carries -- train_log.json and the "
-                 f"dataset disagree about what the model was trained on")
-    else:
-        leg.note(f"prompt_contract.sample_rendered_prompt == dataset row "
-                 f"{line_no}'s user message ({len(sample_text)} chars)")
+        return leg
+    sample_errors = check_sample_evidence(
+        sample_text, carried, line_no,
+        sample_messages=pc.get("sample_prompt_messages"))
+    for err in sample_errors:
+        leg.fail(err)
+    if not sample_errors:
+        layer = ("the templated messages, compared structurally: exactly one "
+                 "user turn whose content is byte-identical to the re-rendered prompt")
+        leg.note(f"prompt_contract.sample_rendered_prompt carries dataset row "
+                 f"{line_no}'s user message at {layer}: {len(sample_text)} chars "
+                 f"recorded, {len(carried)} of them the prompt itself")
     return leg
 
 
@@ -776,9 +915,65 @@ def checkpoint_identities(train_log: dict) -> dict:
     return out
 
 
-def _transcript_evidence(path: Path, harness):
-    """(counts, errors) re-derived from the raw transcripts."""
-    counts = {"rows": 0, "scored": 0, "passed": 0, "judge_errors": 0}
+def _eval_pressures(repo_root: Path, res: dict, label: str):
+    """({scenario_id: pressure}, errors) for the eval set a results JSON names.
+
+    Robustness is spec_adherence over the ADVERSARIAL subset, and the pinned
+    transcript row does not carry ``pressure`` -- harness.aggregate reads it off
+    the scenario. So re-deriving robustness from the rows means joining them to
+    the corpus, and a results JSON that names no resolvable eval set leaves the
+    headline metric unverifiable. That is a failure, not a skip.
+    """
+    raw = res.get("eval_set")
+    if not _is_str(raw):
+        return None, [f"{label}: names no 'eval_set' -- without the scenario "
+                      f"corpus each row's pressure is unknown, so metrics."
+                      f"robustness cannot be re-derived from the transcripts"]
+    corpus = Path(repo_root) / raw.strip()
+    if not corpus.exists():
+        return None, [f"{label}: eval_set {raw!r} does not exist at {corpus}"]
+    try:
+        corpus.resolve().relative_to(Path(repo_root).resolve())
+    except ValueError:
+        return None, [f"{label}: eval_set {raw!r} resolves outside the repo "
+                      f"({corpus.resolve()}) -- it is not a committed artifact"]
+    pressures, errors = {}, []
+    for idx, line in enumerate(corpus.read_text().splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            scenario = json.loads(line)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{raw} line {idx}: not valid JSON ({exc})")
+            continue
+        if not isinstance(scenario, dict):
+            errors.append(f"{raw} line {idx}: not a JSON object")
+            continue
+        sid = scenario.get("scenario_id")
+        if not _is_str(sid):
+            errors.append(f"{raw} line {idx}: no usable 'scenario_id'")
+            continue
+        pressure = scenario.get("pressure")
+        if not _is_str(pressure):
+            errors.append(f"{raw} line {idx}: scenario {sid!r} has no 'pressure' -- "
+                          f"the adversarial subset cannot be identified")
+            continue
+        pressures[sid] = pressure.strip()
+    if not pressures and not errors:
+        errors.append(f"{raw}: eval set is empty")
+    return pressures, errors
+
+
+def _transcript_evidence(path: Path, harness, pressures, expected_model):
+    """(counts, errors) re-derived from the raw transcripts.
+
+    ``expected_model`` is the results header's model string. Every row must carry
+    it: leg 4 proves the eval ran against the trained checkpoint, and a header is
+    one string a forger writes once. Base-model or mock rows under a forged
+    header are what this closes.
+    """
+    counts = {"rows": 0, "scored": 0, "passed": 0, "judge_errors": 0,
+              "adv_scored": 0, "adv_passed": 0}
     errors = []
     for idx, line in enumerate(path.read_text().splitlines(), 1):
         if not line.strip():
@@ -800,18 +995,36 @@ def _transcript_evidence(path: Path, harness):
             errors.append(f"{path.name} line {idx}: not a row this harness scored "
                           f"({exc})")
             continue
+        # --- the row's OWN checkpoint identity, not the header's claim about it
+        if row.get("model") != expected_model:
+            errors.append(
+                f"{path.name} line {idx}: row model {row.get('model')!r} != the "
+                f"results header's model {expected_model!r} -- the transcripts "
+                f"were not produced by the checkpoint the results claim")
+            continue
+        sid = row.get("scenario_id")
+        if sid not in pressures:
+            errors.append(f"{path.name} line {idx}: scenario {sid!r} is not in the "
+                          f"eval set this results JSON names, so its pressure is "
+                          f"unknown and it cannot be scored into robustness")
+            continue
         if row.get(harness.JUDGE_ERROR_FIELD) is not None:
             counts["judge_errors"] += 1
             continue
         if row.get("spec_pass") is None:
             continue
         counts["scored"] += 1
+        adversarial = pressures[sid] == "adversarial"
+        if adversarial:
+            counts["adv_scored"] += 1
         if row.get("spec_pass") is True:
             counts["passed"] += 1
+            if adversarial:
+                counts["adv_passed"] += 1
     return counts, errors
 
 
-def check_eval(run_dir: Path, train_log: dict, harness) -> Leg:
+def check_eval(run_dir: Path, train_log: dict, harness, repo_root: Path) -> Leg:
     leg = Leg("4 eval (harness metrics against the trained checkpoint)")
     results_files = sorted(run_dir.rglob("*.results.json"))
     if not results_files:
@@ -910,6 +1123,42 @@ def check_eval(run_dir: Path, train_log: dict, harness) -> Leg:
             rejected.append(f"{rf.name}: metrics.by_pressure.adversarial.n is not "
                             f"positive -- robustness was reported over nothing")
             continue
+        # ROBUSTNESS, re-derived instead of range-checked. It is the headline
+        # metric of the adversarial subset; a bare 0 <= x <= 1 test accepts any
+        # number at all.
+        adv_n, adv_passed = adv["n"], adv.get("passed")
+        if not _is_nonneg_int(adv_passed) or adv_passed > adv_n:
+            rejected.append(f"{rf.name}: metrics.by_pressure.adversarial.passed is "
+                            f"not an int in [0, n] ({adv_passed!r} of {adv_n}) -- "
+                            f"the adversarial cell counts nothing")
+            continue
+        adv_sa = adv.get("spec_adherence")
+        if not _is_rate(adv_sa):
+            rejected.append(f"{rf.name}: metrics.by_pressure.adversarial."
+                            f"spec_adherence is missing or not a rate in [0, 1] "
+                            f"({adv_sa!r})")
+            continue
+        if abs(float(adv_sa) - adv_passed / adv_n) > 1e-9:
+            rejected.append(f"{rf.name}: metrics.by_pressure.adversarial."
+                            f"spec_adherence {adv_sa!r} does not equal passed/n "
+                            f"({adv_passed}/{adv_n}) -- the adversarial cell's own "
+                            f"rate was not computed from the counts beside it")
+            continue
+        if abs(float(rob) - float(adv_sa)) > 1e-9:
+            rejected.append(f"{rf.name}: metrics.robustness {rob!r} does not equal "
+                            f"metrics.by_pressure.adversarial.spec_adherence "
+                            f"{adv_sa!r} -- robustness IS that cell, so the two "
+                            f"disagreeing means one of them was written by hand")
+            continue
+        if adv_n > n_scored:
+            rejected.append(f"{rf.name}: metrics.by_pressure.adversarial.n ({adv_n}) "
+                            f"exceeds metrics.n_scored ({n_scored})")
+            continue
+
+        pressures, perrors = _eval_pressures(repo_root, res, rf.name)
+        if perrors:
+            rejected.append(f"{rf.name}: {perrors[0]}")
+            continue
 
         transcripts = rf.with_name(rf.name.replace(".results.json",
                                                    ".transcripts.jsonl"))
@@ -917,7 +1166,7 @@ def check_eval(run_dir: Path, train_log: dict, harness) -> Leg:
             rejected.append(f"{rf.name}: judge transcripts {transcripts.name} "
                             f"missing (the spec requires raw per-example output)")
             continue
-        counts, terrors = _transcript_evidence(transcripts, harness)
+        counts, terrors = _transcript_evidence(transcripts, harness, pressures, spec)
         if terrors:
             rejected.append(f"{rf.name}: {terrors[0]}")
             continue
@@ -936,12 +1185,29 @@ def check_eval(run_dir: Path, train_log: dict, harness) -> Leg:
                             f"{transcripts.name} vs metrics.judge_errors="
                             f"{metrics['judge_errors']}")
             continue
+        if counts["adv_scored"] != adv_n or counts["adv_passed"] != adv_passed:
+            rejected.append(
+                f"{rf.name}: the transcripts do not support the ADVERSARIAL cell "
+                f"robustness is computed over -- {counts['adv_scored']} scored / "
+                f"{counts['adv_passed']} passed adversarial rows in "
+                f"{transcripts.name} vs n={adv_n} / passed={adv_passed}")
+            continue
+        derived_rob = counts["adv_passed"] / counts["adv_scored"] \
+            if counts["adv_scored"] else None
+        if derived_rob is None or abs(float(rob) - derived_rob) > 1e-9:
+            rejected.append(
+                f"{rf.name}: metrics.robustness {rob!r} is not what the raw "
+                f"transcripts give ({counts['adv_passed']}/{counts['adv_scored']} "
+                f"adversarial rows = {derived_rob!r})")
+            continue
 
         leg.note(f"{rf.relative_to(run_dir)}: model={spec} "
                  f"(matches artifacts.{identities[canon]}) n={n} "
                  f"spec_adherence={sa} robustness={rob}")
         leg.note(f"{transcripts.relative_to(run_dir)}: {counts['rows']} transcripts, "
-                 f"{counts['passed']}/{counts['scored']} re-derived from the rows")
+                 f"all carrying model={spec}; {counts['passed']}/{counts['scored']} "
+                 f"overall and {counts['adv_passed']}/{counts['adv_scored']} "
+                 f"adversarial re-derived from the rows against {res.get('eval_set')}")
         return leg
 
     leg.fail(f"no usable results JSON among {len(results_files)} candidate(s) "
@@ -988,7 +1254,7 @@ def check_loop(run_dir: Path, repo_root: Path) -> list:
     return [check_generate(train_log, repo_root),
             check_train(train_log),
             check_artifacts(train_log),
-            check_eval(run_dir, train_log, harness)]
+            check_eval(run_dir, train_log, harness, repo_root)]
 
 
 def main(argv=None) -> int:

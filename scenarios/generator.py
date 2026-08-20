@@ -76,7 +76,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, NamedTuple, Optional, Sequence, Tuple
 
-from constraints.registry import TYPES, validate_constraint
+from constraints.registry import TYPES, family_of, validate_constraint
 
 from scenarios.instances import INSTANCES, INSTANCE_META
 from scenarios.lexicons import GENERIC, LEXICONS, members_present
@@ -86,8 +86,13 @@ from scenarios.reachability import (build_witness, content_words, find_conflicts
 
 __all__ = [
     "NEGATIVE_TYPES",
+    "CHARACTER_FAMILY",
+    "CHARACTER_TYPES",
     "MIN_SCENARIOS",
     "MIN_ADVERSARIAL_SHARE",
+    "MIN_CHARACTER_CONSTRAINT_SHARE",
+    "character_constraint_share",
+    "carries_character_constraint",
     "MIN_PER_SPLIT",
     "MIN_LETTER_CONTENT_SHARE",
     "MIN_MARK_RATE_PER_100_CHARS",
@@ -120,6 +125,36 @@ MIN_SCENARIOS = 120
 MIN_ADVERSARIAL_SHARE = 0.40
 MIN_PER_SPLIT = 30
 ALLOWED_K = (2, 3, 4)
+
+#: The CHARACTER family, and the types the registry puts in it. Derived, never
+#: typed out: ``banned_letter`` (train) and ``banned_punctuation`` (held out)
+#: are character-level because :mod:`constraints.registry` says so, so a
+#: character type added later is counted here automatically instead of silently
+#: deflating the share below.
+CHARACTER_FAMILY = "character"
+CHARACTER_TYPES: Tuple[str, ...] = tuple(
+    t for t in TYPES if family_of(t) == CHARACTER_FAMILY)
+
+#: Ladder rung ``r6-char65`` (configs/g1.json): at least this fraction of
+#: scenarios must carry a character-level constraint.
+#:
+#: WHY THIS NUMBER EXISTS AT ALL, stated here because a floor without its
+#: evidence is a preference. G1 ran the full ablation and returned ESCALATE at
+#: fail_rate 0.0884. The ablation did not fail to find difficulty -- it
+#: LOCALISED it. Across two frontier labs essentially every violation was
+#: character-level: openai violated banned_letter 39 times and no other type at
+#: all; anthropic 39 of 51. On letter-ban scenarios frontier fails 35-52%
+#: against 0.9-4.5% elsewhere, and Qwen3-1.7B fails 100% of them under all
+#: three strategies. Fail rate was FLAT across k (0.12/0.08/0.09 at k=2/3/4),
+#: so composition is not the difficulty driver the design assumed. The old
+#: corpus diluted the real effect by carrying a character constraint in only
+#: half its scenarios and a letter ban in under a quarter.
+#:
+#: The floor is enforced here, at build time, AND recomputed from the shipped
+#: JSONL by tests/test_scenarios.py AND re-derived from the corpus a run
+#: actually used by scripts/gate_check.py. Three independent derivations,
+#: because the escalation rests on this one number.
+MIN_CHARACTER_CONSTRAINT_SHARE = 0.65
 
 #: Distractor evidence thresholds. Two OTHER topic words in the prompt is the
 #: bar for "the task is really about this topic"; three occurrences of a banned
@@ -334,6 +369,23 @@ def negative_constraints(constraints: Sequence[Dict[str, Any]]) -> List[str]:
     return [c["id"] for c in constraints if c["type"] in NEGATIVE_TYPES]
 
 
+def carries_character_constraint(constraint_ids: Iterable[str]) -> bool:
+    """Does this scenario carry at least one CHARACTER-family constraint?
+
+    Takes constraint IDS rather than objects so it can be run over a row of the
+    shipped ``corpus.jsonl`` without rebuilding anything.
+    """
+    return any(INSTANCES[cid]["type"] in CHARACTER_TYPES for cid in constraint_ids)
+
+
+def character_constraint_share(scenarios: Sequence[Dict[str, Any]]) -> float:
+    """Fraction of ``scenarios`` carrying a character-level constraint."""
+    if not scenarios:
+        return 0.0
+    n = sum(1 for s in scenarios if carries_character_constraint(s["constraints"]))
+    return n / len(scenarios)
+
+
 # ==========================================================================
 # One scenario
 # ==========================================================================
@@ -525,6 +577,16 @@ def _corpus_invariants(scenarios: Sequence[Dict[str, Any]],
         if count < MIN_PER_SPLIT:
             problems.append(f"split {split!r} has {count} scenarios, need >= {MIN_PER_SPLIT}")
 
+    # Ladder rung r6-char65. Raised here rather than left to the gate because a
+    # corpus that silently drifts below the floor would be labelled with a rung
+    # it does not satisfy, and the label is what the escalation is argued from.
+    char_share = character_constraint_share(scenarios)
+    if char_share < MIN_CHARACTER_CONSTRAINT_SHARE:
+        n_char = sum(1 for s in scenarios if carries_character_constraint(s["constraints"]))
+        problems.append(
+            f"character-constraint share {n_char}/{n} = {char_share:.1%} < "
+            f"{MIN_CHARACTER_CONSTRAINT_SHARE:.0%} (ladder rung r6-char65)")
+
     # THE type-level split invariant, enforced at build time as well as tested.
     for scenario in scenarios:
         if scenario["split"] != "train":
@@ -625,6 +687,11 @@ def summarise(scenarios: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         "split_distribution": dist("split"),
         "adversarial_share": round(adversarial / n, 4) if n else 0.0,
         "adversarial_share_floor": MIN_ADVERSARIAL_SHARE,
+        "character_constraint_scenarios": sum(
+            1 for s in scenarios if carries_character_constraint(s["constraints"])),
+        "character_constraint_share": round(character_constraint_share(scenarios), 4),
+        "character_constraint_share_floor": MIN_CHARACTER_CONSTRAINT_SHARE,
+        "character_types": list(CHARACTER_TYPES),
         "constraint_instances_used": len({cid for s in scenarios for cid in s["constraints"]}),
         # Published so a reader of manifest.json sees what was held back and
         # why, without reading this module. See QUARANTINE.

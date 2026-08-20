@@ -39,14 +39,17 @@ import pytest
 from conftest import REPO_ROOT  # noqa: F401  (adds the repo root to sys.path)
 
 from constraints.checkers import CLEAN_EVIDENCE, check
-from constraints.registry import (ID_PREFIX_BY_FAMILY, TYPES, ConstraintError,
+from constraints.registry import (FAMILIES, ID_PREFIX_BY_FAMILY, TYPES, ConstraintError,
                                   family_of, list_types, split_of, validate_constraint)
 from scenarios import build as build_mod
-from scenarios.generator import (ALLOWED_K, MIN_ADVERSARIAL_SHARE, MIN_KEY_TERM_HITS,
+from scenarios.generator import (ALLOWED_K, CHARACTER_FAMILY, CHARACTER_TYPES,
+                                 MIN_ADVERSARIAL_SHARE, MIN_CHARACTER_CONSTRAINT_SHARE,
+                                 MIN_KEY_TERM_HITS,
                                  MIN_LETTER_CONTENT_SHARE, MIN_LEXICON_WITNESSES,
                                  MIN_MARK_OCCURRENCES, MIN_MARK_RATE_PER_100_CHARS,
                                  MIN_SCENARIOS, NEGATIVE_TYPES, POSITIVE_TYPES, QUARANTINE,
-                                 GeneratorError, _build_one, distractor_mechanisms,
+                                 GeneratorError, _build_one, _corpus_invariants,
+                                 character_constraint_share, distractor_mechanisms,
                                  dominant_lexicons, generate, letter_content_share,
                                  summarise)
 from scenarios.instances import INSTANCE_META
@@ -55,6 +58,7 @@ from scenarios.paths import (CORPUS_PATH, INSTANCES_PATH, MANIFEST_PATH, SMOKE_P
                              load_corpus, load_instances, load_jsonl, load_manifest,
                              load_smoke)
 from scenarios.pressure import NUDGES
+from scenarios.render import render_user_message
 from scenarios.reachability import (MIN_WITNESS_CHARS, MIN_WITNESS_SENTENCES,
                                     UNPARAPHRASABLE_TYPES, build_witness, content_words,
                                     find_conflicts, task_conflicts,
@@ -227,6 +231,188 @@ def test_no_instance_is_dead_weight(corpus, instances):
     used = {cid for scenario in corpus for cid in scenario["constraints"]}
     unused = sorted(set(instances) - used)
     assert not unused, f"instances defined but never used by any scenario: {unused}"
+
+
+# ==========================================================================
+# LADDER RUNG r6-char65 -- the character-constraint share.
+#
+# This is the number the whole escalation rests on, so it is recomputed here
+# from the SHIPPED corpus and the pinned registry, never read out of the
+# manifest. "Character" is decided by constraints.registry.family_of, not by a
+# list of type names retyped in this file: if a character type is added later
+# it counts automatically instead of silently deflating the share.
+# ==========================================================================
+
+def _character_types_from_the_registry():
+    types = {t for t in TYPES if family_of(t) == CHARACTER_FAMILY}
+    assert types, "the registry has no character family; the rung is meaningless"
+    return types
+
+
+def test_the_character_family_is_the_one_the_rung_means():
+    """banned_letter (train) and banned_punctuation (held out), from the registry."""
+    assert CHARACTER_FAMILY in FAMILIES
+    assert set(CHARACTER_TYPES) == _character_types_from_the_registry()
+    assert set(CHARACTER_TYPES) == {"banned_letter", "banned_punctuation"}, (
+        f"the character family is now {sorted(CHARACTER_TYPES)}; the r6-char65 "
+        "rung was approved on the letter-ban / punctuation-ban pair, so a change "
+        "here changes what the rung claims and needs saying out loud")
+    # The generalisation claim the split sets up: letters are trained on,
+    # punctuation is held out. Same family, different constraint.
+    assert split_of("banned_letter") == "train"
+    assert split_of("banned_punctuation") == "heldout_type"
+
+
+def test_character_constraint_share_meets_the_rung_floor(corpus, instances):
+    character = _character_types_from_the_registry()
+    carrying = [s["scenario_id"] for s in corpus
+                if any(instances[cid]["type"] in character for cid in s["constraints"])]
+    share = len(carrying) / len(corpus)
+    assert share >= MIN_CHARACTER_CONSTRAINT_SHARE, (
+        f"{len(carrying)}/{len(corpus)} = {share:.1%} of scenarios carry a "
+        f"character-level constraint, below the {MIN_CHARACTER_CONSTRAINT_SHARE:.0%} "
+        "the r6-char65 rung declares. The rung exists because the G1 ablation "
+        "localised frontier failure to character constraints; a corpus below the "
+        "floor is not the corpus that rung names")
+    # ...and the helper the generator enforces with agrees with this recomputation.
+    assert character_constraint_share(corpus) == share
+
+
+def test_the_character_share_in_the_manifest_is_the_real_one(corpus, manifest):
+    summary = manifest["summary"]
+    character = _character_types_from_the_registry()
+    instances = load_instances()
+    n_char = sum(1 for s in corpus
+                 if any(instances[cid]["type"] in character for cid in s["constraints"]))
+    assert summary["character_constraint_scenarios"] == n_char
+    assert summary["character_constraint_share"] == round(n_char / len(corpus), 4)
+    assert summary["character_constraint_share_floor"] == MIN_CHARACTER_CONSTRAINT_SHARE
+    assert set(summary["character_types"]) == character
+
+
+def test_the_config_rung_and_the_generator_floor_are_the_same_number():
+    """An unverified rung field is a claim. This is where the claim is bound.
+
+    ``configs/g1.json`` names the rung the shipped corpus is built to and
+    ``scripts/gate_check.py`` re-derives the share from whatever corpus a run
+    actually used. Both read ``min_character_constraint_share``; if that number
+    and the floor the generator builds to ever drift apart, the corpus would
+    satisfy one and be labelled with the other.
+    """
+    cfg = json.loads((REPO_ROOT / "configs" / "g1.json").read_text())
+    ladder = cfg["ladder"]
+    rung = next(r for r in ladder["rungs"] if r["name"] == ladder["current"])
+    declared = rung.get("min_character_constraint_share")
+    assert declared is not None, (
+        f"ladder.current is {ladder['current']!r} but that rung declares no "
+        "min_character_constraint_share; the corpus is built to a floor the "
+        "config does not state")
+    assert declared == MIN_CHARACTER_CONSTRAINT_SHARE, (
+        f"config rung {ladder['current']!r} declares {declared} but the generator "
+        f"builds to {MIN_CHARACTER_CONSTRAINT_SHARE}")
+
+
+def test_character_constraints_are_not_concentrated_in_one_cell(corpus, instances):
+    """A share met by loading one cell would confound the family with pressure.
+
+    Robustness is spec-adherence on the ADVERSARIAL subset. If character
+    constraints lived mostly in that subset, the clean-vs-adversarial gap would
+    be a character-vs-lexical gap wearing its name. The split is a different
+    matter and is deliberately asymmetric -- banned_punctuation is a held-out
+    character type, so the held-out arm is character-heavy by design -- so what
+    is bound here is the PRESSURE arms, plus a floor per cell that keeps every
+    cell usable on its own.
+    """
+    character = _character_types_from_the_registry()
+    def carries(scenario):
+        return any(instances[cid]["type"] in character for cid in scenario["constraints"])
+
+    by_pressure = {}
+    for pressure in ("clean", "adversarial"):
+        rows = [s for s in corpus if s["pressure"] == pressure]
+        by_pressure[pressure] = sum(1 for s in rows if carries(s)) / len(rows)
+    gap = abs(by_pressure["clean"] - by_pressure["adversarial"])
+    assert gap <= 0.15, (
+        f"character-constraint share is {by_pressure['clean']:.1%} in the clean arm "
+        f"and {by_pressure['adversarial']:.1%} in the adversarial arm; a gap that "
+        "size makes robustness a measure of constraint family, not of pressure")
+
+    for split in ("train", "heldout_type"):
+        for pressure in ("clean", "adversarial"):
+            rows = [s for s in corpus
+                    if s["split"] == split and s["pressure"] == pressure]
+            n_char = sum(1 for s in rows if carries(s))
+            assert n_char >= 20, (
+                f"cell {(split, pressure)} carries only {n_char} character "
+                f"scenarios of {len(rows)}; the rung's claim cannot be read per cell")
+
+
+def test_the_corpus_still_holds_a_non_character_control_group(corpus, instances):
+    """Raising the share must not delete the contrast that made the finding legible.
+
+    The G1 ablation is only interpretable because frontier models failed
+    letter-ban scenarios 35-52% of the time and everything else 0.9-4.5%. That
+    comparison needs a non-character arm big enough to carry a rate.
+    """
+    character = _character_types_from_the_registry()
+    control = [s["scenario_id"] for s in corpus
+               if not any(instances[cid]["type"] in character for cid in s["constraints"])]
+    assert len(control) >= 30, (
+        f"only {len(control)} scenarios carry no character constraint; the "
+        "non-character comparison arm is too small to state a rate against")
+
+
+def test_guards_actually_guard_the_character_share(corpus, by_id):
+    """The floor can fail the build, and it bites at exactly the right place.
+
+    Without this the share assertions above could be green because nothing is
+    capable of turning them red.
+    """
+    character = _character_types_from_the_registry()
+    instances = load_instances()
+    plain = ["c-lex-025", "c-fmt-001"]      # two train, non-character constraints
+    assert not any(instances[cid]["type"] in character for cid in plain)
+
+    def corpus_with_n_stripped(n):
+        rows, manifests, stripped = [], [], 0
+        for scenario in corpus:
+            row = dict(scenario)
+            carries = any(instances[cid]["type"] in character
+                          for cid in scenario["constraints"])
+            if carries and stripped < n:
+                row["constraints"] = list(plain)
+                row["k"] = len(plain)
+                row["split"] = "train"
+                stripped += 1
+            rows.append(row)
+            manifests.append({"base_task": by_id[scenario["scenario_id"]]["base_task"]})
+        assert stripped == n, "not enough character scenarios to run the rig"
+        return rows, manifests
+
+    n_char = sum(1 for s in corpus
+                 if any(instances[cid]["type"] in character for cid in s["constraints"]))
+    n_total = len(corpus)
+    # The largest strip that still clears the floor, and the first that does not.
+    ok = next(n for n in range(n_char, -1, -1)
+              if (n_char - n) / n_total >= MIN_CHARACTER_CONSTRAINT_SHARE)
+    _corpus_invariants(*corpus_with_n_stripped(ok))          # must not raise
+    with pytest.raises(GeneratorError, match="character-constraint share"):
+        _corpus_invariants(*corpus_with_n_stripped(ok + 1))
+
+
+# ==========================================================================
+# Every shipped scenario is renderable into the exact user message a model
+# sees. A scenario that cannot be rendered is not evaluable, so the corpus
+# would be shorter than it claims without anything saying so.
+# ==========================================================================
+
+def test_every_scenario_renders_through_the_real_renderer(corpus, instances):
+    for scenario in corpus:
+        prompt = render_user_message(scenario, instances)
+        assert isinstance(prompt, str) and prompt.strip(), scenario["scenario_id"]
+        assert scenario["task"] in prompt, (
+            f"{scenario['scenario_id']}: the rendered prompt dropped the task")
+        assert render_user_message(scenario, instances) == prompt, "render is not stable"
 
 
 # ==========================================================================

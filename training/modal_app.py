@@ -120,7 +120,8 @@ TRAIN_LOG_KEYS = ("base_model", "config_resolved", "dataset", "prompt_contract",
                   "started_utc", "finished_utc")
 BASE_MODEL_KEYS = ("repo", "revision")
 DATASET_KEYS = ("path", "rows", "sha256")
-PROMPT_CONTRACT_KEYS = ("render_fn", "sample_row_index", "sample_rendered_prompt")
+PROMPT_CONTRACT_KEYS = ("render_fn", "sample_row_index", "sample_rendered_prompt",
+                        "sample_prompt_messages")
 ARTIFACT_KEYS = ("adapter", "adapter_bytes", "merged_fp16", "merged_bytes")
 
 # The one thing configs/train.json does NOT pin: the container's python deps.
@@ -582,7 +583,7 @@ def _hex(value, length, field):
 
 def build_train_log(*, base_repo, base_revision, config_resolved, dataset_path,
                     dataset_rows, dataset_sha256, render_fn_dotted,
-                    sample_row_index, sample_rendered_prompt, steps,
+                    sample_row_index, sample_rendered_prompt, sample_prompt_messages, steps,
                     loss_history, wall_clock_seconds, adapter_path,
                     adapter_bytes, merged_path, merged_bytes, started_utc,
                     finished_utc, scenarios_path=None,
@@ -637,7 +638,8 @@ def build_train_log(*, base_repo, base_revision, config_resolved, dataset_path,
         "dataset": dataset,
         "prompt_contract": {"render_fn": render_fn_dotted,
                             "sample_row_index": int(sample_row_index),
-                            "sample_rendered_prompt": sample_rendered_prompt},
+                            "sample_rendered_prompt": sample_rendered_prompt,
+                            "sample_prompt_messages": sample_prompt_messages},
         "steps": int(steps),
         "loss_history": history,
         "wall_clock_seconds": float(wall_clock_seconds),
@@ -747,6 +749,13 @@ def train(smoke: bool, dataset_path: str, run_name: str) -> dict:
     # Evidence for prompt_contract: the literal layer-2 text for a row that was
     # actually trained on, produced by the same function that built its tokens.
     sample_row_index = ds_stats["kept_row_indices"][0]
+    # The MESSAGES that were templated, recorded verbatim alongside the rendered
+    # text. An offline checker can compare these EXACTLY -- no tokenizer needed and
+    # nothing to parse. Recording only the layer-2 string forced the checker into
+    # locating the prompt inside chat-template scaffolding, and "scaffolding" is
+    # attacker-supplied: an injected system turn, or a bare <note> tag, both read
+    # as scaffold and passed as verified.
+    sample_prompt_messages = [dict(m) for m in rows[sample_row_index]["messages"][:1]]
     sample_rendered_prompt = render_prompt_text(
         tokenizer, rows[sample_row_index]["messages"][:1], dcfg["enable_thinking"])
 
@@ -842,6 +851,7 @@ def train(smoke: bool, dataset_path: str, run_name: str) -> dict:
         render_fn_dotted=render_fn_dotted,
         sample_row_index=sample_row_index,
         sample_rendered_prompt=sample_rendered_prompt,
+        sample_prompt_messages=sample_prompt_messages,
         steps=int(trainer.state.global_step),
         loss_history=loss_history,
         wall_clock_seconds=time.time() - t_zero,
