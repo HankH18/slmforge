@@ -44,6 +44,35 @@ Nothing here invents a score. Two specific hazards are handled explicitly:
   and stamps :data:`TEMPERATURE_DROPPED_MARKER` into the reasoning of every
   affected row so the transcript itself shows the degraded determinism.
 * **unparseable verdict.** Retried, then raised. Never scored.
+
+Two providers, one rubric
+-------------------------
+:class:`AnthropicJudge` and :class:`GoogleJudge` are interchangeable by
+construction: both render the same :data:`JUDGE_PROMPT` bytes and both inherit
+their entire failure policy from :class:`_RetryingJudge`, so ``rubric_hash()``
+cannot differ between them and neither can what happens when a call fails. Only
+the transport and the provider-specific hazards differ. If the prompts ever
+diverge the two judges are no longer the same instrument and every
+cross-provider comparison is void, which is why tests/test_judge_google.py
+asserts the bytes each one SENDS are identical rather than trusting that both
+read the same constant.
+
+The second provider exists because on 2026-08-20 the judge and a graded frontier
+model shared one Anthropic account, that account hit its monthly spend cap
+mid-run, and both died together -- quarantining 147/147 rows of one cell. Which
+provider a run uses is configuration (``judge_provider`` in configs/models.json,
+``judge.provider`` in configs/g1.json), never a code edit.
+
+Google-specific hazards handled here
+------------------------------------
+* **thinking tokens share the output budget.** Gemini 3 spends ~140-155 thought
+  tokens on a ~25-token verdict, so :class:`GoogleJudge` sizes ``max_tokens``
+  for both. A truncated body is a ``MAX_TOKENS`` finish reason with no text,
+  and it raises.
+* **safety refusal / empty candidate.** Raises. A refusal is not a 1 -- the
+  judge never read the response, so there is no verdict to record.
+* **the 400 shape differs.** google-genai's ``ClientError`` carries ``code``,
+  not ``status_code``; :func:`_status_of` reads both.
 """
 from __future__ import annotations
 
@@ -60,8 +89,12 @@ __all__ = [
     "JudgeError",
     "MockJudge",
     "AnthropicJudge",
+    "GoogleJudge",
     "make_judge",
     "load_judge_model",
+    "load_judge_provider",
+    "JUDGE_PROVIDERS",
+    "DEFAULT_JUDGE_PROVIDER",
     "parse_judge_response",
     "rubric_hash",
     "JUDGE_PROMPT",
@@ -89,6 +122,15 @@ TEMPERATURE_DROPPED_MARKER = "[judge ran WITHOUT temperature=0: model rejected i
 #: Substrings that identify a 400 as "this model does not take temperature"
 #: rather than some other bad request.
 _TEMPERATURE_400_MARKERS = ("temperature", "sampling")
+
+#: Network-backed providers this module can dispatch. Order is not significance.
+JUDGE_PROVIDERS = ("anthropic", "google")
+
+#: What ``judge_provider`` means when configs/models.json does not carry the key.
+#: models.json predates the second provider; a checkout that has not been
+#: migrated must keep scoring with the judge its numbers were scored with, not
+#: fail and not silently move to another family.
+DEFAULT_JUDGE_PROVIDER = "anthropic"
 
 
 class JudgeError(RuntimeError):
@@ -188,14 +230,7 @@ def parse_judge_response(text: Any) -> Tuple[int, str]:
 # Runtime model pin
 # ==========================================================================
 
-def load_judge_model(path: Optional[Any] = None) -> str:
-    """Read ``judge_model`` out of configs/models.json AT RUNTIME.
-
-    Never hardcode a Claude id: the pin lives in the config so re-pinning is a
-    config edit plus a re-run, not a code change. A missing file or missing key
-    raises -- defaulting to some id would silently score a run against a model
-    nobody chose.
-    """
+def _load_models_cfg(path: Optional[Any] = None) -> Tuple[Path, dict]:
     p = Path(path) if path is not None else MODELS_JSON
     if not p.exists():
         raise JudgeError(
@@ -205,9 +240,55 @@ def load_judge_model(path: Optional[Any] = None) -> str:
         cfg = json.loads(p.read_text())
     except json.JSONDecodeError as exc:
         raise JudgeError(f"{p} is not valid JSON: {exc}") from exc
+    if not isinstance(cfg, dict):
+        raise JudgeError(f"{p} is not a JSON object")
+    return p, cfg
+
+
+def load_judge_provider(path: Optional[Any] = None) -> str:
+    """Read ``judge_provider`` out of configs/models.json AT RUNTIME.
+
+    The key is optional and defaults to :data:`DEFAULT_JUDGE_PROVIDER`, because
+    every models.json written before the second provider existed lacks it and
+    those runs were scored by Anthropic. An unknown value raises rather than
+    falling back: dispatching a judge nobody chose is the failure this whole
+    module is built to refuse.
+    """
+    p, cfg = _load_models_cfg(path)
+    provider = cfg.get("judge_provider", DEFAULT_JUDGE_PROVIDER)
+    if not isinstance(provider, str) or provider.strip() not in JUDGE_PROVIDERS:
+        raise JudgeError(
+            f"{p} has judge_provider={provider!r}; expected one of {list(JUDGE_PROVIDERS)}")
+    return provider.strip()
+
+
+def load_judge_model(path: Optional[Any] = None,
+                     provider: Optional[str] = None) -> str:
+    """Read ``judge_model`` out of configs/models.json AT RUNTIME.
+
+    Never hardcode a Claude id: the pin lives in the config so re-pinning is a
+    config edit plus a re-run, not a code change. A missing file or missing key
+    raises -- defaulting to some id would silently score a run against a model
+    nobody chose.
+
+    ``provider``, when given, is cross-checked against ``judge_provider``. Two
+    providers share one ``judge_model`` pin, so without this check a
+    ``GoogleJudge`` built with no explicit model would cheerfully ask Gemini for
+    a ``claude-*`` id (or the reverse) and fail deep inside the SDK with an
+    error about model names rather than about configuration.
+    """
+    p, cfg = _load_models_cfg(path)
     model = cfg.get("judge_model")
     if not isinstance(model, str) or not model.strip():
         raise JudgeError(f"{p} has no usable 'judge_model' key (got {model!r})")
+    if provider is not None:
+        configured = load_judge_provider(p)
+        if provider != configured:
+            raise JudgeError(
+                f"{p} pins judge_model {model.strip()!r} for judge_provider "
+                f"{configured!r}, but a {provider!r} judge asked for it. Set "
+                f"'judge_provider' and 'judge_model' together, or pass model= "
+                f"explicitly.")
     return model.strip()
 
 
@@ -237,49 +318,27 @@ class MockJudge:
         return self.score, self.reasoning
 
 
-class AnthropicJudge:
-    """Anthropic-backed task-quality judge. temperature 0, runtime-pinned model.
+class _RetryingJudge:
+    """Everything about the FAILURE POLICY, shared by every network judge.
 
-    ``client`` is injectable purely so the parse/retry/temperature-fallback
-    logic is testable without a network call; production leaves it ``None`` and
-    gets ``anthropic.Anthropic()``.
+    Provider subclasses supply one method, :meth:`_create`, which turns a
+    rendered rubric prompt into raw text. Retry, the temperature-400 fallback,
+    the transcript stamp and -- above all -- the rule that an exhausted judge
+    RAISES instead of returning a number live here, once, so that adding a
+    provider cannot quietly add a second, laxer failure policy alongside the
+    first. Two judges that fail differently are two different instruments.
     """
 
-    def __init__(self, model: Optional[str] = None, client: Any = None,
-                 tries: int = 3, sleep: Callable[[float], Any] = time.sleep,
-                 max_tokens: int = 300):
-        self.model = model if model is not None else load_judge_model()
-        if client is None:
-            import anthropic  # lazy: mock runs and tests never need the SDK
-            client = anthropic.Anthropic()
-        self.client = client
-        self.tries = int(tries)
-        if self.tries < 1:
-            raise ValueError("tries must be >= 1")
-        self._sleep = sleep
-        self.max_tokens = int(max_tokens)
-        #: None = never probed; True = the model 400'd on temperature and the
-        #: judge is now running without it. Falsey means "keep sending it".
-        self.temperature_dropped: Optional[bool] = None
+    #: set by every subclass's ``__init__``; declared for readers, not enforced.
+    model: str
+    tries: int
+    max_tokens: int
+    #: None = never probed; True = the model 400'd on temperature and the judge
+    #: is now running without it. Falsey means "keep sending it".
+    temperature_dropped: Optional[bool]
 
-    # -- transport ---------------------------------------------------------
-    def _create(self, prompt: str) -> str:
-        kwargs = {
-            "model": self.model,
-            "max_tokens": self.max_tokens,
-            "messages": [{"role": "user", "content": prompt}],
-        }
-        if not self.temperature_dropped:
-            kwargs["temperature"] = 0
-        try:
-            resp = self.client.messages.create(**kwargs)
-        except Exception as exc:  # noqa: BLE001 -- re-raised or narrowed below
-            if self.temperature_dropped or not _is_temperature_400(exc):
-                raise
-            self._note_temperature_dropped()
-            kwargs.pop("temperature", None)
-            resp = self.client.messages.create(**kwargs)
-        return _text_of(resp)
+    def _create(self, prompt: str) -> str:  # pragma: no cover - interface
+        raise NotImplementedError
 
     def _note_temperature_dropped(self) -> None:
         self.temperature_dropped = True
@@ -310,6 +369,113 @@ class AnthropicJudge:
             f"missing one). Errors: " + " | ".join(errors))
 
 
+class AnthropicJudge(_RetryingJudge):
+    """Anthropic-backed task-quality judge. temperature 0, runtime-pinned model.
+
+    ``client`` is injectable purely so the parse/retry/temperature-fallback
+    logic is testable without a network call; production leaves it ``None`` and
+    gets ``anthropic.Anthropic()``.
+    """
+
+    def __init__(self, model: Optional[str] = None, client: Any = None,
+                 tries: int = 3, sleep: Callable[[float], Any] = time.sleep,
+                 max_tokens: int = 300):
+        self.model = model if model is not None else load_judge_model(provider="anthropic")
+        if client is None:
+            import anthropic  # lazy: mock runs and tests never need the SDK
+            client = anthropic.Anthropic()
+        self.client = client
+        self.tries = int(tries)
+        if self.tries < 1:
+            raise ValueError("tries must be >= 1")
+        self._sleep = sleep
+        self.max_tokens = int(max_tokens)
+        self.temperature_dropped: Optional[bool] = None
+
+    # -- transport ---------------------------------------------------------
+    def _create(self, prompt: str) -> str:
+        kwargs = {
+            "model": self.model,
+            "max_tokens": self.max_tokens,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        if not self.temperature_dropped:
+            kwargs["temperature"] = 0
+        try:
+            resp = self.client.messages.create(**kwargs)
+        except Exception as exc:  # noqa: BLE001 -- re-raised or narrowed below
+            if self.temperature_dropped or not _is_temperature_400(exc):
+                raise
+            self._note_temperature_dropped()
+            kwargs.pop("temperature", None)
+            resp = self.client.messages.create(**kwargs)
+        return _text_of(resp)
+
+
+class GoogleJudge(_RetryingJudge):
+    """Google-backed task-quality judge. Identical rubric bytes, identical
+    contract, identical failure policy -- only the transport differs.
+
+    WHY A SECOND PROVIDER EXISTS (2026-08-20). Family B moved from Google to
+    Anthropic, which put the judge and a graded frontier model on ONE account.
+    That account hit its monthly spend cap mid-run and took out the judge and
+    the model it was grading together, quarantining 147/147 rows of one cell.
+    The fragility is structural, not bad luck: a judge sharing an account with a
+    model it grades is one billing event away from ending a run. A Google judge
+    also restores the property the project relaxed under duress -- three
+    DISTINCT families, openai and anthropic ablated, google judging, nothing
+    scoring itself and no two sharing a failure domain.
+
+    ``client`` is injectable for the same reason as :class:`AnthropicJudge`:
+    every branch below is reachable in tests without a network call. Requests
+    are built from plain dicts rather than ``google.genai.types`` objects so
+    that neither this module nor its tests import the SDK to construct one.
+
+    ``max_tokens`` defaults far above the Anthropic judge's 300 on purpose.
+    Gemini 3 models spend THINKING tokens out of the SAME output budget, and how
+    much they think is not bounded by how short the answer is. Measured
+    2026-08-20 over real run outputs: gemini-3.6-flash spends ~140-155 thought
+    tokens on a ~25-token verdict, but gemini-3-flash-preview was observed
+    spending 982 and truncating against a 1024 budget -- returning a body whose
+    ``SCORE:`` line PARSED while the reason was cut off mid-word. The default
+    therefore clears the worst observed thinker several times over. It costs
+    nothing to set high: ``max_output_tokens`` is a cap, not a purchase.
+    """
+
+    def __init__(self, model: Optional[str] = None, client: Any = None,
+                 tries: int = 3, sleep: Callable[[float], Any] = time.sleep,
+                 max_tokens: int = 4096):
+        self.model = model if model is not None else load_judge_model(provider="google")
+        if client is None:
+            from google import genai  # lazy: mock runs and tests never need the SDK
+            client = genai.Client()
+        self.client = client
+        self.tries = int(tries)
+        if self.tries < 1:
+            raise ValueError("tries must be >= 1")
+        self._sleep = sleep
+        self.max_tokens = int(max_tokens)
+        self.temperature_dropped: Optional[bool] = None
+
+    # -- transport ---------------------------------------------------------
+    def _create(self, prompt: str) -> str:
+        contents = [{"role": "user", "parts": [{"text": prompt}]}]
+        config = {"max_output_tokens": self.max_tokens}
+        if not self.temperature_dropped:
+            config["temperature"] = 0
+        try:
+            resp = self.client.models.generate_content(
+                model=self.model, contents=contents, config=dict(config))
+        except Exception as exc:  # noqa: BLE001 -- re-raised or narrowed below
+            if self.temperature_dropped or not _is_temperature_400(exc):
+                raise
+            self._note_temperature_dropped()
+            config.pop("temperature", None)
+            resp = self.client.models.generate_content(
+                model=self.model, contents=contents, config=dict(config))
+        return _google_text_of(resp)
+
+
 def _text_of(resp: Any) -> str:
     """Concatenate the text blocks of a Messages API response."""
     content = getattr(resp, "content", None)
@@ -326,21 +492,99 @@ def _text_of(resp: Any) -> str:
     return "".join(parts).strip()
 
 
+#: finish_reason values that mean "the model finished saying what it meant to".
+#: Everything else -- SAFETY, RECITATION, PROHIBITED_CONTENT, MAX_TOKENS,
+#: BLOCKLIST -- is a non-answer, and a non-answer is not a low score.
+_GOOGLE_OK_FINISH = (None, "STOP", "FINISH_REASON_UNSPECIFIED")
+
+
+def _enum_name(value: Any) -> Optional[str]:
+    """``FinishReason.SAFETY`` -> ``"SAFETY"``; passes plain strings through."""
+    if value is None:
+        return None
+    return getattr(value, "name", None) or str(value).rsplit(".", 1)[-1]
+
+
+def _google_text_of(resp: Any) -> str:
+    """Text of a google-genai ``GenerateContentResponse``, or raise.
+
+    A safety refusal, a recitation block, a truncated body and an empty
+    candidate list all raise here rather than returning a string that would
+    parse as a low score. That is the whole point: the judge never READ the
+    response in those cases, so there is no verdict to record, and a 1 stamped
+    in place of a missing one is a fabricated measurement. The caller's retry
+    loop gets its attempts and then :class:`JudgeError` propagates, which
+    quarantines the row.
+    """
+    block = _enum_name(getattr(getattr(resp, "prompt_feedback", None), "block_reason", None))
+    if block is not None:
+        raise JudgeError(
+            f"google judge: the rubric prompt was blocked before generation "
+            f"(block_reason={block}); NO verdict was produced")
+    candidates = getattr(resp, "candidates", None)
+    if not candidates:
+        raise JudgeError(
+            f"google judge: response carried no candidates (prompt_feedback="
+            f"{getattr(resp, 'prompt_feedback', None)!r})")
+    cand = candidates[0]
+    finish = _enum_name(getattr(cand, "finish_reason", None))
+    if finish not in _GOOGLE_OK_FINISH:
+        raise JudgeError(
+            f"google judge: generation stopped with finish_reason={finish}, not STOP; "
+            f"NO verdict was produced")
+    parts = getattr(getattr(cand, "content", None), "parts", None) or []
+    chunks = []
+    for part in parts:
+        if getattr(part, "thought", None):
+            continue  # a thought is reasoning ABOUT the verdict, not the verdict
+        text = getattr(part, "text", None)
+        if text:
+            chunks.append(text)
+    if not chunks:
+        raise JudgeError(
+            f"google judge: response carried no text part "
+            f"(finish_reason={finish}); NO verdict was produced")
+    return "".join(chunks).strip()
+
+
+def _status_of(exc: Exception) -> Optional[int]:
+    """HTTP status carried by a provider exception, whatever it calls the field.
+
+    anthropic and openai expose ``status_code``; ``google.genai.errors.ClientError``
+    exposes ``code`` and leaves ``status_code`` unset (measured 2026-08-20).
+    ``status_code`` is consulted first so the Anthropic path resolves exactly as
+    it did before ``code`` was ever looked at.
+    """
+    for attr in ("status_code", "code"):
+        value = getattr(exc, attr, None)
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+    return getattr(getattr(exc, "response", None), "status_code", None)
+
+
 def _is_temperature_400(exc: Exception) -> bool:
     """Is this the 'this model no longer accepts temperature' 400?"""
-    status = getattr(exc, "status_code", None)
-    if status is None:
-        status = getattr(getattr(exc, "response", None), "status_code", None)
-    if status != 400:
+    if _status_of(exc) != 400:
         return False
     blob = f"{exc}".lower()
     return any(marker in blob for marker in _TEMPERATURE_400_MARKERS)
 
 
+#: provider name -> judge class. make_judge dispatches through this, so a new
+#: provider is one entry, not a new branch in every caller.
+_JUDGE_CLASSES = {"anthropic": AnthropicJudge, "google": GoogleJudge}
+
 def make_judge(spec: str = "anthropic", model: Optional[str] = None, **kwargs) -> Any:
-    """``"anthropic"`` | ``"mock:<1-5>"`` -> a judge callable. For CLI wiring."""
-    if spec == "anthropic":
-        return AnthropicJudge(model=model, **kwargs)
+    """``"anthropic"`` | ``"google"`` | ``"mock:<1-5>"`` -> a judge callable.
+
+    Both network providers render the SAME :data:`JUDGE_PROMPT` bytes and share
+    :class:`_RetryingJudge`'s failure policy, so which one a run used changes the
+    transport and nothing about the rubric. ``rubric_hash()`` is identical across
+    them by construction; tests/test_judge_google.py asserts the sent bytes match.
+    """
+    cls = _JUDGE_CLASSES.get(spec)
+    if cls is not None:
+        return cls(model=model, **kwargs)
     if spec.startswith("mock:"):
         raw = spec.split(":", 1)[1]
         try:
@@ -348,4 +592,6 @@ def make_judge(spec: str = "anthropic", model: Optional[str] = None, **kwargs) -
         except ValueError as exc:
             raise ValueError(f"mock judge spec needs an integer score, got {raw!r}") from exc
         return MockJudge(score)
-    raise ValueError(f"unknown judge spec {spec!r} (expected 'anthropic' or 'mock:<1-5>')")
+    raise ValueError(
+        f"unknown judge spec {spec!r} (expected one of "
+        f"{[*JUDGE_PROVIDERS, 'mock:<1-5>']})")

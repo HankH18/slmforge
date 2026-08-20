@@ -179,10 +179,20 @@ def main() -> int:
                 "n": metrics["n"],
                 "judge_errors": metrics.get("judge_errors", 0),
             })
+            # A cell whose rows were all quarantined has SA/robustness of None.
+            # Formatting None raised and killed the whole run AFTER the cell's data
+            # was already written -- a reporting bug destroying a paid run twice.
+            def _p(x):
+                return "  none" if x is None else f"{x:.3f}"
             sa, rb = metrics["spec_adherence"], metrics["robustness"]
-            fail = None if sa is None else 1 - sa
-            print(f"  [cell] {spec} x {strategy}: SA={sa:.3f} R={rb:.3f} "
-                  f"fail={fail:.3f} judgeErr={metrics.get('judge_errors', 0)}")
+            print(f"  [cell] {spec} x {strategy}: SA={_p(sa)} R={_p(rb)} "
+                  f"fail={_p(None if sa is None else 1 - sa)} "
+                  f"scored={metrics.get('n_scored')} "
+                  f"judgeErr={metrics.get('judge_errors', 0)} "
+                  f"genErr={metrics.get('generator_errors', 0)}")
+            if sa is None:
+                print(f"         ^ every row quarantined; the cell measured nothing. "
+                      f"Investigate before trusting this run.")
 
     # Re-derive the cell list from disk so a manifest written by either invocation
     # describes the WHOLE run. The frontier and base rows are run separately.
