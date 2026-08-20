@@ -1,0 +1,97 @@
+{
+  "run_id": "g1",
+  "ladder_rung": "r3-k4",
+  "eval_set": "data/scenarios/corpus.jsonl",
+  "eval_set_sha256": "6a89849d8f68e947cf796a65547d4fb3cc57b8184bd8b34a0f4c870f9dd237c2",
+  "constraints": "data/scenarios/constraint_instances.jsonl",
+  "constraints_sha256": "15cd1d42529ed3a2464ede08ad9ad3df9192481538ab49cbd6e5aae86aaf96e5",
+  "exemplars": "data/scenarios/fewshot_exemplars.jsonl",
+  "n_scenarios": 147,
+  "models": {
+    "frontier": [
+      "openai:gpt-5.6-sol",
+      "google:gemini-3.1-pro-preview"
+    ],
+    "local_base": "hf:Qwen/Qwen3-1.7B@70d244cc86ccca08cf5af4e1e306ecf908b1ad5e"
+  },
+  "strategies": [
+    "zero_shot",
+    "few_shot",
+    "structured"
+  ],
+  "judge": {
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-6",
+    "rubric_hash": "12a0dcaaf29080cb"
+  },
+  "timestamp_utc": "2026-08-20T15:26:57.487611+00:00",
+  "cells": [
+    {
+      "model": "hf:Qwen/Qwen3-1.7B@70d244cc86ccca08cf5af4e1e306ecf908b1ad5e",
+      "strategy": "few_shot",
+      "classification": "local_base",
+      "results_json": "hf_Qwen_Qwen3-1.7B_70d244cc86ccca08cf5af4e1e306ecf908b1ad5e__few_shot.results.json",
+      "transcripts_jsonl": "hf_Qwen_Qwen3-1.7B_70d244cc86ccca08cf5af4e1e306ecf908b1ad5e__few_shot.transcripts.jsonl",
+      "spec_adherence": 0.3767123287671233,
+      "robustness": 0.36231884057971014,
+      "n": 147,
+      "judge_errors": 1
+    },
+    {
+      "model": "hf:Qwen/Qwen3-1.7B@70d244cc86ccca08cf5af4e1e306ecf908b1ad5e",
+      "strategy": "structured",
+      "classification": "local_base",
+      "results_json": "hf_Qwen_Qwen3-1.7B_70d244cc86ccca08cf5af4e1e306ecf908b1ad5e__structured.results.json",
+      "transcripts_jsonl": "hf_Qwen_Qwen3-1.7B_70d244cc86ccca08cf5af4e1e306ecf908b1ad5e__structured.transcripts.jsonl",
+      "spec_adherence": 0.40816326530612246,
+      "robustness": 0.4057971014492754,
+      "n": 147,
+      "judge_errors": 0
+    },
+    {
+      "model": "hf:Qwen/Qwen3-1.7B@70d244cc86ccca08cf5af4e1e306ecf908b1ad5e",
+      "strategy": "zero_shot",
+      "classification": "local_base",
+      "results_json": "hf_Qwen_Qwen3-1.7B_70d244cc86ccca08cf5af4e1e306ecf908b1ad5e__zero_shot.results.json",
+      "transcripts_jsonl": "hf_Qwen_Qwen3-1.7B_70d244cc86ccca08cf5af4e1e306ecf908b1ad5e__zero_shot.transcripts.jsonl",
+      "spec_adherence": 0.42758620689655175,
+      "robustness": 0.40298507462686567,
+      "n": 147,
+      "judge_errors": 2
+    },
+    {
+      "model": "openai:gpt-5.6-sol",
+      "strategy": "few_shot",
+      "classification": "frontier",
+      "results_json": "openai_gpt-5.6-sol__few_shot.results.json",
+      "transcripts_jsonl": "openai_gpt-5.6-sol__few_shot.transcripts.jsonl",
+      "spec_adherence": 0.8843537414965986,
+      "robustness": 0.8840579710144928,
+      "n": 147,
+      "judge_errors": 0
+    },
+    {
+      "model": "openai:gpt-5.6-sol",
+      "strategy": "structured",
+      "classification": "frontier",
+      "results_json": "openai_gpt-5.6-sol__structured.results.json",
+      "transcripts_jsonl": "openai_gpt-5.6-sol__structured.transcripts.jsonl",
+      "spec_adherence": 0.9115646258503401,
+      "robustness": 0.8985507246376812,
+      "n": 147,
+      "judge_errors": 0
+    },
+    {
+      "model": "openai:gpt-5.6-sol",
+      "strategy": "zero_shot",
+      "classification": "frontier",
+      "results_json": "openai_gpt-5.6-sol__zero_shot.results.json",
+      "transcripts_jsonl": "openai_gpt-5.6-sol__zero_shot.transcripts.jsonl",
+      "spec_adherence": 0.9047619047619048,
+      "robustness": 0.8695652173913043,
+      "n": 147,
+      "judge_errors": 0
+    }
+  ],
+  "_note": "Provenance only. scripts/gate_check.py re-derives every metric from the transcripts and re-runs the checkers; nothing here is trusted as a measurement."
+}

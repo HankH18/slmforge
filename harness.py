@@ -99,6 +99,15 @@ PRESSURES: Tuple[str, ...] = ("clean", "adversarial")
 
 #: Extra key present ONLY on quarantined rows. Grep it to find broken scoring.
 JUDGE_ERROR_FIELD = "judge_error"
+# A generator can decline to produce output at all -- a safety-classifier refusal
+# returns stop_reason="refusal" with zero content blocks. That is NOT an empty
+# completion: empty text passes every checker vacuously (ruling A7), so scoring a
+# refusal as a response would record it as perfectly compliant. It is also not a
+# constraint failure -- the model never attempted the task. Measured at ~4% on
+# claude-opus-5, on innocuous prompts. Quarantine it the way judge errors are
+# quarantined: recorded, excluded from every rate, and COUNTED so the exclusion is
+# visible rather than silent.
+GENERATOR_ERROR_FIELD = "generator_error"
 
 
 class HarnessError(RuntimeError):
@@ -295,14 +304,14 @@ def validate_transcript_row(row: Mapping[str, Any]) -> None:
     """Raise unless ``row`` matches the pinned schema exactly, field for field."""
     if not isinstance(row, Mapping):
         raise HarnessError(f"transcript row must be an object, got {type(row).__name__}")
-    allowed = set(TRANSCRIPT_FIELDS) | {JUDGE_ERROR_FIELD}
+    allowed = set(TRANSCRIPT_FIELDS) | {JUDGE_ERROR_FIELD, GENERATOR_ERROR_FIELD}
     missing = [k for k in TRANSCRIPT_FIELDS if k not in row]
     if missing:
         raise HarnessError(f"transcript row is missing {missing}")
     extra = sorted(set(row) - allowed)
     if extra:
         raise HarnessError(f"transcript row has unpinned key(s) {extra}")
-    quarantined = JUDGE_ERROR_FIELD in row
+    quarantined = JUDGE_ERROR_FIELD in row or GENERATOR_ERROR_FIELD in row
 
     for key in ("scenario_id", "model", "strategy", "output", "quality_reasoning"):
         if not isinstance(row[key], str):
@@ -312,7 +321,13 @@ def validate_transcript_row(row: Mapping[str, Any]) -> None:
 
     results = row["checker_results"]
     if not isinstance(results, list) or not results:
-        raise HarnessError("transcript row checker_results must be a non-empty list")
+        # A QUARANTINED row is the one legitimate exception: the generator produced
+        # nothing, so there was no text to check. Every scored row must still carry
+        # results -- an empty list on a scored row would mean "no constraints were
+        # checked", which compute_spec_pass would read as vacuously passing.
+        if not quarantined:
+            raise HarnessError(
+                "transcript row checker_results must be a non-empty list")
     for entry in results:
         if not isinstance(entry, Mapping):
             raise HarnessError(f"checker_results entry must be an object, got {entry!r}")
@@ -397,7 +412,8 @@ def aggregate(rows: Sequence[Mapping[str, Any]],
 
     judge_error_rows = [r for r in rows if r.get(JUDGE_ERROR_FIELD) is not None]
     scored = [r for r in rows if r.get("spec_pass") is not None
-              and r.get(JUDGE_ERROR_FIELD) is None]
+              and r.get(JUDGE_ERROR_FIELD) is None
+              and r.get(GENERATOR_ERROR_FIELD) is None]
     unscored = len(rows) - len(scored)
 
     def scenario_of(row: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -458,6 +474,8 @@ def aggregate(rows: Sequence[Mapping[str, Any]],
         "n_scored": len(scored),
         "n_unscored": unscored,
         "judge_errors": len(judge_error_rows),
+        "generator_errors": len([r for r in rows
+                                 if r.get(GENERATOR_ERROR_FIELD) is not None]),
         "passed": overall["passed"],
         "spec_adherence": overall["spec_adherence"],
         "robustness": _cell(adversarial)["spec_adherence"],

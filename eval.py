@@ -354,7 +354,21 @@ def run_eval(model_spec: str, scenarios: Sequence[Mapping[str, Any]],
 
     def one(scenario):
         prompt = build_prompt(strategy, scenario, constraint_lookup, exemplars)
-        output = gen(scenario, prompt, constraint_lookup)
+        try:
+            output = gen(scenario, prompt, constraint_lookup)
+        except Exception as exc:  # noqa: BLE001
+            # The model produced nothing (safety refusal, or thinking consuming the
+            # whole budget). Quarantine rather than crash the cell OR score it: an
+            # empty output passes every checker vacuously, and a refusal is not a
+            # constraint failure. Excluded from rates, counted in generator_errors.
+            return {
+                "scenario_id": scenario["scenario_id"], "model": model_spec,
+                "strategy": strategy, "output": "",
+                "checker_results": [], "quality_score": None,
+                "quality_reasoning": f"NOT SCORED: {type(exc).__name__}",
+                "spec_pass": None,
+                harness.GENERATOR_ERROR_FIELD: f"{type(exc).__name__}: {exc}",
+            }
         return score_scenario(scenario, constraint_lookup, output, judge_fn,
                               model=model_spec, strategy=strategy,
                               on_judge_error=on_judge_error)
