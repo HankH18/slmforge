@@ -2,7 +2,6 @@
   "_contract": "PINNED by docs/PIVOT_SPEC.md R6 + S1 and docs/PIVOT_TASKS.md T-4. This is the G1 Prompt-Ceiling Ablation config. Model ids are copied verbatim from configs/models.json (never invented here); tests/test_gate_check.py enforces that they still agree. Thresholds live in scripts/gate_check.py and are NOT configurable - a config key that moved the gate would be a softening flag by another name, which the pivot kickoff forbids.",
   "run_id": "g1",
   "out_dir": "runs/g1",
-
   "models": {
     "frontier": [
       "openai:gpt-5.6-sol",
@@ -11,19 +10,19 @@
     "local_base": "hf:Qwen/Qwen3-1.7B@70d244cc86ccca08cf5af4e1e306ecf908b1ad5e",
     "_note": "Two frontier families (R6 requires >=2 from DIFFERENT families) plus the prompted local base model. The base row is evidence that a small model cannot already do this; scripts/gate_check.py classifies it as local_base and EXCLUDES it from the ceiling claim."
   },
-
-  "strategies": ["zero_shot", "few_shot", "structured"],
-
-  "eval_set": "data/eval/scenarios_v2_hardened.jsonl",
+  "strategies": [
+    "zero_shot",
+    "few_shot",
+    "structured"
+  ],
+  "eval_set": "data/scenarios/corpus.jsonl",
   "exemplars": "data/scenarios/fewshot_exemplars.jsonl",
   "_data_note": "eval_set is the hardened v2 scenario corpus; exemplars are the few_shot exemplars produced by T-2. Both are other tickets' deliverables and may not exist yet - run_ablation.py and scripts/gate_check.py must FAIL loudly if a path is missing rather than silently evaluating a smaller set.",
-
   "judge": {
     "provider": "anthropic",
     "model": "claude-sonnet-4-6",
     "_note": "Third family, so no ablated model ever scores itself (configs/models.json:judge_model). The judge scores task-quality ONLY - it never decides constraint pass/fail (Design: Decisions & rationale)."
   },
-
   "workers": {
     "default": 8,
     "by_provider": {
@@ -36,16 +35,53 @@
     "_why_hf_is_1": "The local base model loads weights into one process; concurrent workers contend for the same device and buy nothing.",
     "_why_anthropic_is_8": "Applies to the judge calls, not an ablation row."
   },
-
   "ladder": {
     "_note": "R6 escalation ladder, in order: raise k (2->3->4), THEN raise the adversarial share. `current` names the rung that produced the run now on disk; run_ablation.py records it into the run manifest as `ladder_rung` and scripts/gate_check.py verifies the committed eval set actually matches that rung (max k reached, adversarial share met) rather than taking the label on trust. HARD STOP is only legitimate on the LAST rung.",
     "current": "r1-k2",
     "rungs": [
-      {"name": "r1-k2",     "k_values": [2],       "adversarial_share": 0.40},
-      {"name": "r2-k3",     "k_values": [2, 3],    "adversarial_share": 0.40},
-      {"name": "r3-k4",     "k_values": [2, 3, 4], "adversarial_share": 0.40},
-      {"name": "r4-adv60",  "k_values": [2, 3, 4], "adversarial_share": 0.60},
-      {"name": "r5-adv80",  "k_values": [2, 3, 4], "adversarial_share": 0.80}
+      {
+        "name": "r1-k2",
+        "k_values": [
+          2
+        ],
+        "adversarial_share": 0.4
+      },
+      {
+        "name": "r2-k3",
+        "k_values": [
+          2,
+          3
+        ],
+        "adversarial_share": 0.4
+      },
+      {
+        "name": "r3-k4",
+        "k_values": [
+          2,
+          3,
+          4
+        ],
+        "adversarial_share": 0.4
+      },
+      {
+        "name": "r4-adv60",
+        "k_values": [
+          2,
+          3,
+          4
+        ],
+        "adversarial_share": 0.6
+      },
+      {
+        "name": "r5-adv80",
+        "k_values": [
+          2,
+          3,
+          4
+        ],
+        "adversarial_share": 0.8
+      }
     ]
-  }
+  },
+  "_eval_set_note": "MUST be the constraint-holding corpus. It previously named data/eval/scenarios_v2_hardened.jsonl -- the retired abstainer hedge set, which exists on disk, so an existence check passed while the run would have scored grounded-abstention scenarios with constraint checkers. tests/test_g1_config.py now binds the SCHEMA, not just the path."
 }
