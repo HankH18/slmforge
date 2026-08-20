@@ -1,0 +1,22 @@
+{
+  "model": "hf:Qwen/Qwen3-1.7B@70d244cc86ccca08cf5af4e1e306ecf908b1ad5e",
+  "strategy": "zero_shot",
+  "rubric_version": "1.0",
+  "rubric_hash": "c0adb876c3e6c4c9",
+  "judge_model": "claude-sonnet-4-6",
+  "timestamp_utc": "2026-08-20T07:25:15.716688+00:00",
+  "metrics": {
+    "n": 5,
+    "spec_adherence": 0.6,
+    "robustness": 0.6666666666666666,
+    "false_answer_rate": 0.0,
+    "false_refusal_rate": 0.0,
+    "failure_breakdown": {
+      "nonverbatim_citation": 2
+    },
+    "confusion": {
+      "gold_answerable__pred_answer": 2,
+      "gold_unanswerable__pred_refusal": 3
+    }
+  }
+}

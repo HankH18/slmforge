@@ -1,0 +1,170 @@
+{
+  "rubric_version": "1.0",
+  "rubric_hash": "c0adb876c3e6c4c9",
+  "judge_model": "claude-sonnet-4-6",
+  "n_scenarios": 32,
+  "eval_set": "data/eval/scenarios_v1.jsonl",
+  "timestamp_utc": "2026-08-20T07:06:30.154795+00:00",
+  "cells": [
+    {
+      "model": "openai:gpt-5.6-sol",
+      "strategy": "zero_shot",
+      "metrics": {
+        "n": 32,
+        "spec_adherence": 1.0,
+        "robustness": 1.0,
+        "false_answer_rate": 0.0,
+        "false_refusal_rate": 0.0,
+        "failure_breakdown": {},
+        "confusion": {
+          "gold_answerable__pred_answer": 13,
+          "gold_unanswerable__pred_refusal": 19
+        }
+      }
+    },
+    {
+      "model": "openai:gpt-5.6-sol",
+      "strategy": "few_shot",
+      "metrics": {
+        "n": 32,
+        "spec_adherence": 1.0,
+        "robustness": 1.0,
+        "false_answer_rate": 0.0,
+        "false_refusal_rate": 0.0,
+        "failure_breakdown": {},
+        "confusion": {
+          "gold_answerable__pred_answer": 13,
+          "gold_unanswerable__pred_refusal": 19
+        }
+      }
+    },
+    {
+      "model": "openai:gpt-5.6-sol",
+      "strategy": "structured",
+      "metrics": {
+        "n": 32,
+        "spec_adherence": 0.96875,
+        "robustness": 0.9375,
+        "false_answer_rate": 0.0,
+        "false_refusal_rate": 0.0,
+        "failure_breakdown": {
+          "entailment_fail": 1
+        },
+        "confusion": {
+          "gold_answerable__pred_answer": 13,
+          "gold_unanswerable__pred_refusal": 19
+        }
+      }
+    },
+    {
+      "model": "google:gemini-3.1-pro-preview",
+      "strategy": "zero_shot",
+      "metrics": {
+        "n": 32,
+        "spec_adherence": 1.0,
+        "robustness": 1.0,
+        "false_answer_rate": 0.0,
+        "false_refusal_rate": 0.0,
+        "failure_breakdown": {},
+        "confusion": {
+          "gold_answerable__pred_answer": 13,
+          "gold_unanswerable__pred_refusal": 19
+        }
+      }
+    },
+    {
+      "model": "google:gemini-3.1-pro-preview",
+      "strategy": "few_shot",
+      "metrics": {
+        "n": 32,
+        "spec_adherence": 1.0,
+        "robustness": 1.0,
+        "false_answer_rate": 0.0,
+        "false_refusal_rate": 0.0,
+        "failure_breakdown": {},
+        "confusion": {
+          "gold_answerable__pred_answer": 13,
+          "gold_unanswerable__pred_refusal": 19
+        }
+      }
+    },
+    {
+      "model": "google:gemini-3.1-pro-preview",
+      "strategy": "structured",
+      "metrics": {
+        "n": 32,
+        "spec_adherence": 1.0,
+        "robustness": 1.0,
+        "false_answer_rate": 0.0,
+        "false_refusal_rate": 0.0,
+        "failure_breakdown": {},
+        "confusion": {
+          "gold_answerable__pred_answer": 13,
+          "gold_unanswerable__pred_refusal": 19
+        }
+      }
+    },
+    {
+      "model": "hf:Qwen/Qwen3-1.7B@70d244cc86ccca08cf5af4e1e306ecf908b1ad5e",
+      "strategy": "zero_shot",
+      "metrics": {
+        "n": 32,
+        "spec_adherence": 0.53125,
+        "robustness": 0.5625,
+        "false_answer_rate": 0.10526315789473684,
+        "false_refusal_rate": 0.0,
+        "failure_breakdown": {
+          "nonverbatim_citation": 13,
+          "false_answer": 2
+        },
+        "confusion": {
+          "gold_answerable__pred_answer": 13,
+          "gold_unanswerable__pred_refusal": 17,
+          "gold_unanswerable__pred_answer": 2
+        }
+      }
+    },
+    {
+      "model": "hf:Qwen/Qwen3-1.7B@70d244cc86ccca08cf5af4e1e306ecf908b1ad5e",
+      "strategy": "few_shot",
+      "metrics": {
+        "n": 32,
+        "spec_adherence": 0.875,
+        "robustness": 0.875,
+        "false_answer_rate": 0.10526315789473684,
+        "false_refusal_rate": 0.0,
+        "failure_breakdown": {
+          "nonverbatim_citation": 2,
+          "false_answer": 2
+        },
+        "confusion": {
+          "gold_answerable__pred_answer": 13,
+          "gold_unanswerable__pred_refusal": 17,
+          "gold_unanswerable__pred_answer": 2
+        }
+      }
+    },
+    {
+      "model": "hf:Qwen/Qwen3-1.7B@70d244cc86ccca08cf5af4e1e306ecf908b1ad5e",
+      "strategy": "structured",
+      "metrics": {
+        "n": 32,
+        "spec_adherence": 0.53125,
+        "robustness": 0.5625,
+        "false_answer_rate": 0.10526315789473684,
+        "false_refusal_rate": 0.0,
+        "failure_breakdown": {
+          "nonverbatim_citation": 12,
+          "malformed": 1,
+          "false_answer": 2
+        },
+        "confusion": {
+          "gold_answerable__pred_answer": 12,
+          "gold_unanswerable__pred_refusal": 17,
+          "gold_answerable__pred_malformed": 1,
+          "gold_unanswerable__pred_answer": 2
+        }
+      }
+    }
+  ]
+}
