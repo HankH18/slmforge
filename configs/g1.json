@@ -82,7 +82,8 @@
         "adversarial_share": 0.8
       }
     ],
-    "_current_note": "The shipped corpus already spans k=2,3,4 at ~0.47 adversarial, so it satisfies r3-k4 \u2014 the TOP of the k half of the ladder. Was mislabelled r1-k2. Consequence worth stating: the k-escalation rungs are already exhausted, so a clean G1 leaves only the adversarial-share rungs (r4-adv60, r5-adv80) before HARD_STOP."
+    "_current_note": "The shipped corpus already spans k=2,3,4 at ~0.47 adversarial, so it satisfies r3-k4 \u2014 the TOP of the k half of the ladder. Was mislabelled r1-k2. Consequence worth stating: the k-escalation rungs are already exhausted, so a clean G1 leaves only the adversarial-share rungs (r4-adv60, r5-adv80) before HARD_STOP.",
+    "_reachability": "MEASURED 2026-08-20 against the shipped corpus. The k rungs are already spent: the corpus is r3-k4. The adversarial rungs are NOT reachable with the current task pool -- 69 of 147 scenarios are adversarial (46.9%) and ZERO of the 78 clean ones carry a distractor mechanism that could take a nudge, so 46.9% is the ceiling without NEW tasks. r4-adv60 and r5-adv80 therefore require authoring distractor-capable tasks in scenarios/tasks.py, which is T-2-scale work, not a config change. Consequence: a clean G1 does NOT permit an immediate HARD_STOP (the spec allows that only on the last rung) and does NOT permit a cheap rerun either -- it requires extending the task pool first."
   },
   "_eval_set_note": "MUST be the constraint-holding corpus. It previously named data/eval/scenarios_v2_hardened.jsonl -- the retired abstainer hedge set, which exists on disk, so an existence check passed while the run would have scored grounded-abstention scenarios with constraint checkers. tests/test_g1_config.py now binds the SCHEMA, not just the path."
 }
