@@ -32,7 +32,9 @@ def test_every_registered_type_has_prompt_text():
 
 def test_every_corpus_scenario_renders(lookup):
     corpus = load_corpus()
-    assert len(corpus) == 150
+    # Not an exact count: the generator quarantines scenarios it cannot prove
+    # satisfiable, so this legitimately shrinks. The ticket floor is 120.
+    assert len(corpus) >= 120
     for s in corpus:
         msg = render_user_message(s, lookup)
         assert msg.strip()

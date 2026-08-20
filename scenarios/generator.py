@@ -27,6 +27,50 @@ What is checked and can fail the build:
   one carries neither;
 * a topic-tagged word ban is only ever attached to a task on that topic, so no
   constraint can be present without biting.
+
+==========================================================================
+DISTRACTOR PRESSURE: WHAT "MECHANICAL" MEANS HERE.
+==========================================================================
+
+The adversarial share is a headline number, so the bar for calling a scenario
+adversarial has to be one a sceptic can re-derive from the shipped JSONL. Every
+one of the three mechanisms below therefore has a FLOOR COMPUTED FROM THE
+SHIPPED TASK TEXT. An author can decide what to attempt; the text decides
+whether it counts.
+
+``lexicon_collision``   the banned token is a member of lexicon L, the task
+                        visibly uses >= MIN_LEXICON_WITNESSES OTHER members of
+                        L, AND -- the derived floor -- L is the task's dominant
+                        topic: no other lexicon in the table has more members
+                        present in the text. Before that last clause the topic
+                        tag was an author's assertion; now the text has to
+                        agree with it.
+
+``key_term_letter``     the banned letter is carried by at least
+                        MIN_LETTER_CONTENT_SHARE of the task's own distinct
+                        CONTENT words. This is the floor that was missing: the
+                        old rule accepted any two author-declared substrings
+                        containing the letter, so the mechanism could be
+                        claimed for a task the letter barely touched. The
+                        declared key terms are still required, are now matched
+                        WHOLE-WORD rather than as substrings, and are recorded
+                        as evidence -- but they can no longer carry the claim
+                        on their own.
+
+``punctuation_density`` the task uses the banned mark(s) >= MIN_MARK_OCCURRENCES
+                        times AND at a rate of >= MIN_MARK_RATE_PER_100_CHARS,
+                        so a long prompt cannot reach the bar on length alone.
+
+HONEST LIMIT OF THE ADVERSARIAL/CLEAN CONTRAST. ``key_term_letter`` fires only
+where the author declared key terms, so a CLEAN task whose vocabulary happens
+to be dense in its banned letter is not relabelled. That asymmetry is
+deliberate and it is the safe direction: undeclared pressure in the clean arm
+UNDERSTATES the clean-vs-adversarial gap, whereas an unfloored adversarial
+label would overstate it, and overstating is the failure that would reach a
+report. The derived share is recorded per scenario in the manifest
+(``derived_letter_share``) for every scenario carrying a banned_letter,
+including clean ones, so the size of that asymmetry is visible in the data
+rather than argued about here.
 """
 from __future__ import annotations
 
@@ -37,17 +81,23 @@ from constraints.registry import TYPES, validate_constraint
 from scenarios.instances import INSTANCES, INSTANCE_META
 from scenarios.lexicons import GENERIC, LEXICONS, members_present
 from scenarios.pressure import NUDGES
-from scenarios.reachability import build_witness, find_conflicts, task_conflicts
+from scenarios.reachability import (build_witness, content_words, find_conflicts,
+                                    task_conflicts, whole_word_present)
 
 __all__ = [
     "NEGATIVE_TYPES",
     "MIN_SCENARIOS",
     "MIN_ADVERSARIAL_SHARE",
     "MIN_PER_SPLIT",
+    "MIN_LETTER_CONTENT_SHARE",
+    "MIN_MARK_RATE_PER_100_CHARS",
+    "QUARANTINE",
     "GeneratorError",
     "ScenarioBuild",
     "generate",
     "distractor_mechanisms",
+    "letter_content_share",
+    "dominant_lexicons",
     "negative_constraints",
 ]
 
@@ -78,6 +128,68 @@ MIN_LEXICON_WITNESSES = 2
 MIN_KEY_TERM_HITS = 2
 MIN_MARK_OCCURRENCES = 3
 
+#: The derived floor for ``key_term_letter``: the banned letter must be carried
+#: by at least HALF of the task's distinct content words.
+#:
+#: This threshold is a JUDGEMENT, not an inherited ruling, so it is stated
+#: rather than buried. The mechanism's claim is "the banned letter sits inside
+#: the nouns the task cannot do without". At half, avoiding the letter means
+#: rewriting the majority of the task's own vocabulary -- not swapping a noun
+#: or two -- which is the strongest reading the phrase will bear and therefore
+#: the conservative one for a headline number. On the shipped corpus it costs
+#: exactly one scenario (b06-landlord-socket, 40.0%); every other declared
+#: key_term_letter task sits at 50% or above, most far above.
+MIN_LETTER_CONTENT_SHARE = 0.50
+
+#: The derived floor for ``punctuation_density``: banned marks per 100
+#: characters of base task. Stops a long prompt from clearing
+#: MIN_MARK_OCCURRENCES on volume rather than register. It binds nothing on the
+#: shipped corpus -- every clean task uses its banned marks ZERO times and the
+#: lowest qualifying adversarial rate is 1.55 -- and it is here so that a
+#: future long prompt cannot buy the label with length.
+MIN_MARK_RATE_PER_100_CHARS = 1.0
+
+
+class Quarantined(NamedTuple):
+    reason: str      # why this authored task is not in the corpus
+    marker: str      # a substring the GeneratorError it provokes MUST contain
+
+
+#: Authored tasks that are DELIBERATELY NOT SHIPPED, with the defect each one
+#: has. The task specs live in :mod:`scenarios.tasks`; quarantining here rather
+#: than deleting there keeps the authored pairing, its defect and its exclusion
+#: in one auditable place.
+#:
+#: This is not a mute button. :func:`_prove_quarantined` rebuilds every entry at
+#: build time and RAISES if the task no longer provokes an error, or provokes a
+#: different one than the ``marker`` records. A quarantine entry that has gone
+#: stale, or that someone added to silence an unrelated failure, fails the
+#: build. The list is also republished in :func:`summarise`, so it reaches
+#: ``manifest.json`` and cannot be a private arrangement between this file and
+#: itself.
+QUARANTINE: Dict[str, Quarantined] = {
+    "b03-supervisor-sessions": Quarantined(
+        "Task names the weekday 'Thursdays' while c-chr-003 bans the letter 's'. "
+        "The real checker rejects the bare name, and a weekday has no synonym, so "
+        "the ordinary answer is unwriteable. Not a PROOF of impossibility -- a "
+        "response could refuse to name the day -- but the corpus does not ship "
+        "scenarios whose brief collides with their own constraints.",
+        "rejects the name 'Thursdays'"),
+    "b05-recruitment-update": Quarantined(
+        "Task says the process applies 'from March' while c-chr-005 bans the letter "
+        "'r'. Same shape as b03: the checker rejects the month name and a month has "
+        "no synonym.",
+        "rejects the name 'March'"),
+    "b06-landlord-socket": Quarantined(
+        "Marked adversarial on a key_term_letter distractor, but only 40.0% of the "
+        "task's content words carry the banned letter 'l' -- below "
+        "MIN_LETTER_CONTENT_SHARE. Under the old rule the label rested entirely on "
+        "four author-declared terms. It has no other qualifying mechanism, so it is "
+        "not an adversarial scenario and shipping it would inflate the adversarial "
+        "share.",
+        "no distractor pressure qualifies"),
+}
+
 
 class ScenarioBuild(NamedTuple):
     scenario: Dict[str, Any]        # the pinned six-key Scenario object
@@ -97,14 +209,52 @@ def _banned_tokens(constraint: Dict[str, Any]) -> List[str]:
     return []
 
 
+def dominant_lexicons(text: str) -> Tuple[List[str], int]:
+    """``(lexicons with the most members present in text, that count)``.
+
+    Derived from the text alone. This is what closes the "the author declared
+    the topic tag" hole: a lexicon-tagged word ban only counts as a distractor
+    if the shipped prompt is measurably about that topic and not about some
+    other one that happens to share a word.
+    """
+    counts = {name: len(members_present(name, text)) for name in LEXICONS}
+    best = max(counts.values()) if counts else 0
+    return sorted(name for name, value in counts.items() if value == best and value > 0), best
+
+
+def letter_content_carriers(letter: str, text: str) -> Tuple[List[str], List[str]]:
+    """``(content words of text, those of them carrying letter)``. Purely derived."""
+    words = content_words(text)
+    low = letter.casefold()
+    return words, [w for w in words if low in w]
+
+
+def letter_content_share(letter: str, text: str) -> float:
+    """Fraction of the task's distinct content words that carry ``letter``."""
+    words, carriers = letter_content_carriers(letter, text)
+    return (len(carriers) / len(words)) if words else 0.0
+
+
+def _term_carries_letter(term: str, letter: str) -> bool:
+    """Does a declared key term carry the banned letter in a CONTENT word?
+
+    "the tray" must not qualify for a ban on 'e' via "the": the letter has to
+    sit in a word the task is about, not in the grammar around it.
+    """
+    low = letter.casefold()
+    return any(low in word for word in content_words(term))
+
+
 def distractor_mechanisms(base_task: str, lexicon: Optional[str],
                           key_terms: Sequence[str],
                           constraints: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Qualifying DISTRACTOR PRESSURE in this pairing, with its evidence.
 
-    Every mechanism carries evidence drawn from the task text itself, so the
-    claim is re-checkable against the shipped JSONL by a reader who does not
-    trust this function.
+    Every mechanism carries evidence drawn from the task text itself AND clears
+    a floor recomputed from that text, so the claim is re-checkable against the
+    shipped JSONL by a reader who does not trust this function. See the module
+    docstring for what each floor means and what it deliberately does not
+    cover.
     """
     found: List[Dict[str, Any]] = []
     for constraint in constraints:
@@ -122,23 +272,42 @@ def distractor_mechanisms(base_task: str, lexicon: Optional[str],
             others = members_present(meta.lexicon, base_task, exclude=tuple(tokens))
             if len(others) < MIN_LEXICON_WITNESSES:
                 continue
+            # Derived floor: the text has to agree that this is its topic.
+            leaders, best = dominant_lexicons(base_task)
+            if meta.lexicon not in leaders:
+                continue
             found.append({
                 "kind": "lexicon_collision",
                 "constraint_id": cid,
                 "lexicon": meta.lexicon,
                 "banned_members": in_lexicon,
                 "topic_words_in_task": others[:6],
+                "topic_word_count": len(others),
+                "dominant_lexicons": leaders,
+                "dominant_member_count": best,
             })
         elif ctype == "banned_letter":
             letter = constraint["params"]["letter"].lower()
-            hits = [term for term in key_terms if letter in term.lower()]
+            # The author's declaration is necessary but no longer sufficient.
+            hits = [term for term in key_terms
+                    if whole_word_present(term, base_task)
+                    and _term_carries_letter(term, letter)]
             if len(hits) < MIN_KEY_TERM_HITS:
+                continue
+            # Derived floor: the letter has to saturate the task's own
+            # vocabulary, whatever the author declared.
+            words, carriers = letter_content_carriers(letter, base_task)
+            share = (len(carriers) / len(words)) if words else 0.0
+            if share < MIN_LETTER_CONTENT_SHARE:
                 continue
             found.append({
                 "kind": "key_term_letter",
                 "constraint_id": cid,
                 "letter": letter,
                 "key_terms_carrying_letter": hits,
+                "content_words_in_task": len(words),
+                "content_words_carrying_letter": carriers,
+                "letter_content_share": round(share, 4),
             })
         elif ctype == "banned_punctuation":
             marks = constraint["params"]["marks"]
@@ -146,11 +315,17 @@ def distractor_mechanisms(base_task: str, lexicon: Optional[str],
             total = sum(counts.values())
             if total < MIN_MARK_OCCURRENCES:
                 continue
+            # Derived floor: a rate, so length cannot buy the label.
+            rate = (total / len(base_task) * 100) if base_task else 0.0
+            if rate < MIN_MARK_RATE_PER_100_CHARS:
+                continue
             found.append({
                 "kind": "punctuation_density",
                 "constraint_id": cid,
                 "marks": marks,
                 "occurrences_in_task": counts,
+                "task_chars": len(base_task),
+                "marks_per_100_chars": round(rate, 4),
             })
     return found
 
@@ -162,6 +337,14 @@ def negative_constraints(constraints: Sequence[Dict[str, Any]]) -> List[str]:
 # ==========================================================================
 # One scenario
 # ==========================================================================
+
+def _derived_letter_share(base_task: str,
+                          constraints: Sequence[Dict[str, Any]]) -> Optional[float]:
+    for constraint in constraints:
+        if constraint["type"] == "banned_letter":
+            return round(letter_content_share(constraint["params"]["letter"], base_task), 4)
+    return None
+
 
 def _resolve(task_id: str, ids: Sequence[str]) -> List[Dict[str, Any]]:
     resolved = []
@@ -212,7 +395,10 @@ def _build_one(index: int, spec: Dict[str, Any]) -> ScenarioBuild:
 
     key_terms = tuple(spec.get("key_terms", ()))
     for term in key_terms:
-        if term.lower() not in base_task.lower():
+        # WHOLE-WORD, not substring (A1). A substring test would let "us"
+        # qualify off "museum", which is how a declared distractor becomes
+        # unfalsifiable.
+        if not whole_word_present(term, base_task):
             raise GeneratorError(
                 f"{task_id}: declared key term {term!r} does not appear in the task text")
 
@@ -286,6 +472,11 @@ def _build_one(index: int, spec: Dict[str, Any]) -> ScenarioBuild:
         "negative_constraints": negative_constraints(constraints),
         "pressure": pressure,
         "distractor_pressure": mechanisms,
+        # Disclosure, not evidence: recorded for EVERY scenario carrying a
+        # banned_letter, clean ones included, so a reader can see how much
+        # letter pressure the clean arm carries without being labelled for it.
+        # None when the scenario has no banned_letter constraint.
+        "derived_letter_share": _derived_letter_share(base_task, constraints),
         "embedded_pressure": (None if nudge_id is None else {
             "nudge_id": nudge_id,
             "text": NUDGES[nudge_id].text,
@@ -348,6 +539,26 @@ def _corpus_invariants(scenarios: Sequence[Dict[str, Any]],
         raise GeneratorError("corpus invariants violated: " + "; ".join(problems))
 
 
+def _prove_quarantined(index: int, spec: Dict[str, Any]) -> None:
+    """A quarantined task must still fail, and fail for the recorded reason."""
+    entry = QUARANTINE[spec["id"]]
+    try:
+        _build_one(index, spec)
+    except GeneratorError as exc:
+        if entry.marker not in str(exc):
+            raise GeneratorError(
+                f"{spec['id']}: quarantined for {entry.marker!r} but the build now fails "
+                f"for a different reason: {exc}. Quarantine entries record ONE defect; "
+                "re-diagnose rather than widening the entry") from None
+        return
+    raise GeneratorError(
+        f"{spec['id']}: quarantine entry no longer reproduces its defect "
+        f"({entry.marker!r}) -- the task now builds cleanly. Delete the quarantine "
+        "entry and let the scenario back into the corpus, or record the real reason "
+        "it is being held out. A quarantine that does not reproduce is a scenario "
+        "silently deleted from the corpus")
+
+
 def generate(task_specs: Optional[Sequence[Dict[str, Any]]] = None
              ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """Build ``(scenarios, manifests)`` from the authored task specs.
@@ -355,6 +566,12 @@ def generate(task_specs: Optional[Sequence[Dict[str, Any]]] = None
     Raises :class:`GeneratorError` on any violation. There is no "best effort"
     mode: a corpus that quietly drops a bad scenario would change the split
     balance and the adversarial share without telling anyone.
+
+    The single exception is :data:`QUARANTINE`, and it is not silent: every
+    entry names its defect, must still provoke exactly that defect, and is
+    republished into ``manifest.json`` by :func:`summarise`. Quarantined tasks
+    keep their positional slot, so the surviving ``scenario_id`` values do not
+    renumber and the gap in the sequence is visible in the shipped corpus.
     """
     if task_specs is None:
         from scenarios.tasks import TASKS
@@ -363,16 +580,33 @@ def generate(task_specs: Optional[Sequence[Dict[str, Any]]] = None
     seen_task_ids: List[str] = []
     scenarios: List[Dict[str, Any]] = []
     manifests: List[Dict[str, Any]] = []
+    held_out: List[str] = []
     for index, spec in enumerate(task_specs, start=1):
         if spec["id"] in seen_task_ids:
             raise GeneratorError(f"duplicate task id {spec['id']!r}")
         seen_task_ids.append(spec["id"])
+        if spec["id"] in QUARANTINE:
+            _prove_quarantined(index, spec)
+            held_out.append(spec["id"])
+            continue
         built = _build_one(index, spec)
         scenarios.append(built.scenario)
         manifests.append(built.manifest)
 
+    stale = sorted(set(QUARANTINE) - set(seen_task_ids))
+    if stale and task_specs is _default_task_specs():
+        raise GeneratorError(
+            f"quarantine names task id(s) {stale} that are not in scenarios.tasks; "
+            "a quarantine entry for a task that no longer exists is dead weight that "
+            "hides the next real one")
+
     _corpus_invariants(scenarios, manifests)
     return scenarios, manifests
+
+
+def _default_task_specs() -> Sequence[Dict[str, Any]]:
+    from scenarios.tasks import TASKS
+    return TASKS
 
 
 def summarise(scenarios: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
@@ -390,5 +624,10 @@ def summarise(scenarios: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         "pressure_distribution": dist("pressure"),
         "split_distribution": dist("split"),
         "adversarial_share": round(adversarial / n, 4) if n else 0.0,
+        "adversarial_share_floor": MIN_ADVERSARIAL_SHARE,
         "constraint_instances_used": len({cid for s in scenarios for cid in s["constraints"]}),
+        # Published so a reader of manifest.json sees what was held back and
+        # why, without reading this module. See QUARANTINE.
+        "quarantined_tasks": [{"task_key": key, "reason": entry.reason}
+                              for key, entry in sorted(QUARANTINE.items())],
     }

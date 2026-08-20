@@ -6,7 +6,7 @@ property could be checked either by asking the generator or by recomputing it
 from the data, these tests recompute it -- a test that asks the code under test
 whether it did the right thing proves nothing.
 
-Three tests deserve their names read carefully:
+These deserve their names read carefully:
 
 ``test_split_invariant_*``      the one that protects the experiment: a
                                 held-out constraint type leaking into a train
@@ -15,7 +15,20 @@ Three tests deserve their names read carefully:
                                 runs the ground-truth checkers on it. An
                                 impossible scenario scores zero for every model
                                 forever and fakes a ceiling.
-``test_guards_actually_guard``  proves the two above can fail. Green from a
+``test_task_conflicts_catches_an_unparaphrasable_name`` the other half of
+                                reachability, and the half that used to be a
+                                keyword list: a brief that names an entity its
+                                own constraints reject. Decided by the real
+                                checkers on the bare name.
+``test_*_derived_floor*`` / ``test_*_is_a_rate*`` every distractor mechanism
+                                clears a floor recomputed from the SHIPPED task
+                                text. An author can attempt an adversarial
+                                label; only the text can grant it.
+``test_every_quarantined_task_still_reproduces_its_recorded_defect`` re-proves
+                                every scenario held out of the corpus. Without
+                                it the quarantine would be a way to delete an
+                                inconvenient scenario with prose as evidence.
+``test_guards_actually_guard``  proves the above can fail. Green from a
                                 check that cannot go red is not evidence.
 """
 import json
@@ -29,9 +42,13 @@ from constraints.checkers import CLEAN_EVIDENCE, check
 from constraints.registry import (ID_PREFIX_BY_FAMILY, TYPES, ConstraintError,
                                   family_of, list_types, split_of, validate_constraint)
 from scenarios import build as build_mod
-from scenarios.generator import (ALLOWED_K, MIN_ADVERSARIAL_SHARE, MIN_SCENARIOS,
-                                 NEGATIVE_TYPES, POSITIVE_TYPES, GeneratorError,
-                                 _build_one, generate)
+from scenarios.generator import (ALLOWED_K, MIN_ADVERSARIAL_SHARE, MIN_KEY_TERM_HITS,
+                                 MIN_LETTER_CONTENT_SHARE, MIN_LEXICON_WITNESSES,
+                                 MIN_MARK_OCCURRENCES, MIN_MARK_RATE_PER_100_CHARS,
+                                 MIN_SCENARIOS, NEGATIVE_TYPES, POSITIVE_TYPES, QUARANTINE,
+                                 GeneratorError, _build_one, distractor_mechanisms,
+                                 dominant_lexicons, generate, letter_content_share,
+                                 summarise)
 from scenarios.instances import INSTANCE_META
 from scenarios.lexicons import GENERIC, LEXICONS
 from scenarios.paths import (CORPUS_PATH, INSTANCES_PATH, MANIFEST_PATH, SMOKE_PATH,
@@ -39,7 +56,10 @@ from scenarios.paths import (CORPUS_PATH, INSTANCES_PATH, MANIFEST_PATH, SMOKE_P
                              load_smoke)
 from scenarios.pressure import NUDGES
 from scenarios.reachability import (MIN_WITNESS_CHARS, MIN_WITNESS_SENTENCES,
-                                    build_witness, find_conflicts, task_conflicts)
+                                    UNPARAPHRASABLE_TYPES, build_witness, content_words,
+                                    find_conflicts, task_conflicts,
+                                    task_reachability_report, unavoidable_terms,
+                                    whole_word_present)
 
 SCENARIO_KEYS = {"scenario_id", "task", "constraints", "k", "pressure", "split"}
 CONSTRAINT_KEYS = {"id", "type", "params", "family", "split"}
@@ -324,23 +344,51 @@ def test_adversarial_scenarios_carry_distractor_pressure(corpus, by_id, instance
                     assert token.lower() in members, f"{sid}: {token!r} is not in lexicon {lex}"
                     assert token.lower() in banned, f"{sid}: {token!r} is not actually banned"
                 others = mech["topic_words_in_task"]
-                assert len(others) >= 2, f"{sid}: only {others} topic words in the task"
+                assert len(others) >= MIN_LEXICON_WITNESSES, (
+                    f"{sid}: only {others} topic words in the task")
                 for word in others:
                     assert word.lower() in members, f"{sid}: {word!r} not in lexicon {lex}"
                     assert word.lower() not in banned, f"{sid}: {word!r} is itself banned"
                     assert _whole_word(word, base), f"{sid}: {word!r} is not in the task text"
+                # DERIVED floor: the tag is not the author's to assert -- the
+                # shipped text has to make this lexicon the dominant topic.
+                leaders, best = dominant_lexicons(base)
+                assert lex in leaders, (
+                    f"{sid}: tagged {lex!r} but the task text is more about {leaders} "
+                    f"({best} members); the topic tag is not confirmed by the prompt")
+                assert mech["dominant_lexicons"] == leaders, f"{sid}: stale dominance evidence"
             elif mech["kind"] == "key_term_letter":
                 letter = mech["letter"]
                 assert constraint["params"]["letter"].lower() == letter
                 hits = mech["key_terms_carrying_letter"]
-                assert len(hits) >= 2, f"{sid}: banned letter appears in only {hits}"
+                assert len(hits) >= MIN_KEY_TERM_HITS, (
+                    f"{sid}: banned letter appears in only {hits}")
                 for term in hits:
                     assert letter in term.lower(), f"{sid}: {term!r} does not carry {letter!r}"
-                    assert term.lower() in base.lower(), f"{sid}: {term!r} is not in the task"
+                    # WHOLE-WORD, not substring: "us" must not qualify off "museum".
+                    assert _whole_word(term, base), f"{sid}: {term!r} is not in the task"
+                # DERIVED floor: recomputed from the shipped text, with no
+                # reference to what the author declared. This is the assertion
+                # that makes the adversarial label unfakeable by declaration.
+                share = letter_content_share(letter, base)
+                assert share >= MIN_LETTER_CONTENT_SHARE, (
+                    f"{sid}: only {share:.1%} of the task's content words carry {letter!r}; "
+                    f"the floor is {MIN_LETTER_CONTENT_SHARE:.0%}. A declared key term "
+                    "cannot make a letter bite a task it barely touches")
+                assert mech["letter_content_share"] == round(share, 4), (
+                    f"{sid}: recorded share {mech['letter_content_share']} != recomputed {share}")
+                assert set(mech["content_words_carrying_letter"]) <= set(content_words(base))
             elif mech["kind"] == "punctuation_density":
                 total = sum(base.count(mark) for mark in constraint["params"]["marks"])
-                assert total >= 3, (f"{sid}: the prompt uses the banned mark(s) only {total} "
-                                    "times, which is not a register that invites them")
+                assert total >= MIN_MARK_OCCURRENCES, (
+                    f"{sid}: the prompt uses the banned mark(s) only {total} "
+                    "times, which is not a register that invites them")
+                # DERIVED floor: a rate, so a long prompt cannot buy the label.
+                rate = total / len(base) * 100
+                assert rate >= MIN_MARK_RATE_PER_100_CHARS, (
+                    f"{sid}: {rate:.2f} banned marks per 100 chars is below the "
+                    f"{MIN_MARK_RATE_PER_100_CHARS} floor; the prompt is long, not dense")
+                assert mech["marks_per_100_chars"] == round(rate, 4), f"{sid}: stale rate"
             else:
                 raise AssertionError(f"{sid}: unknown distractor kind {mech['kind']!r}")
 
@@ -442,6 +490,310 @@ def test_no_task_demands_what_its_constraints_forbid(corpus, instances, by_id):
         base = by_id[scenario["scenario_id"]]["base_task"]
         problems = task_conflicts(base, constraints)
         assert not problems, f"{scenario['scenario_id']}: {problems}"
+
+
+def test_the_name_detector_has_something_to_detect_in_the_shipped_corpus(corpus, by_id,
+                                                                         instances):
+    """Green from a detector with no input is not evidence.
+
+    ``test_no_task_demands_what_its_constraints_forbid`` would pass trivially if
+    no shipped task named anything, or if no scenario carried a constraint a
+    bare name could violate. Neither is true, so its green means the check ran.
+    """
+    named = [s["scenario_id"] for s in corpus
+             if unavoidable_terms(by_id[s["scenario_id"]]["base_task"])]
+    assert len(named) >= 20, (
+        f"only {len(named)} shipped tasks name anything; the unparaphrasable-name "
+        "check is passing because it has nothing to look at")
+    checked = [s["scenario_id"] for s in corpus
+               if any(instances[cid]["type"] in UNPARAPHRASABLE_TYPES
+                      for cid in s["constraints"])]
+    assert len(checked) >= len(corpus) // 2, (
+        f"only {len(checked)} scenarios carry a constraint a bare name could violate")
+
+
+def test_task_conflicts_catches_an_unparaphrasable_name(instances):
+    """BLOCKER 1's core case, decided by the REAL checkers rather than a keyword list.
+
+    A brief that names a weekday under a ban on 's' cannot be answered in the
+    obvious way, and no regex list of task wordings would ever have seen it.
+    """
+    banned_s = instances["c-chr-003"]                     # banned_letter 's'
+    task = "Write a short note explaining that the meeting moves to Thursdays."
+    assert unavoidable_terms(task) == ["Thursdays"]
+    assert check(banned_s, "Thursdays")["pass"] is False, "the premise changed"
+    problems = task_conflicts(task, [banned_s, instances["c-fmt-001"]])
+    assert problems, "the unparaphrasable name was not detected"
+    assert "Thursdays" in problems[0] and "c-chr-003" in problems[0]
+    # ...and the same brief with a letter the name survives is NOT flagged.
+    assert task_conflicts(task, [instances["c-chr-010"],       # banned_letter 'p'
+                                 instances["c-fmt-001"]]) == []
+
+
+def test_the_name_check_excludes_positional_constraints(instances):
+    """A name that cannot OPEN a sentence can still be written inside one.
+
+    Running sentence_initial_letter over bare names would flag almost every
+    proper noun in the corpus as an impossibility. That would be a manufactured
+    contradiction -- the failure mode this lane exists to remove -- so the
+    positional type is excluded by construction, not by luck.
+    """
+    assert "sentence_initial_letter" not in UNPARAPHRASABLE_TYPES
+    opens_with_q = instances["c-str-002"]                 # every sentence opens with 's'
+    task = "Write a short note explaining that the meeting moves to Thursdays."
+    assert check(opens_with_q, "Thursdays")["pass"] is False, (
+        "premise: a bare name fails a positional checker, which is exactly why it "
+        "must not be treated as an impossibility")
+    assert task_conflicts(task, [opens_with_q, instances["c-fmt-001"]]) == []
+
+
+def test_unavoidable_terms_ignores_sentence_openers_and_grammar():
+    assert unavoidable_terms("Write a note about the harbour.") == []
+    assert unavoidable_terms("Describe Ashford. The station is closed.") == ["Ashford"]
+    assert unavoidable_terms("Write about the 07.14 service.") == [], "a numeral is not a name"
+
+
+def test_widened_format_demands_still_catch_the_obvious_and_spare_the_innocent(instances):
+    no_lists = instances["c-fmt-001"]
+    no_quotes = instances["c-fmt-002"]
+    for demand in ("Give me five bullet points.", "Set it out as a numbered list.",
+                   "Write it in point form.", "Produce a checklist for the team.",
+                   "Please itemise the charges.", "Put one per line."):
+        assert task_conflicts(demand, [no_lists]), f"missed a list demand: {demand!r}"
+    for demand in ("Reproduce her exact wording.", "Quote the inspector.",
+                   "Copy it word for word.", "Put the name in quotation marks."):
+        assert task_conflicts(demand, [no_quotes]), f"missed a quote demand: {demand!r}"
+    # Prose can narrate steps and can report what somebody said. Flagging these
+    # would invent an impossibility, which is worse than missing one.
+    for innocent in ("Explain the steps in order, in flowing prose.",
+                     "Say what the inspector concluded."):
+        assert task_conflicts(innocent, [no_lists, no_quotes]) == [], (
+            f"manufactured a conflict for {innocent!r}")
+
+
+def test_the_report_says_out_loud_what_it_does_not_decide(instances):
+    """The undecidable residue is published, not quietly implied by a green test."""
+    report = task_reachability_report(
+        "Write a short note explaining that the meeting moves to Thursdays.",
+        [instances["c-chr-003"], instances["c-fmt-001"]])
+    assert report["conflicts"], "the decidable half stopped working"
+    assert report["unavoidable_terms"] == ["Thursdays"]
+    assert "undecided" in report and "expressible" in report["undecided"], (
+        "the report must state the part of reachability the corpus does NOT prove")
+
+
+# ==========================================================================
+# The QUARANTINE: scenarios held out of the corpus, and why
+# ==========================================================================
+
+def test_quarantined_tasks_are_absent_from_the_corpus(by_id):
+    shipped = {entry["task_key"] for entry in by_id.values()}
+    for task_key in QUARANTINE:
+        assert task_key not in shipped, (
+            f"{task_key} is quarantined but shipped anyway")
+
+
+def test_every_quarantined_task_still_reproduces_its_recorded_defect():
+    """A quarantine entry is a claim about a defect, so it is re-proved here.
+
+    Without this, ``QUARANTINE`` would be a way to delete an inconvenient
+    scenario from the corpus with a sentence of prose as the only evidence.
+    """
+    from scenarios.tasks import TASKS
+    by_key = {spec["id"]: spec for spec in TASKS}
+    assert set(QUARANTINE) <= set(by_key), (
+        f"quarantine names tasks that do not exist: {sorted(set(QUARANTINE) - set(by_key))}")
+    for task_key, entry in QUARANTINE.items():
+        with pytest.raises(GeneratorError) as excinfo:
+            _build_one(1, by_key[task_key])
+        assert entry.marker in str(excinfo.value), (
+            f"{task_key}: quarantined for {entry.marker!r} but now fails with "
+            f"{excinfo.value}")
+        assert entry.reason.strip(), f"{task_key}: quarantined with no reason given"
+
+
+def test_the_quarantine_is_published_in_the_manifest(manifest):
+    published = {row["task_key"]: row["reason"] for row in
+                 manifest["summary"]["quarantined_tasks"]}
+    assert published == {key: entry.reason for key, entry in QUARANTINE.items()}, (
+        "the shipped manifest does not record what was held out of the corpus")
+
+
+def test_the_quarantine_cannot_be_used_as_a_mute_button():
+    """A quarantine entry for a task that builds fine must FAIL the build."""
+    from scenarios.tasks import TASKS
+    healthy = next(spec for spec in TASKS if spec["id"] not in QUARANTINE)
+    from scenarios import generator as gen
+    original = dict(gen.QUARANTINE)
+    gen.QUARANTINE[healthy["id"]] = gen.Quarantined("invented", "never appears in any error")
+    try:
+        with pytest.raises(GeneratorError, match="no longer reproduces its defect"):
+            generate()
+    finally:
+        gen.QUARANTINE.clear()
+        gen.QUARANTINE.update(original)
+    # ...and the restore worked, so the rest of the suite sees the real corpus.
+    assert set(gen.QUARANTINE) == set(original)
+
+
+def test_a_quarantine_entry_for_a_task_that_does_not_exist_fails_the_build():
+    """Dead quarantine entries hide the next real one, so they are an error."""
+    from scenarios import generator as gen
+    original = dict(gen.QUARANTINE)
+    gen.QUARANTINE["no-such-task"] = gen.Quarantined("ghost", "never matched")
+    try:
+        with pytest.raises(GeneratorError, match="not in scenarios.tasks"):
+            generate()
+    finally:
+        gen.QUARANTINE.clear()
+        gen.QUARANTINE.update(original)
+
+
+def test_a_quarantine_marker_that_no_longer_matches_fails_the_build():
+    from scenarios import generator as gen
+    from scenarios.tasks import TASKS
+    victim = next(iter(QUARANTINE))
+    original = dict(gen.QUARANTINE)
+    gen.QUARANTINE[victim] = gen.Quarantined("stale", "a reason that is not the real one")
+    try:
+        with pytest.raises(GeneratorError, match="fails for a different reason"):
+            generate()
+    finally:
+        gen.QUARANTINE.clear()
+        gen.QUARANTINE.update(original)
+
+
+# ==========================================================================
+# Distractor floors are DERIVED, not declared (BLOCKER 2)
+# ==========================================================================
+
+def _rig(**overrides):
+    spec = {"id": "rig", "text": "Write a paragraph about a harbour at dawn.",
+            "domain": "test", "register": "prose",
+            "constraints": ["c-chr-001", "c-fmt-001"], "pressure": "clean",
+            "lexicon": None, "key_terms": (), "nudge": None}
+    spec.update(overrides)
+    return spec
+
+
+#: Declared key terms that all carry 'p', in a task whose vocabulary barely
+#: does. Under the pre-fix rule this was enough to be called adversarial.
+_THIN_LETTER_TASK = ("Write a calm note about the paper trail, the paperwork, the wooden "
+                     "door, the iron gate and the linen cloth.")
+_DENSE_LETTER_TASK = ("Prepare a proposal appraising the paper supply pipeline, the "
+                      "packaging spend and the pump repairs.")
+
+
+def test_key_term_letter_needs_the_derived_floor_not_just_a_declaration():
+    thin = _rig(text=_THIN_LETTER_TASK, constraints=["c-chr-010", "c-fmt-001"],
+                pressure="adversarial", key_terms=("paper trail", "paperwork"),
+                nudge="letter_audit")
+    share = letter_content_share("p", _THIN_LETTER_TASK)
+    assert share < MIN_LETTER_CONTENT_SHARE, "rig no longer exercises the floor"
+    assert len([t for t in ("paper trail", "paperwork") if "p" in t]) >= MIN_KEY_TERM_HITS, (
+        "rig must satisfy the OLD declaration-only rule, or it proves nothing")
+    assert distractor_mechanisms(_THIN_LETTER_TASK, None,
+                                 ("paper trail", "paperwork"),
+                                 [load_instances()["c-chr-010"]]) == [], (
+        "the mechanism fired on a task whose vocabulary the letter barely touches")
+    with pytest.raises(GeneratorError, match="no distractor pressure qualifies"):
+        _build_one(1, thin)
+
+
+def test_key_term_letter_still_fires_when_the_text_backs_the_claim():
+    dense = _rig(text=_DENSE_LETTER_TASK, constraints=["c-chr-010", "c-fmt-001"],
+                 pressure="adversarial",
+                 key_terms=("paper supply pipeline", "pump repairs"), nudge="letter_audit")
+    built = _build_one(1, dense)
+    kinds = [m["kind"] for m in built.manifest["distractor_pressure"]]
+    assert kinds == ["key_term_letter"], f"the floor is now unreachable: {kinds}"
+    assert built.manifest["distractor_pressure"][0]["letter_content_share"] >= \
+        MIN_LETTER_CONTENT_SHARE
+
+
+def test_a_declared_key_term_must_be_a_whole_word_in_the_task():
+    """Substring matching is how a declared distractor becomes unfalsifiable."""
+    assert whole_word_present("pump repairs", _DENSE_LETTER_TASK)
+    assert not whole_word_present("pap", _DENSE_LETTER_TASK), "'pap' is inside 'paper' only"
+    with pytest.raises(GeneratorError, match="does not appear in the task text"):
+        _build_one(1, _rig(text=_DENSE_LETTER_TASK, constraints=["c-chr-010", "c-fmt-001"],
+                           pressure="adversarial", key_terms=("pap", "pump repairs"),
+                           nudge="letter_audit"))
+
+
+def test_lexicon_collision_requires_the_text_to_confirm_the_topic_tag(instances):
+    """A tea ban on a prompt that is really about baking must not qualify."""
+    tea_ban = instances["c-lex-024"]
+    off_topic = ("The mug and the teapot sat by the oven while the dough, the flour, "
+                 "the yeast, the crust and the loaf waited.")
+    on_topic = ("The mug and the teapot and the infuser and the oolong sat by the oven "
+                "with the dough.")
+    assert "tea" not in dominant_lexicons(off_topic)[0], "rig no longer exercises dominance"
+    assert distractor_mechanisms(off_topic, "tea", (), [tea_ban]) == [], (
+        "a topic tag the prompt does not support still bought a distractor claim")
+    assert "tea" in dominant_lexicons(on_topic)[0]
+    assert [m["kind"] for m in distractor_mechanisms(on_topic, "tea", (), [tea_ban])] == \
+        ["lexicon_collision"], "the dominance floor is now unreachable"
+
+
+def test_punctuation_density_is_a_rate_so_length_cannot_buy_the_label():
+    short = ("Write a note, a short one, quickly, please.")
+    long = ("Write a long brief for the team that explains at length what the finished "
+            "piece must cover and how it should read to somebody who has never seen the "
+            "material before and needs the whole background spelled out from the "
+            "beginning without any shortcuts whatsoever and who will also want to know "
+            "why every earlier attempt at this same brief was abandoned halfway "
+            "through, and then, finally, wrap up.")
+    assert short.count(",") == long.count(",") == MIN_MARK_OCCURRENCES, (
+        "both rigs must clear the OLD count-only bar, or this proves nothing")
+    assert long.count(",") / len(long) * 100 < MIN_MARK_RATE_PER_100_CHARS
+    built = _build_one(1, _rig(text=short, constraints=["c-chr-020", "c-fmt-001"],
+                               pressure="adversarial", nudge="punct_readability"))
+    assert [m["kind"] for m in built.manifest["distractor_pressure"]] == ["punctuation_density"]
+    with pytest.raises(GeneratorError, match="no distractor pressure qualifies"):
+        _build_one(1, _rig(text=long, constraints=["c-chr-020", "c-fmt-001"],
+                           pressure="adversarial", nudge="punct_readability"))
+
+
+def test_the_clean_arms_latent_letter_pressure_is_disclosed(corpus, by_id, instances):
+    """The one asymmetry left in the pressure labelling is published, not hidden.
+
+    ``key_term_letter`` fires only where an author declared key terms, so a
+    CLEAN task whose own vocabulary is dense in its banned letter keeps the
+    clean label. That understates the clean-vs-adversarial gap rather than
+    overstating it, but it is a real limit, so every scenario carrying a
+    banned_letter records its derived share in the manifest -- clean ones
+    included -- and the number is recomputable from the shipped text.
+    """
+    disclosed = 0
+    for scenario in corpus:
+        entry = by_id[scenario["scenario_id"]]
+        letters = [instances[cid]["params"]["letter"] for cid in scenario["constraints"]
+                   if instances[cid]["type"] == "banned_letter"]
+        if not letters:
+            assert entry["derived_letter_share"] is None
+            continue
+        expected = letter_content_share(letters[0], entry["base_task"])
+        assert entry["derived_letter_share"] == round(expected, 4), (
+            f"{scenario['scenario_id']}: recorded letter share is not the real one")
+        disclosed += 1
+    assert disclosed >= 20, f"only {disclosed} scenarios disclose a letter share"
+    latent = [s["scenario_id"] for s in corpus
+              if s["pressure"] == "clean"
+              and (by_id[s["scenario_id"]]["derived_letter_share"] or 0)
+              >= MIN_LETTER_CONTENT_SHARE]
+    # Not an error -- an audited quantity. If this ever grows large, the clean
+    # arm has stopped being a control and the corpus needs re-pairing.
+    assert len(latent) <= 10, (
+        f"{len(latent)} 'clean' scenarios carry letter pressure at or above the "
+        f"adversarial floor ({latent}); the control arm is no longer clean")
+
+
+def test_the_adversarial_share_is_the_honest_one(corpus):
+    """The floor is the ticket's 40%, and the number is recomputed, not quoted."""
+    share = sum(1 for s in corpus if s["pressure"] == "adversarial") / len(corpus)
+    assert share >= MIN_ADVERSARIAL_SHARE
+    assert summarise(corpus)["adversarial_share"] == round(share, 4)
 
 
 # ==========================================================================

@@ -146,7 +146,12 @@ def test_no_secret_material_leaked_into_the_artifact(cfg):
 
 def test_writer_preserves_a_p5_tuned_key(tmp_path):
     """A P1 rerun after P5 must not clobber the published model pin."""
-    import scripts.ping_backends as pb  # noqa: PLC0415
+    import importlib.util  # noqa: PLC0415
+    _pb = REPO_ROOT / "archive" / "abstainer" / "scripts" / "ping_backends.py"
+    if not _pb.exists():
+        raise AssertionError("archived ping_backends.py is missing; it wrote configs/models.json")
+    _s = importlib.util.spec_from_file_location("pb", _pb)
+    pb = importlib.util.module_from_spec(_s); _s.loader.exec_module(pb)
 
     target = tmp_path / "models.json"
     target.write_text(json.dumps({
