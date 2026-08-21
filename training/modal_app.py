@@ -977,6 +977,30 @@ def train(smoke: bool, dataset_path: str, run_name: str,
     t_adapter = time.time()
     model.save_pretrained(str(adapter_dir))
     tokenizer.save_pretrained(str(adapter_dir))
+
+    # peft records base_model_name_or_path as whatever it was handed, which here
+    # is the container's snapshot directory (/root/.cache/huggingface/...). That
+    # path exists nowhere but inside this container, so a PUBLISHED adapter
+    # carrying it cannot be loaded by anyone -- PeftModel.from_pretrained would
+    # try to resolve it and fail. Rewrite it to the canonical repo id. The exact
+    # revision is not lost: it is pinned in train_log.base_model.revision, which
+    # is the artifact that is supposed to carry provenance.
+    adapter_cfg_path = adapter_dir / "adapter_config.json"
+    if adapter_cfg_path.exists():
+        adapter_cfg = json.loads(adapter_cfg_path.read_text())
+        adapter_cfg["base_model_name_or_path"] = base_repo
+        adapter_cfg_path.write_text(json.dumps(adapter_cfg, indent=2))
+
+    # peft also auto-generates a README whose YAML front-matter repeats that
+    # path in `base_model:` and in a `base_model:adapter:` tag. The Hub VALIDATES
+    # that field and rejects the upload outright ("is not valid. Use a model id
+    # from https://hf.co/models"), so leaving it here fails the publish step
+    # after the multi-GB merged upload has already gone over the wire.
+    adapter_readme = adapter_dir / "README.md"
+    if adapter_readme.exists():
+        adapter_readme.write_text(
+            adapter_readme.read_text().replace(str(snapshot_path), base_repo))
+
     adapter_s = time.time() - t_adapter
 
     t_merge = time.time()
