@@ -178,12 +178,28 @@ Two limits are worth stating plainly rather than discovering mid-run:
 * **Constraint ids are pattern-pinned**, and each constraint's family and split
   must match this project's registry. A staff constraint library using its own id
   scheme is refused by the checker, not silently mis-scored. Preflight catches
-  this for free; the fix is to map their ids onto the registry's scheme before
-  running, and the mapping should be published alongside the numbers.
+  this for free, and `scripts/adapt_evalset.py` fixes it:
+
+  ```bash
+  python scripts/adapt_evalset.py --scenarios <staff.jsonl> --constraints <theirs.jsonl> --out-dir <your-adapted-dir>
+  ```
+
+  It rewrites only the metadata the registry pins — the id, and the family and
+  split it derives from the constraint's own type — and copies `type` and
+  `params`, which are the entire behavioural content, byte for byte. It writes an
+  `adaptation.json` recording every rename and every dropped key, **and that file
+  should be published with any numbers produced from the adapted set.** The test
+  suite proves the adaptation is behaviour-preserving by running the pinned
+  checker over the same text with the original and the adapted constraint and
+  requiring the same verdict and the same evidence.
+
 * **Only the registered constraint types can be checked.** There is no extension
   point. A supplied set introducing a constraint type this project does not
-  implement is not gradeable by this harness, and that has to be disclosed rather
-  than worked around by scoring the subset that happens to fit.
+  implement is not gradeable by this harness. The adapter **refuses** such a set
+  rather than dropping the offending constraints and scoring the rest — a partial
+  score reported as a whole one is a number for a different eval set than the one
+  supplied. The same refusal covers two constraints that would collapse into one
+  once their non-registry keys are dropped.
 
 The local proxy for a held-out set is already in the eval set and is reported in
 the generated block's split breakdown: constraint families that appear in **zero**

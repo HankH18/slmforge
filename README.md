@@ -233,6 +233,7 @@ Network-free — mock generators and mock judges throughout.
 | `curve_report.py` | Re-derives the whole data-efficiency curve from the committed transcripts. `--check` fails on a hand-edited `curve.json`. |
 | `compare_checkpoints.py` | Paired comparison of two eval cells — McNemar on `spec_pass`, sign test and bootstrap on banned-letter occurrences. Two checkpoints on one eval set are one sample measured twice. |
 | `preflight_evalset.py` | Validates an unseen scenario file for free, before any model loads. |
+| `adapt_evalset.py` | Makes a foreign constraint library scoreable by rewriting only the registry-pinned metadata, and writes down every change. Refuses anything it cannot adapt without altering what the set measures. |
 | `gate_check.py` | The G1 prompt-ceiling ablation gate. |
 | `check_loop.py` | The generate → train → eval loop checker. |
 | `push_model.py` | Publishes the checkpoint to a public HF repo and pins the resulting commit. `--check` re-verifies the pin. |
