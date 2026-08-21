@@ -1,0 +1,437 @@
+{
+  "base_model": {
+    "repo": "Qwen/Qwen3-1.7B",
+    "revision": "70d244cc86ccca08cf5af4e1e306ecf908b1ad5e"
+  },
+  "config_resolved": {
+    "_contract": "PINNED by docs/BUILD_PLAN.md (P4). A disappointing model is a DATA problem - changing these numbers to chase metrics is prohibited; ask first. training/modal_app.py reads every number from this file and never duplicates one in code.",
+    "base_model": {
+      "repo": "Qwen/Qwen3-1.7B",
+      "revision": "70d244cc86ccca08cf5af4e1e306ecf908b1ad5e",
+      "spec": "hf:Qwen/Qwen3-1.7B@70d244cc86ccca08cf5af4e1e306ecf908b1ad5e",
+      "_note": "Qwen3 dropped the -Instruct suffix: Qwen/Qwen3-1.7B IS the post-trained chat variant (Qwen/Qwen3-1.7B-Instruct does not exist on the Hub; Qwen/Qwen3-1.7B-Base is the pretrain-only repo). BUILD_PLAN's phrase 'Qwen3-1.7B-Instruct' resolves to this repo. This revision MUST equal the revision in configs/models.json:base - tests/test_training_config.py enforces it."
+    },
+    "quantization": {
+      "load_in_4bit": true,
+      "dtype": null
+    },
+    "lora": {
+      "r": 16,
+      "lora_alpha": 32,
+      "lora_dropout": 0.05,
+      "target_modules": [
+        "q_proj",
+        "k_proj",
+        "v_proj",
+        "o_proj",
+        "gate_proj",
+        "up_proj",
+        "down_proj"
+      ],
+      "bias": "none",
+      "use_rslora": false,
+      "use_gradient_checkpointing": "unsloth",
+      "random_state": 42
+    },
+    "training": {
+      "learning_rate": 0.0002,
+      "num_train_epochs": 3,
+      "per_device_train_batch_size": 2,
+      "gradient_accumulation_steps": 8,
+      "max_seq_length": 2048,
+      "seed": 42,
+      "warmup_ratio": 0.03,
+      "lr_scheduler_type": "linear",
+      "optim": "adamw_8bit",
+      "weight_decay": 0.01,
+      "max_grad_norm": 1.0,
+      "logging_steps": 1
+    },
+    "smoke_overrides": {
+      "max_steps": 20
+    },
+    "_smoke_overrides_note": "--smoke merges these on top of the resolved config. A key naming a top-level section deep-merges into that section; any other key merges into 'training'. So max_steps lands in training.max_steps, where HF TrainingArguments lets it supersede num_train_epochs.",
+    "data": {
+      "train_jsonl": "data/train/v1.jsonl",
+      "smoke_train_jsonl": "data/train/smoke_v0.jsonl",
+      "completion_only_loss": true,
+      "enable_thinking": false,
+      "prompt_renderer": "scenarios.render.render_user_message",
+      "scenarios_path": "data/scenarios/corpus.jsonl",
+      "constraints_path": "data/scenarios/constraint_instances.jsonl",
+      "_note": "Pivot schema (docs/PIVOT_DESIGN.md, Data models): {\"messages\": [user, assistant], \"constraints\": [...], \"provenance\": {...}}. There is NO system message and training/modal_app.py will not synthesise one. The training condition is bound to the eval condition by prompt_renderer, not by a system prompt: every row's user message is re-rendered through that shared function and must come back byte-identical before a GPU-second is spent. enable_thinking must still match the eval generator's chat-template call.",
+      "_prompt_renderer_note": "DECLARED ASSUMPTION, to be reconciled at integration: the shared scenario -> user-message renderer written by the scenarios/harness lane, called render(scenario, constraint_lookup) -> str (or render(scenario) at arity 1) -- deliberately the same call scripts/check_loop.py makes, so the writer and the validator of train_log.json agree. It did not exist on disk when training/modal_app.py was adapted. If the lane published it under another name, change THIS STRING -- do not add a second renderer in training code, because a second implementation of the prompt is the drift this contract exists to prevent. scenarios_path/constraints_path resolve rows that reference a scenario or constraint by id; they are copied into train_log.dataset so an offline checker can resolve the same ids."
+    },
+    "output": {
+      "run_dir": "runs/train_v1",
+      "smoke_run_dir": "runs/smoke",
+      "adapter_dirname": "adapter",
+      "merged_dirname": "merged",
+      "merged_save_method": "merged_16bit",
+      "train_log_filename": "train_log.json",
+      "manifest_filename": "run_manifest.json",
+      "modal_volume": "slmforge-artifacts"
+    },
+    "_smoke": false,
+    "_micro_batch_split": {
+      "requested": 2,
+      "effective_batch_preserved": 16,
+      "per_device_train_batch_size": 2,
+      "gradient_accumulation_steps": 8
+    }
+  },
+  "dataset": {
+    "path": "data/train/subsets/v2.n423.jsonl",
+    "rows": 423,
+    "sha256": "4cd9c73eefb66d6b3741e9ca4d5c153467288f1ebbe334bab12444c7dfdef195",
+    "scenarios_path": "data/scenarios/corpus.jsonl",
+    "constraints_path": "data/scenarios/constraint_instances.jsonl"
+  },
+  "prompt_contract": {
+    "render_fn": "scenarios.render.render_user_message",
+    "sample_row_index": 0,
+    "sample_rendered_prompt": "<|im_start|>user\nWrite a short piece for a knitting group's newsletter about blocking a finished shawl and why it looks like a disaster first.\n\nRequirements -- your response must satisfy every one of these:\nDo not use bulleted or numbered lists.\nDo not use quotation marks.\nDo not use any of these words: important, significant.\nDo not use any of these phrases: in today's world, in this day and age.<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+    "sample_prompt_messages": [
+      {
+        "role": "user",
+        "content": "Write a short piece for a knitting group's newsletter about blocking a finished shawl and why it looks like a disaster first.\n\nRequirements -- your response must satisfy every one of these:\nDo not use bulleted or numbered lists.\nDo not use quotation marks.\nDo not use any of these words: important, significant.\nDo not use any of these phrases: in today's world, in this day and age."
+      }
+    ]
+  },
+  "steps": 81,
+  "loss_history": [
+    [
+      1,
+      5.3285
+    ],
+    [
+      2,
+      4.7768
+    ],
+    [
+      3,
+      5.2355
+    ],
+    [
+      4,
+      3.6516
+    ],
+    [
+      5,
+      3.4038
+    ],
+    [
+      6,
+      2.9805
+    ],
+    [
+      7,
+      3.2989
+    ],
+    [
+      8,
+      2.9704
+    ],
+    [
+      9,
+      3.1543
+    ],
+    [
+      10,
+      2.9882
+    ],
+    [
+      11,
+      3.1901
+    ],
+    [
+      12,
+      2.8951
+    ],
+    [
+      13,
+      3.3003
+    ],
+    [
+      14,
+      3.0929
+    ],
+    [
+      15,
+      2.9156
+    ],
+    [
+      16,
+      2.8877
+    ],
+    [
+      17,
+      2.9089
+    ],
+    [
+      18,
+      2.8646
+    ],
+    [
+      19,
+      2.722
+    ],
+    [
+      20,
+      2.6768
+    ],
+    [
+      21,
+      2.8074
+    ],
+    [
+      22,
+      2.8162
+    ],
+    [
+      23,
+      2.9668
+    ],
+    [
+      24,
+      3.1143
+    ],
+    [
+      25,
+      2.9098
+    ],
+    [
+      26,
+      2.8413
+    ],
+    [
+      27,
+      3.1468
+    ],
+    [
+      28,
+      2.6853
+    ],
+    [
+      29,
+      2.6751
+    ],
+    [
+      30,
+      2.7303
+    ],
+    [
+      31,
+      2.9031
+    ],
+    [
+      32,
+      2.7436
+    ],
+    [
+      33,
+      2.6946
+    ],
+    [
+      34,
+      2.6221
+    ],
+    [
+      35,
+      2.7746
+    ],
+    [
+      36,
+      2.8374
+    ],
+    [
+      37,
+      2.4684
+    ],
+    [
+      38,
+      2.5813
+    ],
+    [
+      39,
+      2.5385
+    ],
+    [
+      40,
+      2.4795
+    ],
+    [
+      41,
+      2.5276
+    ],
+    [
+      42,
+      3.0358
+    ],
+    [
+      43,
+      2.5506
+    ],
+    [
+      44,
+      2.5206
+    ],
+    [
+      45,
+      2.6002
+    ],
+    [
+      46,
+      2.4062
+    ],
+    [
+      47,
+      2.709
+    ],
+    [
+      48,
+      2.6803
+    ],
+    [
+      49,
+      2.5137
+    ],
+    [
+      50,
+      2.6343
+    ],
+    [
+      51,
+      2.5376
+    ],
+    [
+      52,
+      2.5361
+    ],
+    [
+      53,
+      2.6164
+    ],
+    [
+      54,
+      2.6089
+    ],
+    [
+      55,
+      2.5633
+    ],
+    [
+      56,
+      2.3216
+    ],
+    [
+      57,
+      2.5818
+    ],
+    [
+      58,
+      2.4422
+    ],
+    [
+      59,
+      2.3373
+    ],
+    [
+      60,
+      2.5363
+    ],
+    [
+      61,
+      2.5887
+    ],
+    [
+      62,
+      2.4242
+    ],
+    [
+      63,
+      2.3393
+    ],
+    [
+      64,
+      2.2045
+    ],
+    [
+      65,
+      2.3685
+    ],
+    [
+      66,
+      2.3896
+    ],
+    [
+      67,
+      2.3825
+    ],
+    [
+      68,
+      2.3615
+    ],
+    [
+      69,
+      2.5789
+    ],
+    [
+      70,
+      2.3549
+    ],
+    [
+      71,
+      2.3986
+    ],
+    [
+      72,
+      2.2061
+    ],
+    [
+      73,
+      2.4372
+    ],
+    [
+      74,
+      2.3641
+    ],
+    [
+      75,
+      2.5718
+    ],
+    [
+      76,
+      2.4825
+    ],
+    [
+      77,
+      2.3823
+    ],
+    [
+      78,
+      2.2428
+    ],
+    [
+      79,
+      2.5398
+    ],
+    [
+      80,
+      2.4335
+    ],
+    [
+      81,
+      2.3539
+    ]
+  ],
+  "wall_clock_seconds": 424.60413813591003,
+  "artifacts": {
+    "adapter": "v2_n423/adapter",
+    "adapter_bytes": 85670948,
+    "merged_fp16": "v2_n423/merged",
+    "merged_bytes": 3457069101
+  },
+  "started_utc": "2026-08-21T07:13:41.510968+00:00",
+  "finished_utc": "2026-08-21T07:20:46.114343+00:00"
+}

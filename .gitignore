@@ -28,5 +28,5 @@ outputs/
 # pulled model artifacts — these are published to the Hub and pinned by commit
 # hash in configs/models.json; the repo keeps the EVIDENCE (train_log.json,
 # run_manifest.json) rather than a second copy of the weights and tokenizer.
-runs/*/merged/
-runs/*/adapter/
+runs/**/merged/
+runs/**/adapter/

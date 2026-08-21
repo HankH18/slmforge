@@ -1,0 +1,105 @@
+{
+  "source": "data/train/v2.jsonl",
+  "source_rows": 846,
+  "seed": 20260821,
+  "source_sha256": "9d9fc3f32d522f5cd873ae9af6629e09538f642d26cc652b964f260aff0105c8",
+  "nested": true,
+  "subsets": {
+    "106": {
+      "rows": 106,
+      "type_counts": {
+        "banned_letter": 59,
+        "banned_phrases": 86,
+        "banned_words": 71,
+        "no_lists": 68,
+        "no_quotation_marks": 72
+      },
+      "type_shares": {
+        "banned_letter": 0.1657,
+        "banned_phrases": 0.2416,
+        "banned_words": 0.1994,
+        "no_lists": 0.191,
+        "no_quotation_marks": 0.2022
+      },
+      "banned_letter_rows": 59,
+      "letter_counts": {
+        "e": 15,
+        "o": 8,
+        "a": 8,
+        "i": 8,
+        "s": 5,
+        "u": 4,
+        "l": 4,
+        "r": 4,
+        "m": 2,
+        "p": 1
+      },
+      "path": "data/train/subsets/v2.n106.jsonl",
+      "sha256": "5ac85bf5410e7d62024e14aa21ba31d7944e244fa4ece0bc7ee9b16b8dfebe1f"
+    },
+    "211": {
+      "rows": 211,
+      "type_counts": {
+        "banned_letter": 130,
+        "banned_phrases": 154,
+        "banned_words": 146,
+        "no_lists": 141,
+        "no_quotation_marks": 138
+      },
+      "type_shares": {
+        "banned_letter": 0.1834,
+        "banned_phrases": 0.2172,
+        "banned_words": 0.2059,
+        "no_lists": 0.1989,
+        "no_quotation_marks": 0.1946
+      },
+      "banned_letter_rows": 130,
+      "letter_counts": {
+        "e": 33,
+        "a": 22,
+        "o": 16,
+        "i": 15,
+        "s": 12,
+        "r": 10,
+        "l": 8,
+        "u": 7,
+        "m": 4,
+        "p": 3
+      },
+      "path": "data/train/subsets/v2.n211.jsonl",
+      "sha256": "d8f1f5178d57d61ae2d9a1f3be7055c161e2e270f5dadfa2e9620c3f5d41d4a8"
+    },
+    "423": {
+      "rows": 423,
+      "type_counts": {
+        "banned_letter": 266,
+        "banned_phrases": 293,
+        "banned_words": 288,
+        "no_lists": 291,
+        "no_quotation_marks": 283
+      },
+      "type_shares": {
+        "banned_letter": 0.1872,
+        "banned_phrases": 0.2062,
+        "banned_words": 0.2027,
+        "no_lists": 0.2048,
+        "no_quotation_marks": 0.1992
+      },
+      "banned_letter_rows": 266,
+      "letter_counts": {
+        "e": 76,
+        "a": 48,
+        "o": 29,
+        "i": 29,
+        "s": 22,
+        "r": 22,
+        "l": 14,
+        "u": 11,
+        "m": 10,
+        "p": 5
+      },
+      "path": "data/train/subsets/v2.n423.jsonl",
+      "sha256": "4cd9c73eefb66d6b3741e9ca4d5c153467288f1ebbe334bab12444c7dfdef195"
+    }
+  }
+}
