@@ -3,6 +3,31 @@
 Instilling one falsifiable behavior into a small open model (Qwen3-1.7B) and
 proving with numbers that the tuned model beats the prompted base model at it.
 
+## Start here
+
+| Document | What it answers |
+|---|---|
+| [`docs/BRAINLIFT.md`](docs/BRAINLIFT.md) | The behavior thesis, and whether data → behavior held. Read this first. |
+| [`docs/ABLATION_G1.md`](docs/ABLATION_G1.md) | Prompt-Ceiling Ablation: 2 frontier families × 3 strategies × 147 scenarios, and the failure mode that survives the best prompt. |
+| [`docs/MVP_REPORT.md`](docs/MVP_REPORT.md) | Base-vs-tuned numbers, re-derived from the raw transcripts by `scripts/check_mvp.py`. |
+| [`docs/PIVOT_SPEC.md`](docs/PIVOT_SPEC.md) | The Behavior Spec and the numbered requirements. |
+
+Published checkpoint:
+[`HankH18/qwen3-1.7b-forbidden-constraint-holder`](https://huggingface.co/HankH18/qwen3-1.7b-forbidden-constraint-holder)
+— merged fp16 at the repo root, LoRA adapter under `adapter/`, pinned by commit
+hash in `configs/models.json`.
+
+Two commands worth knowing before the rest of this file:
+
+```bash
+# re-derive every number in the base-vs-tuned report from the committed transcripts
+python scripts/check_mvp.py
+
+# run your own prompt and your own forbidden constraint against base and tuned, side by side
+python scripts/demo.py --prompt "Write a short notice about a library reopening." \
+                       --constraint banned_punctuation:, --constraint banned_words:however
+```
+
 ## Behavior Spec (the graded spec)
 
 > Given a task prompt and a set of 2–4 hard constraints that always includes at
