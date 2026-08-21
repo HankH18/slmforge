@@ -106,3 +106,39 @@ def test_sidecars_are_not_mistaken_for_training_data(path):
     assert path.name.endswith((".rejected.jsonl", ".dpo_negatives.jsonl")), (
         f"{path.name} is neither a training file nor a recognised sidecar -- it is "
         f"unaudited and unclassified")
+
+
+# ==========================================================================
+# The nested family the data-efficiency curve rests on
+# ==========================================================================
+
+def _row_key(row):
+    """Content identity, ignoring the wall-clock stamp a rerun necessarily moves."""
+    import copy
+    row = copy.deepcopy(row)
+    row.get("provenance", {}).pop("generated_utc", None)
+    return json.dumps(row, sort_keys=True)
+
+
+def test_v3_contains_every_v2_row():
+    """The upward extension of the curve is only interpretable if the larger
+    corpus CONTAINS the smaller one -- otherwise the points differ by which rows
+    they drew as well as by how many, and the difference is unattributable.
+
+    Set inclusion, deliberately not prefix equality. The v2 run abandoned rows on
+    a provider error, a failed call is never cached, so those requests were
+    re-issued during the v3 run and some succeeded; the two files agree for a
+    few hundred rows and then interleave. Asserting prefix equality here would
+    fail on a correct dataset.
+    """
+    v2 = REPO_ROOT / "data" / "train" / "v2.jsonl"
+    v3 = REPO_ROOT / "data" / "train" / "v3.jsonl"
+    if not v3.exists():
+        pytest.skip("v3 has not been generated")
+    keys2 = {_row_key(json.loads(l)) for l in v2.read_text().splitlines() if l.strip()}
+    keys3 = {_row_key(json.loads(l)) for l in v3.read_text().splitlines() if l.strip()}
+    missing = keys2 - keys3
+    assert not missing, (
+        f"{len(missing)} of {len(keys2)} v2 rows are absent from v3; the curve's "
+        f"nested family is broken and the points are no longer comparable")
+    assert len(keys3) > len(keys2), "v3 must be strictly larger than v2"

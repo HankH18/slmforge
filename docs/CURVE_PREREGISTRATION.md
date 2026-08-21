@@ -1,9 +1,17 @@
 # Pre-registration: what the upward extension of the curve should show
 
-**Written and committed before the N≈1690 checkpoint was trained or evaluated.
-Nothing below may be edited after that run starts. The results go in
-[`EFFICIENCY_CURVE.md`](EFFICIENCY_CURVE.md), and each prediction is marked
-hit or missed there against what this file says.**
+**Written and committed before the upward-extension corpus was generated and
+before any checkpoint was trained on it. No prediction threshold may be edited
+after that training starts. The results go in
+[`EFFICIENCY_CURVE.md`](EFFICIENCY_CURVE.md), and each prediction is marked hit
+or missed there against what this file says.**
+
+*Edit record, so the pre-registration can be audited rather than trusted:* after
+the corpus was generated — and still before any training — the realised size
+`N = 1,815` replaced the estimate `N ≈ 1,690` throughout, the status block below
+was added, and the containment claim in §2 was upgraded from a prediction to a
+confirmed measurement. **No threshold in the table changed**; `git log -p` on
+this file shows every edit.
 
 The five committed points end at N=846, which is the whole v2 dataset. The
 report states the minimum viable N as a **bound** — the error was still falling
@@ -15,7 +23,8 @@ recipe on it.
 A prediction written after seeing the number is not a prediction. This file
 exists so that the upward extension can *fail*.
 
-> **Status: predictions stand, untested.** The 2× corpus was generated and an
+> **Status: predictions stand, untested.** The 2× corpus was generated —
+> `data/train/v3.jsonl`, 1,815 rows, containment against v2 verified — and an
 > inward point at N=634 was prepared, but the training platform refused both runs
 > — *"Workspace has exceeded its spend limit"* — so neither checkpoint exists.
 > Nothing below has been edited since it was committed, and the corpus and the
@@ -53,15 +62,16 @@ N=846.**
 
 The v3 dataset is generated with the identical recipe, seed and teacher as v2,
 and the sampler is prefix-stable, so v3's rows are a strict superset of v2's
-846 — verified before generation by replaying the first 24 samples from cache
-and comparing them byte-for-byte against `data/train/v2.jsonl`. The training
+846 — predicted before generation by replaying the first 24 samples from cache
+and comparing them byte-for-byte against `data/train/v2.jsonl`, and confirmed
+afterwards: v3 holds all 846 and adds 969. The training
 config is the pinned `configs/train.json`, untouched. Only the row count
 changes.
 
 Evaluated on the identical 147-scenario eval set, identical judge, identical
 rubric hash:
 
-| # | Prediction at N≈1690 | Fails if |
+| # | Prediction at N=1,815 | Fails if |
 |---|---|---|
 | P1 | `banned_words` violation rate **≤ 0.057** (continues to fall or holds) | > 0.065, i.e. back to the N=423 level |
 | P2 | `sentence_initial_letter` violation rate **≥ 0.92** (saturated near 1.0) | < 0.92 |
@@ -76,7 +86,7 @@ P6 and P8 are the two that matter most, and they point in opposite directions
 on purpose. P6 says the underlying error keeps shrinking. P8 says the graded
 metric still cannot see it. If **P6 holds and P8 fails** — the count keeps
 falling *and* the checker starts passing — the cliff has been crossed and a
-minimum viable N exists between 846 and 1690. That is the outcome that would
+minimum viable N exists between 846 and 1,815. That is the outcome that would
 make this project's headline finding wrong in the most interesting way, and it
 is the reason the sweep goes up rather than down.
 
@@ -86,8 +96,8 @@ is the reason the sweep goes up rather than down.
   hold the full composed spec reliably. The honest report is a two-sided
   answer — a minimum N for the *trained* families, and the observation that the
   aggregate has no minimum because generalization damage grows with N. The
-  bound tightens to N > 1690.
-* **P6 holds, P8 fails**: the cliff is crossed between 846 and 1690. The
+  bound tightens to N > 1,815.
+* **P6 holds, P8 fails**: the cliff is crossed between 846 and 1,815. The
   minimum viable N is bracketed and the sweep should be refined *inside* that
   interval, not extended further.
 * **P6 fails** (median stops falling): the 34 → 14 decline saturated, and the

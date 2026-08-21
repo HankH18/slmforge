@@ -1,0 +1,102 @@
+{
+  "requested": 2048,
+  "kept": 1815,
+  "accept_rate": 0.88623046875,
+  "gave_up": 233,
+  "rejections": 4868,
+  "rejection_reasons": {
+    "constraint_violation": 4868
+  },
+  "rejected_constraint_types": {
+    "banned_letter": 4867,
+    "no_lists": 2
+  },
+  "dpo_negatives": 2266,
+  "attempt_histogram": {
+    "1": 1055,
+    "2": 204,
+    "4": 141,
+    "5": 69,
+    "3": 139,
+    "7": 46,
+    "6": 64,
+    "8": 40,
+    "10": 25,
+    "9": 32
+  },
+  "k_distribution": {
+    "2": 280,
+    "3": 597,
+    "4": 938
+  },
+  "pressure_distribution": {
+    "clean": 958,
+    "adversarial": 857
+  },
+  "banned_letter_distribution": {
+    "kept": {
+      "a": 226,
+      "e": 315,
+      "i": 148,
+      "l": 44,
+      "m": 23,
+      "o": 133,
+      "p": 18,
+      "r": 122,
+      "s": 80,
+      "u": 43
+    },
+    "rejected": {
+      "a": 1426,
+      "e": 1998,
+      "i": 525,
+      "l": 25,
+      "m": 4,
+      "o": 410,
+      "p": 2,
+      "r": 310,
+      "s": 54,
+      "u": 114
+    },
+    "keep_rate": {
+      "a": 0.1368,
+      "e": 0.1362,
+      "i": 0.2199,
+      "l": 0.6377,
+      "m": 0.8519,
+      "o": 0.2449,
+      "p": 0.9,
+      "r": 0.2824,
+      "s": 0.597,
+      "u": 0.2739
+    }
+  },
+  "type_counts": {
+    "no_lists": 1236,
+    "banned_words": 1225,
+    "banned_letter": 1152,
+    "no_quotation_marks": 1236,
+    "banned_phrases": 1254
+  },
+  "type_shares": {
+    "banned_letter": 0.1888,
+    "banned_phrases": 0.2055,
+    "banned_words": 0.2007,
+    "no_lists": 0.2025,
+    "no_quotation_marks": 0.2025
+  },
+  "max_type_share": 0.2055,
+  "distractor_examples": 843,
+  "unique_tasks": 72,
+  "teacher": "openai:gpt-5.6-terra",
+  "teacher_resolved_by": "--teacher",
+  "attempts": 10,
+  "seed": 20260821,
+  "letter_mix": "hard",
+  "min_kept": 1536,
+  "cache": {
+    "hits": 3157,
+    "misses": 3526
+  },
+  "generated_utc": "2026-08-21T10:51:25.741456+00:00"
+}

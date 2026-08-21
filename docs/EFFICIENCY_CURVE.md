@@ -100,11 +100,18 @@ What would bracket it: **extend the sweep upward**, at roughly 2× and 4× the c
 
 The upward extension was started and is **blocked on compute, not on method.**
 
-* The 2× corpus is being generated with the identical recipe, teacher and seed. The sampler was verified prefix-stable before spending anything — replaying the first samples from the teacher cache reproduces `data/train/v2.jsonl` byte for byte apart from provenance timestamps — so the larger corpus contains the present 846 rows and the nested family survives. (Set inclusion, not prefix equality: the v2 run abandoned some samples on a teacher error and those requests were never cached, so any that now succeed become additional rows interleaved among the existing ones. Inclusion is the property the curve needs; it is checked directly rather than assumed.)
+* The 2× corpus **exists**: `data/train/v3.jsonl`, **1,815 rows**, sha256 `4e1760f3…`, generated with the identical recipe, teacher, seed and letter mix. The sampler was verified prefix-stable before anything was spent — replaying the first samples from the teacher cache reproduces `data/train/v2.jsonl` byte for byte apart from provenance timestamps — and the containment was then checked directly rather than assumed: **all 846 v2 rows are present in v3**, which adds 969 new ones. It passes its own audit (`python -m datagen.audit data/train/v3.jsonl`): every row re-rendered byte-identical, every checker re-run, zero held-out types, zero eval overlap.
+
+  Set inclusion, *not* prefix equality — and the difference is instructive. The v2 run abandoned 64 samples on a provider error, and a failed call is never cached, so those requests were re-issued in the v3 run and some succeeded. The two files therefore agree for 468 rows and then interleave. Inclusion is the property the nested family needs; prefix equality is not, and assuming it would have been wrong.
 * An inward point at N=634 was prepared as well — `data/train/subsets/v2.n634.jsonl`, verified nested between the 423 and 846 sets — to locate where the occurrence measure actually starts moving, since the largest drop in the sweep is the final doubling.
 * Neither has a checkpoint. The training platform refused both runs: *"Workspace has exceeded its spend limit."* The N=634 run reached the third epoch before the workspace was cut off mid-run; no artifacts were written.
 
-So the curve stands at five points and the bound stands. `docs/CURVE_PREREGISTRATION.md` records eight falsifiable predictions for the 2× point, committed before any of it was trained; they remain untested, and the subset and corpus are on disk so that the extension is one training command per point once GPU access is restored.
+So the curve stands at five points and the bound stands. `docs/CURVE_PREREGISTRATION.md` records eight falsifiable predictions for the 2× point, committed before any of it was generated or trained; they remain untested. Both corpora are on disk, so the extension is one training command per point once GPU access is restored:
+
+```bash
+SLMFORGE_GPU=A10G SLMFORGE_MICRO_BATCH=2 modal run training/modal_app.py::main --dataset data/train/v3.jsonl --run-name eff-n1815 --out-dir runs/efficiency/n1815
+SLMFORGE_GPU=A10G SLMFORGE_MICRO_BATCH=2 modal run training/modal_app.py::main --dataset data/train/subsets/v2.n634.jsonl --run-name eff-n634 --out-dir runs/efficiency/n634
+```
 
 ### What the minimum viable N can be stated as today
 
