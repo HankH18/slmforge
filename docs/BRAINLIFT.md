@@ -471,12 +471,26 @@ with no hint of a plateau, so the threshold lies *above* 846 and the sweep has
 not bracketed it. Extending upward (2× and 4× the current N) would bracket it;
 refining downward would only measure the flat part more precisely.
 
-Two things in that table are worth not smoothing over. The N=106 point is
-*worse* than base on both metrics and has the highest occurrence count of any
-point — small-N fine-tuning appears to damage the behavior before it helps it.
-And the binary column is non-monotone while the occurrence column is monotone
-from N=211 — the same cliff effect as above, visible here as noise in one column
-and signal in the other.
+Three things in that table are worth not smoothing over.
+
+The N=106 point is *worse* than base on both metrics and has the highest
+occurrence count of any point — small-N fine-tuning appears to damage the
+behavior before it helps it. The binary column is non-monotone while the
+occurrence column is monotone from N=211 — the same cliff effect as above,
+showing up as noise in one column and signal in the other.
+
+And the most important qualification: **normalising for length, most of the
+middle of the curve disappears.** Occurrences per 1,000 characters run
+67.7 → 71.8 → 72.9 → 65.0 → 36.5. Only the last doubling separates. At N=423 the
+raw count improves 15% but the density only 4%, so most of that point's apparent
+gain is the model writing *shorter answers*, not holding the constraint better.
+The signal that survives normalisation lives almost entirely in the final
+doubling — which cuts against reading the curve as a smooth trend, and
+strengthens rather than weakens the conclusion that the threshold is above 846.
+
+That length check matters for the base→v1→v2 comparison too, and it survives it:
+that reduction is 67.7 → 50.5 → 36.5 per 1,000 characters, i.e. 46% *after*
+normalising, so the headline improvement is not an artifact of terser writing.
 
 The mechanism is already in the repo. `scripts/make_subset.py` builds
 **nested** (each smaller subset is a prefix of the same seeded shuffle, so a
@@ -504,10 +518,13 @@ number is just a point on a chart:
 2. **The composition at that N**, from the subset manifest — specifically whether
    the hard letters are still represented at the intended share. A minimum viable
    size is only meaningful alongside a minimum viable *mix*.
-3. **What it cost.** Keep rate falls from 0.4201 to 0.2546 under the hard mix
-   (§6), so N kept rows is a different number of teacher calls than it was for
-   v1. The useful statement for anyone reproducing this is N *and* the request
-   budget that produced it.
+3. **What it cost, measured rather than projected.** v2 spent 3,142 teacher
+   calls for 846 kept rows; v1 spent 1,764 for 881. That is 3.71 calls per kept
+   row against 2.00 — the harder curriculum cost **1.86x** as much per example,
+   and 178 of 1,024 requests were abandoned after ten attempts. (§6 predicted
+   this from keep rates before the run; these are the observed figures.) The
+   useful statement for anyone reproducing this is N *and* the request budget
+   that produced it, because at a fixed budget a harder mix buys a smaller N.
 
 `docs/PIVOT_SPEC.md` R8 names N = 64 / 256 / 1024 / 4096 as the log-spaced ladder.
 The top of that ladder is above what a single generation run at this scale yields
