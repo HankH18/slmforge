@@ -58,8 +58,8 @@ set -a && . ./.env && set +a
 python eval.py --model hf:Qwen/Qwen3-1.7B --eval-set data/scenarios/corpus.jsonl
 
 # base vs. tuned — the MVP comparison
-python eval.py --model hf:<tuned-repo>@<commit> \
-               --compare-with hf:Qwen/Qwen3-1.7B@<revision> \
+python eval.py --model hf:HankH18/qwen3-1.7b-forbidden-constraint-holder@b97eb115de1f1837db60550361669950d158e95e \
+               --compare-with hf:Qwen/Qwen3-1.7B@70d244cc86ccca08cf5af4e1e306ecf908b1ad5e \
                --eval-set data/scenarios/corpus.jsonl --out runs/mvp
 
 # few-shot needs exemplars
