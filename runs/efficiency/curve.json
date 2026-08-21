@@ -1,54 +1,377 @@
 {
+  "_note": "Re-derived from the committed transcripts by scripts/curve_report.py. Do not hand-edit: `python scripts/curve_report.py --check` fails if this file and the transcripts disagree.",
+  "eval_set": "data/scenarios/corpus.jsonl",
+  "eval_set_sha256": "0ad00c19184d3a51c7950c13800f218b78eb5be4bfb74057608c00186aa9de72",
+  "strategy": "zero_shot",
+  "heldout_types": [
+    "banned_punctuation",
+    "sentence_initial_letter"
+  ],
   "points": [
     {
       "n": 0,
       "label": "base",
+      "model": "hf:Qwen/Qwen3-1.7B@70d244cc86ccca08cf5af4e1e306ecf908b1ad5e",
+      "dataset": null,
+      "run_dir": "runs/mvp",
+      "n_scored": 146,
       "spec_adherence": 0.089,
       "robustness": 0.1029,
+      "passed": 13,
+      "n_adversarial": 68,
       "all_checkers": 27,
-      "n_scored": 146,
       "median_banned_letter_occurrences": 34,
-      "model": "hf:Qwen/Qwen3-1.7B@70d244cc86ccca08cf5af4e1e306ecf908b1ad5e"
+      "by_split": {
+        "heldout_type": {
+          "n": 59,
+          "passed": 3,
+          "spec_adherence": 0.0508
+        },
+        "train": {
+          "n": 87,
+          "passed": 10,
+          "spec_adherence": 0.1149
+        }
+      },
+      "by_constraint_type": {
+        "banned_letter": {
+          "checks": 105,
+          "violations": 105,
+          "violation_rate": 1.0
+        },
+        "banned_phrases": {
+          "checks": 43,
+          "violations": 0,
+          "violation_rate": 0.0
+        },
+        "banned_punctuation": {
+          "checks": 41,
+          "violations": 9,
+          "violation_rate": 0.2195
+        },
+        "banned_words": {
+          "checks": 123,
+          "violations": 14,
+          "violation_rate": 0.1138
+        },
+        "no_lists": {
+          "checks": 104,
+          "violations": 2,
+          "violation_rate": 0.0192
+        },
+        "no_quotation_marks": {
+          "checks": 49,
+          "violations": 0,
+          "violation_rate": 0.0
+        },
+        "sentence_initial_letter": {
+          "checks": 24,
+          "violations": 7,
+          "violation_rate": 0.2917
+        }
+      },
+      "banned_letter": {
+        "rows": 105,
+        "median_occurrences": 34,
+        "mean_occurrences": 45.08,
+        "median_per_1000_chars": 67.7,
+        "median_response_chars": 484,
+        "median_occurrences_e_ban_rows": 42,
+        "clean_responses": 0
+      },
+      "transcripts_sha256": "44d4e1936d667e2ae95074ad71e3dcbead32bc4066c08599ea4e0b1915107bed"
     },
     {
       "n": 106,
       "label": "v2 n=106",
+      "model": "hf:runs/efficiency/n106/merged",
+      "dataset": "data/train/subsets/v2.n106.jsonl",
+      "run_dir": "runs/efficiency/n106",
+      "n_scored": 147,
       "spec_adherence": 0.0612,
       "robustness": 0.058,
+      "passed": 9,
+      "n_adversarial": 69,
       "all_checkers": 24,
-      "n_scored": 147,
       "median_banned_letter_occurrences": 35,
-      "model": "hf:runs/efficiency/n106/merged"
+      "by_split": {
+        "heldout_type": {
+          "n": 60,
+          "passed": 0,
+          "spec_adherence": 0.0
+        },
+        "train": {
+          "n": 87,
+          "passed": 9,
+          "spec_adherence": 0.1034
+        }
+      },
+      "by_constraint_type": {
+        "banned_letter": {
+          "checks": 105,
+          "violations": 104,
+          "violation_rate": 0.9905
+        },
+        "banned_phrases": {
+          "checks": 43,
+          "violations": 1,
+          "violation_rate": 0.0233
+        },
+        "banned_punctuation": {
+          "checks": 41,
+          "violations": 20,
+          "violation_rate": 0.4878
+        },
+        "banned_words": {
+          "checks": 124,
+          "violations": 13,
+          "violation_rate": 0.1048
+        },
+        "no_lists": {
+          "checks": 105,
+          "violations": 3,
+          "violation_rate": 0.0286
+        },
+        "no_quotation_marks": {
+          "checks": 50,
+          "violations": 0,
+          "violation_rate": 0.0
+        },
+        "sentence_initial_letter": {
+          "checks": 25,
+          "violations": 7,
+          "violation_rate": 0.28
+        }
+      },
+      "banned_letter": {
+        "rows": 105,
+        "median_occurrences": 35,
+        "mean_occurrences": 76.65,
+        "median_per_1000_chars": 71.8,
+        "median_response_chars": 499,
+        "median_occurrences_e_ban_rows": 43,
+        "clean_responses": 1
+      },
+      "transcripts_sha256": "290563b7423650a5eba2a184fc6aaa655a3d8354ee0c216eedb5fc5be2ed58d4"
     },
     {
       "n": 211,
       "label": "v2 n=211",
+      "model": "hf:runs/efficiency/n211/merged",
+      "dataset": "data/train/subsets/v2.n211.jsonl",
+      "run_dir": "runs/efficiency/n211",
+      "n_scored": 147,
       "spec_adherence": 0.0884,
       "robustness": 0.1014,
+      "passed": 13,
+      "n_adversarial": 69,
       "all_checkers": 22,
-      "n_scored": 147,
       "median_banned_letter_occurrences": 33,
-      "model": "hf:runs/efficiency/n211/merged"
+      "by_split": {
+        "heldout_type": {
+          "n": 60,
+          "passed": 1,
+          "spec_adherence": 0.0167
+        },
+        "train": {
+          "n": 87,
+          "passed": 12,
+          "spec_adherence": 0.1379
+        }
+      },
+      "by_constraint_type": {
+        "banned_letter": {
+          "checks": 105,
+          "violations": 105,
+          "violation_rate": 1.0
+        },
+        "banned_phrases": {
+          "checks": 43,
+          "violations": 0,
+          "violation_rate": 0.0
+        },
+        "banned_punctuation": {
+          "checks": 41,
+          "violations": 22,
+          "violation_rate": 0.5366
+        },
+        "banned_words": {
+          "checks": 124,
+          "violations": 9,
+          "violation_rate": 0.0726
+        },
+        "no_lists": {
+          "checks": 105,
+          "violations": 3,
+          "violation_rate": 0.0286
+        },
+        "no_quotation_marks": {
+          "checks": 50,
+          "violations": 0,
+          "violation_rate": 0.0
+        },
+        "sentence_initial_letter": {
+          "checks": 25,
+          "violations": 15,
+          "violation_rate": 0.6
+        }
+      },
+      "banned_letter": {
+        "rows": 105,
+        "median_occurrences": 33,
+        "mean_occurrences": 57.07,
+        "median_per_1000_chars": 72.9,
+        "median_response_chars": 468,
+        "median_occurrences_e_ban_rows": 47,
+        "clean_responses": 0
+      },
+      "transcripts_sha256": "cef95922a4b26b048d1624857b758eaa492a99866eb9ace2482212a7088a1de7"
     },
     {
       "n": 423,
       "label": "v2 n=423",
+      "model": "hf:runs/efficiency/n423/merged",
+      "dataset": "data/train/subsets/v2.n423.jsonl",
+      "run_dir": "runs/efficiency/n423",
+      "n_scored": 147,
       "spec_adherence": 0.0816,
       "robustness": 0.087,
+      "passed": 12,
+      "n_adversarial": 69,
       "all_checkers": 18,
-      "n_scored": 147,
       "median_banned_letter_occurrences": 29,
-      "model": "hf:runs/efficiency/n423/merged"
+      "by_split": {
+        "heldout_type": {
+          "n": 60,
+          "passed": 1,
+          "spec_adherence": 0.0167
+        },
+        "train": {
+          "n": 87,
+          "passed": 11,
+          "spec_adherence": 0.1264
+        }
+      },
+      "by_constraint_type": {
+        "banned_letter": {
+          "checks": 105,
+          "violations": 105,
+          "violation_rate": 1.0
+        },
+        "banned_phrases": {
+          "checks": 43,
+          "violations": 0,
+          "violation_rate": 0.0
+        },
+        "banned_punctuation": {
+          "checks": 41,
+          "violations": 22,
+          "violation_rate": 0.5366
+        },
+        "banned_words": {
+          "checks": 124,
+          "violations": 8,
+          "violation_rate": 0.0645
+        },
+        "no_lists": {
+          "checks": 105,
+          "violations": 4,
+          "violation_rate": 0.0381
+        },
+        "no_quotation_marks": {
+          "checks": 50,
+          "violations": 0,
+          "violation_rate": 0.0
+        },
+        "sentence_initial_letter": {
+          "checks": 25,
+          "violations": 23,
+          "violation_rate": 0.92
+        }
+      },
+      "banned_letter": {
+        "rows": 105,
+        "median_occurrences": 29,
+        "mean_occurrences": 35.3,
+        "median_per_1000_chars": 65.0,
+        "median_response_chars": 456,
+        "median_occurrences_e_ban_rows": 36,
+        "clean_responses": 0
+      },
+      "transcripts_sha256": "2621b0280105632ca1bc5d2d85bdda47e8856b0ecbffdb61758bf068f393c326"
     },
     {
       "n": 846,
       "label": "v2 n=846",
+      "model": "hf:runs/train_v2/merged",
+      "dataset": "data/train/v2.jsonl",
+      "run_dir": "runs/mvp_v2",
+      "n_scored": 147,
       "spec_adherence": 0.0816,
       "robustness": 0.087,
+      "passed": 12,
+      "n_adversarial": 69,
       "all_checkers": 20,
-      "n_scored": 147,
       "median_banned_letter_occurrences": 14,
-      "model": "hf:runs/train_v2/merged"
+      "by_split": {
+        "heldout_type": {
+          "n": 60,
+          "passed": 0,
+          "spec_adherence": 0.0
+        },
+        "train": {
+          "n": 87,
+          "passed": 12,
+          "spec_adherence": 0.1379
+        }
+      },
+      "by_constraint_type": {
+        "banned_letter": {
+          "checks": 105,
+          "violations": 104,
+          "violation_rate": 0.9905
+        },
+        "banned_phrases": {
+          "checks": 43,
+          "violations": 0,
+          "violation_rate": 0.0
+        },
+        "banned_punctuation": {
+          "checks": 41,
+          "violations": 24,
+          "violation_rate": 0.5854
+        },
+        "banned_words": {
+          "checks": 124,
+          "violations": 7,
+          "violation_rate": 0.0565
+        },
+        "no_lists": {
+          "checks": 105,
+          "violations": 2,
+          "violation_rate": 0.019
+        },
+        "no_quotation_marks": {
+          "checks": 50,
+          "violations": 0,
+          "violation_rate": 0.0
+        },
+        "sentence_initial_letter": {
+          "checks": 25,
+          "violations": 24,
+          "violation_rate": 0.96
+        }
+      },
+      "banned_letter": {
+        "rows": 105,
+        "median_occurrences": 14,
+        "mean_occurrences": 17.62,
+        "median_per_1000_chars": 36.5,
+        "median_response_chars": 416,
+        "median_occurrences_e_ban_rows": 16,
+        "clean_responses": 1
+      },
+      "transcripts_sha256": "861a98c963f6f27fb6ebe6841b436d6b1af0b740e7f51a031dce529a8785b030"
     }
   ]
 }

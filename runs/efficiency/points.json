@@ -1,0 +1,43 @@
+{
+  "_note": "DECLARATION ONLY. Every metric in runs/efficiency/curve.json is re-derived from the transcripts named here by scripts/curve_report.py; no number lives in this file. Keeping the declaration free of results is what makes the curve re-runnable: a point cannot be added with a flattering number already attached to it.",
+  "eval_set": "data/scenarios/corpus.jsonl",
+  "instances": "data/scenarios/constraint_instances.jsonl",
+  "strategy": "zero_shot",
+  "points": [
+    {
+      "n": 0,
+      "label": "base",
+      "model": "hf:Qwen/Qwen3-1.7B@70d244cc86ccca08cf5af4e1e306ecf908b1ad5e",
+      "run_dir": "runs/mvp",
+      "dataset": null
+    },
+    {
+      "n": 106,
+      "label": "v2 n=106",
+      "model": "hf:runs/efficiency/n106/merged",
+      "run_dir": "runs/efficiency/n106",
+      "dataset": "data/train/subsets/v2.n106.jsonl"
+    },
+    {
+      "n": 211,
+      "label": "v2 n=211",
+      "model": "hf:runs/efficiency/n211/merged",
+      "run_dir": "runs/efficiency/n211",
+      "dataset": "data/train/subsets/v2.n211.jsonl"
+    },
+    {
+      "n": 423,
+      "label": "v2 n=423",
+      "model": "hf:runs/efficiency/n423/merged",
+      "run_dir": "runs/efficiency/n423",
+      "dataset": "data/train/subsets/v2.n423.jsonl"
+    },
+    {
+      "n": 846,
+      "label": "v2 n=846",
+      "model": "hf:runs/train_v2/merged",
+      "run_dir": "runs/mvp_v2",
+      "dataset": "data/train/v2.jsonl"
+    }
+  ]
+}
