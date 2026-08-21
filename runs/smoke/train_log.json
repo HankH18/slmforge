@@ -1,0 +1,194 @@
+{
+  "base_model": {
+    "repo": "Qwen/Qwen3-1.7B",
+    "revision": "70d244cc86ccca08cf5af4e1e306ecf908b1ad5e"
+  },
+  "config_resolved": {
+    "_contract": "PINNED by docs/BUILD_PLAN.md (P4). A disappointing model is a DATA problem - changing these numbers to chase metrics is prohibited; ask first. training/modal_app.py reads every number from this file and never duplicates one in code.",
+    "base_model": {
+      "repo": "Qwen/Qwen3-1.7B",
+      "revision": "70d244cc86ccca08cf5af4e1e306ecf908b1ad5e",
+      "spec": "hf:Qwen/Qwen3-1.7B@70d244cc86ccca08cf5af4e1e306ecf908b1ad5e",
+      "_note": "Qwen3 dropped the -Instruct suffix: Qwen/Qwen3-1.7B IS the post-trained chat variant (Qwen/Qwen3-1.7B-Instruct does not exist on the Hub; Qwen/Qwen3-1.7B-Base is the pretrain-only repo). BUILD_PLAN's phrase 'Qwen3-1.7B-Instruct' resolves to this repo. This revision MUST equal the revision in configs/models.json:base - tests/test_training_config.py enforces it."
+    },
+    "quantization": {
+      "load_in_4bit": true,
+      "dtype": null
+    },
+    "lora": {
+      "r": 16,
+      "lora_alpha": 32,
+      "lora_dropout": 0.05,
+      "target_modules": [
+        "q_proj",
+        "k_proj",
+        "v_proj",
+        "o_proj",
+        "gate_proj",
+        "up_proj",
+        "down_proj"
+      ],
+      "bias": "none",
+      "use_rslora": false,
+      "use_gradient_checkpointing": "unsloth",
+      "random_state": 42
+    },
+    "training": {
+      "learning_rate": 0.0002,
+      "num_train_epochs": 3,
+      "per_device_train_batch_size": 4,
+      "gradient_accumulation_steps": 4,
+      "max_seq_length": 2048,
+      "seed": 42,
+      "warmup_ratio": 0.03,
+      "lr_scheduler_type": "linear",
+      "optim": "adamw_8bit",
+      "weight_decay": 0.01,
+      "max_grad_norm": 1.0,
+      "logging_steps": 1,
+      "max_steps": 20
+    },
+    "smoke_overrides": {
+      "max_steps": 20
+    },
+    "_smoke_overrides_note": "--smoke merges these on top of the resolved config. A key naming a top-level section deep-merges into that section; any other key merges into 'training'. So max_steps lands in training.max_steps, where HF TrainingArguments lets it supersede num_train_epochs.",
+    "data": {
+      "train_jsonl": "data/train/v1.jsonl",
+      "smoke_train_jsonl": "data/train/smoke_v0.jsonl",
+      "completion_only_loss": true,
+      "enable_thinking": false,
+      "prompt_renderer": "scenarios.render.render_user_message",
+      "scenarios_path": "data/scenarios/corpus.jsonl",
+      "constraints_path": "data/scenarios/constraint_instances.jsonl",
+      "_note": "Pivot schema (docs/PIVOT_DESIGN.md, Data models): {\"messages\": [user, assistant], \"constraints\": [...], \"provenance\": {...}}. There is NO system message and training/modal_app.py will not synthesise one. The training condition is bound to the eval condition by prompt_renderer, not by a system prompt: every row's user message is re-rendered through that shared function and must come back byte-identical before a GPU-second is spent. enable_thinking must still match the eval generator's chat-template call.",
+      "_prompt_renderer_note": "DECLARED ASSUMPTION, to be reconciled at integration: the shared scenario -> user-message renderer written by the scenarios/harness lane, called render(scenario, constraint_lookup) -> str (or render(scenario) at arity 1) -- deliberately the same call scripts/check_loop.py makes, so the writer and the validator of train_log.json agree. It did not exist on disk when training/modal_app.py was adapted. If the lane published it under another name, change THIS STRING -- do not add a second renderer in training code, because a second implementation of the prompt is the drift this contract exists to prevent. scenarios_path/constraints_path resolve rows that reference a scenario or constraint by id; they are copied into train_log.dataset so an offline checker can resolve the same ids."
+    },
+    "output": {
+      "run_dir": "runs/train_v1",
+      "smoke_run_dir": "runs/smoke",
+      "adapter_dirname": "adapter",
+      "merged_dirname": "merged",
+      "merged_save_method": "merged_16bit",
+      "train_log_filename": "train_log.json",
+      "manifest_filename": "run_manifest.json",
+      "modal_volume": "slmforge-artifacts"
+    },
+    "_smoke": true,
+    "_micro_batch_split": {
+      "requested": 4,
+      "effective_batch_preserved": 16,
+      "per_device_train_batch_size": 4,
+      "gradient_accumulation_steps": 4
+    }
+  },
+  "dataset": {
+    "path": "data/train/v1.jsonl",
+    "rows": 881,
+    "sha256": "c565b900b19bb97a298e959fa15231de5858318f97d9859d4b044bdc5402898c",
+    "scenarios_path": "data/scenarios/corpus.jsonl",
+    "constraints_path": "data/scenarios/constraint_instances.jsonl"
+  },
+  "prompt_contract": {
+    "render_fn": "scenarios.render.render_user_message",
+    "sample_row_index": 0,
+    "sample_rendered_prompt": "<|im_start|>user\nExplain what actually happens during a chimney sweep's visit, for a household that has just opened up a fireplace.\n\nRequirements -- your response must satisfy every one of these:\nDo not use bulleted or numbered lists.\nDo not use quotation marks.<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+    "sample_prompt_messages": [
+      {
+        "role": "user",
+        "content": "Explain what actually happens during a chimney sweep's visit, for a household that has just opened up a fireplace.\n\nRequirements -- your response must satisfy every one of these:\nDo not use bulleted or numbered lists.\nDo not use quotation marks."
+      }
+    ]
+  },
+  "steps": 20,
+  "loss_history": [
+    [
+      1,
+      5.1121
+    ],
+    [
+      2,
+      5.1631
+    ],
+    [
+      3,
+      3.8813
+    ],
+    [
+      4,
+      3.3558
+    ],
+    [
+      5,
+      3.2875
+    ],
+    [
+      6,
+      3.2084
+    ],
+    [
+      7,
+      3.1115
+    ],
+    [
+      8,
+      2.9563
+    ],
+    [
+      9,
+      3.0324
+    ],
+    [
+      10,
+      2.8839
+    ],
+    [
+      11,
+      3.0808
+    ],
+    [
+      12,
+      2.6757
+    ],
+    [
+      13,
+      3.0126
+    ],
+    [
+      14,
+      2.9944
+    ],
+    [
+      15,
+      3.1133
+    ],
+    [
+      16,
+      2.9211
+    ],
+    [
+      17,
+      2.9412
+    ],
+    [
+      18,
+      2.8626
+    ],
+    [
+      19,
+      2.8655
+    ],
+    [
+      20,
+      2.8453
+    ]
+  ],
+  "wall_clock_seconds": 110.36331176757812,
+  "artifacts": {
+    "adapter": "smoke/adapter",
+    "adapter_bytes": 85671215,
+    "merged_fp16": "smoke/merged",
+    "merged_bytes": 3457069101
+  },
+  "started_utc": "2026-08-21T02:22:34.855943+00:00",
+  "finished_utc": "2026-08-21T02:24:25.217607+00:00"
+}

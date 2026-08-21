@@ -86,9 +86,14 @@ directory. Pull the weights with:
 
 Environment knobs (deliberately NOT in configs/train.json -- they are infra, not
 hyperparameters, and train.json is frozen by policy):
-    SLMFORGE_GPU         Modal GPU type,   default "L4"   (24GB, bf16-capable)
+    SLMFORGE_GPU         Modal GPU type,   default "A100-80GB". NOT L4: see the
+                         GPU constant below for the measurement that ruled it out.
     SLMFORGE_TIMEOUT_S   function timeout, default 14400  (Modal's own default
                          is 300s and WILL kill a real run partway through)
+    SLMFORGE_MICRO_BATCH split the PINNED effective batch of 16 into smaller
+                         micro-batches (e.g. 4 -> batch 4 x accum 4). Preserves
+                         the effective batch exactly, and refuses to run if it
+                         would not. Buys VRAM without touching train.json.
 
 Written against modal client 1.5.4 (verified with the installed package):
 modal.App (modal.Stub does not exist in 1.5.x), gpu= as a string kwarg,
@@ -116,7 +121,15 @@ CONFIG_PATH = REPO_ROOT / "configs" / "train.json"
 REMOTE_VOL = "/vol"            # where the artifacts Volume is mounted
 REMOTE_HF_CACHE = "/root/.cache/huggingface"
 
-GPU = os.environ.get("SLMFORGE_GPU", "L4")
+# Qwen3's vocabulary is 151936 tokens, and the loss materialises a
+# [batch, seq, vocab] logits tensor plus an fp32 upcast of it inside
+# cross_entropy. At the PINNED per_device_train_batch_size of 8 that term, not
+# the 4-bit weights, is what sizes the GPU: a 20-step smoke on an L4 (24GB) OOMed
+# at step 3 with a measured peak of ~24.1GB at sequence length 1524, and
+# data/train/v1.jsonl reaches 2030 -- roughly 31GB. The batch size is pinned by
+# configs/train.json and is not the knob to turn here; the GPU is, which is
+# exactly why it lives in the environment and not in that file.
+GPU = os.environ.get("SLMFORGE_GPU", "A100-80GB")
 TIMEOUT_S = int(os.environ.get("SLMFORGE_TIMEOUT_S", "14400"))
 
 #: The pinned train_log.json shape. One lane writes it, one lane validates it,
@@ -134,16 +147,29 @@ ARTIFACT_KEYS = ("adapter", "adapter_bytes", "merged_fp16", "merged_bytes")
 # bitsandbytes ships CUDA kernels and needs a torch build matched to them, so we
 # start from NVIDIA's image rather than debian_slim.
 #
-# These ARE pinned, unlike the first cut, and the reason is not style. Unpinned
-# resolution installed a 9-month-old unsloth against a current transformers; the
-# old wrapper monkey-patched the new tokenizer loader and every run died with
-# "AttributeError: 'dict' object has no attribute 'model_type'". Unsloth is gone
-# (this file drives transformers.Trainer directly -- see train()), and with it
-# the only reason it was here: for a 1.7B model on ~900 examples its speedup is
-# irrelevant next to its version coupling. transformers is held on the 4.57 line
-# deliberately: 5.x REMOVED TrainingArguments.warmup_ratio, which
-# configs/train.json pins and this file passes, so resolving forward would break
-# a frozen config contract silently.
+# These ARE pinned, and two separate failures are the reason.
+#
+# 1. transformers is held at 4.57.6, and the lower bound matters as much as the
+#    upper one. 4.57.2 -- which unpinned resolution selected -- carries a bug in
+#    the Mistral-regex workaround at tokenization_utils_base.py:2416-2419: it
+#    does `_config = json.load(f)` and then reads `_config.model_type` off the
+#    resulting dict. Every load of a large-vocab (>100k) fast tokenizer from a
+#    LOCAL path with config.transformers_version <= 4.57.2 dies with
+#    "AttributeError: 'dict' object has no attribute 'model_type'". Qwen3-1.7B
+#    is vocab 151936, transformers_version 4.51.0, and snapshot_download hands
+#    us a local path -- all four conditions, every time. The block is absent in
+#    4.57.1 and fixed in 4.57.3+ (`_config.get("model_type")`).
+#    This, NOT unsloth, was the original blocker. The first diagnosis blamed an
+#    old unsloth monkey-patching a new transformers; the identical traceback
+#    reproduced with unsloth fully removed, which is what disproved it.
+# 2. transformers 5.x REMOVED TrainingArguments.warmup_ratio, which
+#    configs/train.json pins and this file passes, so resolving FORWARD would
+#    break a frozen config contract silently. Hence the 4.57 line specifically.
+#
+# Unsloth is gone regardless, and that is not collateral damage: for a 1.7B
+# model on ~900 examples its speedup is irrelevant next to its version
+# coupling, and the spec explicitly permits TRL/PEFT directly. train() drives
+# transformers.Trainer with its own feature builder and collator either way.
 #
 # torch 2.12 bundles a CUDA 13 runtime; bitsandbytes 0.50 ships CUDA 13 kernels,
 # so the pair is self-consistent and the base image only supplies the OS. If the
@@ -151,7 +177,7 @@ ARTIFACT_KEYS = ("adapter", "adapter_bytes", "merged_fp16", "merged_bytes")
 # release -- change it there, re-smoke, and do not touch anything else.
 PIP_PACKAGES = [
     "torch==2.12.1",
-    "transformers==4.57.2",
+    "transformers==4.57.6",     # NOT 4.57.2: see (1) above -- it cannot load this tokenizer
     "tokenizers==0.22.2",        # transformers 4.57 caps <=0.23.0; 0.23.0 final never shipped
     "huggingface_hub==0.36.2",   # transformers 4.57 caps <1.0, and hf_transfer needs hub 0.x
     "hf_transfer==0.1.9",
@@ -183,6 +209,10 @@ image = (
             "HF_HOME": REMOTE_HF_CACHE,
             "HF_HUB_ENABLE_HF_TRANSFER": "1",
             "TOKENIZERS_PARALLELISM": "false",
+            # The logits tensor above is allocated and freed every step at a size
+            # that varies with the batch's longest row, which is the pathological
+            # case for the caching allocator's fixed segments.
+            "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
         }
     )
     # Mounted (copy=False) rather than baked, so editing the dataset or the
@@ -250,6 +280,55 @@ def resolve_config(cfg: dict, smoke: bool) -> dict:
             resolved[key].update(val)
         else:
             resolved["training"][key] = val
+    return resolved
+
+
+def apply_micro_batch_split(resolved: dict, micro_batch: int) -> dict:
+    """Re-factorize the PINNED effective batch into smaller micro-batches.
+
+    configs/train.json pins per_device_train_batch_size=8 and
+    gradient_accumulation_steps=2. What the optimizer actually sees is their
+    PRODUCT -- and tests/test_training_config.py already treats that product,
+    16, as the invariant worth asserting. How those 16 examples are split into
+    micro-batches is a memory/throughput property of the GPU, not a
+    hyperparameter of the experiment: the gradient applied per optimizer step is
+    the same either way (transformers normalises by num_items_in_batch, so
+    accumulation is not the old averaging-of-averages bug).
+
+    That distinction is load-bearing here. Qwen3's 151936-token vocabulary makes
+    the [micro_batch, seq, vocab] logits tensor -- and its fp32 upcast inside
+    cross_entropy -- the single largest allocation in the step, so halving the
+    micro-batch nearly halves peak VRAM while leaving the run's arithmetic
+    alone. It is the only lever that buys memory without changing what is being
+    measured.
+
+    So this NEVER changes the effective batch, and asserts as much rather than
+    trusting itself. configs/train.json is not edited; the knob is an
+    environment variable, exactly like SLMFORGE_GPU and for the same reason.
+    """
+    if not micro_batch:
+        return resolved
+    tcfg = resolved["training"]
+    effective = tcfg["per_device_train_batch_size"] * tcfg["gradient_accumulation_steps"]
+    if micro_batch < 1 or effective % micro_batch:
+        raise ValueError(
+            f"SLMFORGE_MICRO_BATCH={micro_batch} does not divide the pinned "
+            f"effective batch of {effective}; a split that changes the effective "
+            f"batch would change the experiment, not just its memory profile")
+    tcfg["per_device_train_batch_size"] = micro_batch
+    tcfg["gradient_accumulation_steps"] = effective // micro_batch
+    split_effective = (tcfg["per_device_train_batch_size"]
+                       * tcfg["gradient_accumulation_steps"])
+    if split_effective != effective:
+        raise AssertionError(
+            f"micro-batch split changed the effective batch "
+            f"{effective} -> {split_effective}; refusing to train")
+    resolved["_micro_batch_split"] = {
+        "requested": micro_batch,
+        "effective_batch_preserved": effective,
+        "per_device_train_batch_size": tcfg["per_device_train_batch_size"],
+        "gradient_accumulation_steps": tcfg["gradient_accumulation_steps"],
+    }
     return resolved
 
 
@@ -679,7 +758,8 @@ def build_train_log(*, base_repo, base_revision, config_resolved, dataset_path,
     volumes={REMOTE_VOL: artifacts_vol, REMOTE_HF_CACHE: hf_cache_vol},
     secrets=[_hf_secret()],
 )
-def train(smoke: bool, dataset_path: str, run_name: str) -> dict:
+def train(smoke: bool, dataset_path: str, run_name: str,
+          micro_batch: int = 0, gpu_requested: str = "") -> dict:
     import hashlib
     import time
     from datetime import datetime, timezone
@@ -698,7 +778,7 @@ def train(smoke: bool, dataset_path: str, run_name: str) -> dict:
     sys.path.insert(0, REMOTE_REPO)
 
     cfg = load_config(Path(REMOTE_REPO) / "configs" / "train.json")
-    resolved = resolve_config(cfg, smoke)
+    resolved = apply_micro_batch_split(resolve_config(cfg, smoke), micro_batch)
     tcfg = resolved["training"]
     lcfg = resolved["lora"]
     qcfg = resolved["quantization"]
@@ -930,6 +1010,8 @@ def train(smoke: bool, dataset_path: str, run_name: str) -> dict:
     if not merged_files:
         raise RuntimeError(f"merged directory {merged_dir} is empty after save")
 
+    peak_vram_bytes = int(torch.cuda.max_memory_allocated())
+
     finished_utc = datetime.now(timezone.utc).isoformat()
     train_log = build_train_log(
         base_repo=base_repo,
@@ -975,7 +1057,17 @@ def train(smoke: bool, dataset_path: str, run_name: str) -> dict:
         "smoke": bool(smoke),
         "volume": ocfg["modal_volume"],
         "run_dir_remote": str(out_root),
-        "gpu": GPU,
+        # NOT `GPU`. That constant is os.environ.get(...) evaluated at import,
+        # and a Modal container does not inherit the launching shell's
+        # environment -- so inside here it is always the DEFAULT, whatever GPU
+        # the run actually landed on. The first passing smoke recorded
+        # "A100-80GB" for a run that was demonstrably on an A10G. What the
+        # driver reports is measured; what the constant says is a guess.
+        "gpu": torch.cuda.get_device_name(0),
+        "gpu_requested": gpu_requested or GPU,
+        # Measured, not estimated. The first L4 attempt died guessing at this.
+        "peak_vram_bytes": peak_vram_bytes,
+        "peak_vram_gib": round(peak_vram_bytes / 1024 ** 3, 2),
         "tokenization": ds_stats,
         "wall_time_s": {"model_load": round(load_s, 2),
                         "tokenize": round(tokenize_s, 2),
@@ -1039,7 +1131,15 @@ def main(smoke: bool = False, dataset: str = "", out_dir: str = "",
     print(f"[slmforge] gpu={GPU} timeout={TIMEOUT_S}s smoke={smoke}")
     print(f"[slmforge] dataset={dataset} run_name={run_name} out_dir={out_dir}")
 
-    manifest = train.remote(smoke=smoke, dataset_path=dataset, run_name=run_name)
+    # Read locally and passed explicitly: a Modal container does not inherit
+    # this shell's environment, so reading it inside train() would silently
+    # always see "unset" and the split would never happen.
+    micro_batch = int(os.environ.get("SLMFORGE_MICRO_BATCH", "0") or 0)
+    if micro_batch:
+        print(f"[slmforge] micro_batch={micro_batch} (effective batch unchanged)")
+
+    manifest = train.remote(smoke=smoke, dataset_path=dataset, run_name=run_name,
+                            micro_batch=micro_batch, gpu_requested=GPU)
 
     train_log = manifest["train_log"]
     out_path = REPO_ROOT / out_dir

@@ -1028,3 +1028,67 @@ def test_train_log_evidence_matches_what_the_feature_builder_actually_fed(app_mo
     assert templated == rows[index]["messages"][:1]
     assert [t["role"] for t in templated] == ["user"]
     assert templated[0]["content"] in evidence
+
+
+# =====================================================================
+# The micro-batch split: buys VRAM without changing the experiment.
+# =====================================================================
+# Qwen3's 151936-token vocabulary makes the [batch, seq, vocab] logits tensor
+# the largest allocation in a training step, so the PINNED batch of 8 does not
+# fit the 24GB GPUs this project can actually reach. The split exists to halve
+# that tensor. It is only legitimate while the effective batch is untouched --
+# that is the whole argument for not calling it a hyperparameter change -- so
+# these tests bind the invariant rather than the convenience.
+def test_the_micro_batch_split_preserves_the_pinned_effective_batch(app_mod, train_cfg):
+    pinned = (train_cfg["training"]["per_device_train_batch_size"]
+              * train_cfg["training"]["gradient_accumulation_steps"])
+    for micro in (1, 2, 4, 8, 16):
+        resolved = app_mod.apply_micro_batch_split(
+            app_mod.resolve_config(train_cfg, False), micro)
+        t = resolved["training"]
+        assert t["per_device_train_batch_size"] == micro
+        assert t["per_device_train_batch_size"] * t["gradient_accumulation_steps"] == pinned, (
+            f"micro-batch {micro} changed the effective batch; the split would "
+            f"then be a hyperparameter change wearing an infrastructure hat")
+
+
+def test_a_micro_batch_that_would_change_the_effective_batch_is_refused(app_mod, train_cfg):
+    """A split that does not divide the effective batch cannot preserve it.
+    Silently rounding would train a different experiment than the one pinned."""
+    for micro in (3, 5, 6, 7, 9, 32):
+        with pytest.raises(ValueError):
+            app_mod.apply_micro_batch_split(
+                app_mod.resolve_config(train_cfg, False), micro)
+
+
+def test_an_unset_micro_batch_changes_nothing(app_mod, train_cfg):
+    """The default path must be byte-identical to no split at all."""
+    plain = app_mod.resolve_config(train_cfg, False)
+    split = app_mod.apply_micro_batch_split(app_mod.resolve_config(train_cfg, False), 0)
+    assert split == plain
+    assert "_micro_batch_split" not in split
+
+
+def test_the_split_is_recorded_so_a_run_is_reconstructible(app_mod, train_cfg):
+    """config_resolved goes into train_log.json. A run whose batch split is not
+    recorded there cannot be reproduced from its own evidence."""
+    resolved = app_mod.apply_micro_batch_split(
+        app_mod.resolve_config(train_cfg, False), 4)
+    record = resolved["_micro_batch_split"]
+    assert record["requested"] == 4
+    assert record["effective_batch_preserved"] == (
+        train_cfg["training"]["per_device_train_batch_size"]
+        * train_cfg["training"]["gradient_accumulation_steps"])
+    assert (record["per_device_train_batch_size"]
+            * record["gradient_accumulation_steps"]) == record["effective_batch_preserved"]
+
+
+def test_the_split_never_edits_the_pinned_config_on_disk(app_mod):
+    """The knob is an environment variable precisely so configs/train.json stays
+    frozen. Mutating the loaded dict must not write through to the file."""
+    before = TRAIN_JSON.read_text()
+    app_mod.apply_micro_batch_split(app_mod.resolve_config(app_mod.load_config(), False), 2)
+    assert TRAIN_JSON.read_text() == before
+    on_disk = json.loads(TRAIN_JSON.read_text())["training"]
+    assert on_disk["per_device_train_batch_size"] == 8
+    assert on_disk["gradient_accumulation_steps"] == 2
