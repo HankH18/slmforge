@@ -391,12 +391,51 @@ move `banned_letter` and therefore the headline. If it does not, the thesis is
 wrong in a way I would have to report, and volume or model capacity becomes the
 better explanation.
 
-> **Pending:** the v2 base-vs-tuned numbers land here — spec-adherence,
-> robustness, per-type `banned_letter` pass count against the 1/105 baseline, and
-> the held-out-type rows. The v2 corpus is generating now under `--letter-mix
-> hard`; training and evaluation follow on the same pinned config and the same
-> `data/scenarios/corpus.jsonl`, so the only variable between the two tuned models
-> is the composition of the training set.
+### The answer: partly, and the metric nearly hid it
+
+v2 was generated under `--letter-mix hard`, trained on the same pinned config,
+and evaluated on the same 147-scenario corpus. The letter distribution inverted
+as intended — kept `e` rows went 32 → 159, `a` 33 → 107, while `p` fell 71 → 7.
+
+On the graded metric, the intervention looks like a failure:
+
+| | base | v1 | v2 |
+|---|---|---|---|
+| `spec_adherence` | 0.0890 | 0.0748 | 0.0820 |
+| `robustness` | 0.1029 | 0.1014 | 0.0870 |
+| `banned_letter` instances passed | 0/105 | 1/105 | 1/105 |
+
+Five times the `e` examples bought one extra passing instance. Taken alone, that
+says the thesis is wrong.
+
+It is not alone. `spec_adherence` requires **zero** occurrences of the banned
+letter in a response; it cannot distinguish "one slip" from "forty". Counting how
+often the letter actually appears — the quantity the behavior is made of — the
+three models are nowhere near each other:
+
+| | base | v1 | v2 |
+|---|---|---|---|
+| median occurrences per response | 34.0 | 20.0 | **14.0** |
+| per 1,000 characters | 67.7 | 50.5 | **36.5** |
+| letter `e` specifically | 42.0 | 32.0 | **16.0** |
+
+A 59% reduction from base, monotone across both iterations, and `e` — the exact
+letter v2's rebalancing targeted — halved again from v1. The model is
+demonstrably learning to avoid the letter. It has not learned to avoid it
+*completely*, and completely is the only thing the checker can see.
+
+**So data → behavior held, on the behavior. It did not hold on the metric.** The
+composition hypothesis was right: changing only which letters the training set
+contains moved the error rate by more than half, with no hyperparameter touched.
+What it did not do is cross the threshold that scores.
+
+That distinction is the most useful thing this project has produced, because it
+generalises past this task: **a pass/fail constraint metric is a cliff.**
+Progress accumulates invisibly on the far side of it and then arrives all at
+once. A team watching only `spec_adherence` across these two iterations would
+have concluded their data work was worthless while the underlying error fell 59%
+— and would have gone looking for a hyperparameter, which is precisely the move
+the project's own rules forbid.
 
 Two things I will be watching that are not the headline:
 
@@ -413,8 +452,31 @@ Two things I will be watching that are not the headline:
 
 ## 8. Minimum viable dataset size
 
-> **Pending:** the data-efficiency curve is being produced; the justified N lands
-> here.
+Four checkpoints at N = 106 / 211 / 423 / 846 — the spec's own log spacing on
+the v2 corpus — each evaluated on the identical eval set, with the base model as
+the N=0 reference:
+
+| N | `spec_adherence` | `robustness` | median banned-letter occurrences |
+|---|---|---|---|
+| 0 (base) | 0.0890 | 0.1029 | 34.0 |
+| 106 | 0.0612 | 0.0580 | 35.0 |
+| 211 | 0.0884 | 0.1014 | 33.0 |
+| 423 | 0.0816 | 0.0870 | 29.0 |
+| 846 | 0.0816 | 0.0870 | **14.0** |
+
+**The honest answer is that this sweep does not contain the minimum viable N.**
+On the binary metric no point holds the behavior — every one sits at or below
+base. On the sensitive metric the error is still falling steeply at the largest N
+with no hint of a plateau, so the threshold lies *above* 846 and the sweep has
+not bracketed it. Extending upward (2× and 4× the current N) would bracket it;
+refining downward would only measure the flat part more precisely.
+
+Two things in that table are worth not smoothing over. The N=106 point is
+*worse* than base on both metrics and has the highest occurrence count of any
+point — small-N fine-tuning appears to damage the behavior before it helps it.
+And the binary column is non-monotone while the occurrence column is monotone
+from N=211 — the same cliff effect as above, visible here as noise in one column
+and signal in the other.
 
 The mechanism is already in the repo. `scripts/make_subset.py` builds
 **nested** (each smaller subset is a prefix of the same seeded shuffle, so a

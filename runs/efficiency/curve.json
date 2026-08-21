@@ -1,0 +1,54 @@
+{
+  "points": [
+    {
+      "n": 0,
+      "label": "base",
+      "spec_adherence": 0.089,
+      "robustness": 0.1029,
+      "all_checkers": 27,
+      "n_scored": 146,
+      "median_banned_letter_occurrences": 34,
+      "model": "hf:Qwen/Qwen3-1.7B@70d244cc86ccca08cf5af4e1e306ecf908b1ad5e"
+    },
+    {
+      "n": 106,
+      "label": "v2 n=106",
+      "spec_adherence": 0.0612,
+      "robustness": 0.058,
+      "all_checkers": 24,
+      "n_scored": 147,
+      "median_banned_letter_occurrences": 35,
+      "model": "hf:runs/efficiency/n106/merged"
+    },
+    {
+      "n": 211,
+      "label": "v2 n=211",
+      "spec_adherence": 0.0884,
+      "robustness": 0.1014,
+      "all_checkers": 22,
+      "n_scored": 147,
+      "median_banned_letter_occurrences": 33,
+      "model": "hf:runs/efficiency/n211/merged"
+    },
+    {
+      "n": 423,
+      "label": "v2 n=423",
+      "spec_adherence": 0.0816,
+      "robustness": 0.087,
+      "all_checkers": 18,
+      "n_scored": 147,
+      "median_banned_letter_occurrences": 29,
+      "model": "hf:runs/efficiency/n423/merged"
+    },
+    {
+      "n": 846,
+      "label": "v2 n=846",
+      "spec_adherence": 0.0816,
+      "robustness": 0.087,
+      "all_checkers": 20,
+      "n_scored": 147,
+      "median_banned_letter_occurrences": 14,
+      "model": "hf:runs/train_v2/merged"
+    }
+  ]
+}
