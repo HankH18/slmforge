@@ -601,8 +601,8 @@ def test_report_lines_carry_no_trailing_whitespace():
 def test_footer_states_the_negative_headline_result():
     footer = D.format_footer()
     assert "WORSE" in footer
-    assert "0.0890" in footer and "0.0748" in footer
-    assert "docs/MVP_REPORT.md" in footer
+    assert "0.0890" in footer and "0.0816" in footer
+    assert "docs/FINAL_REPORT.md" in footer
     assert "anecdote" in footer
     lowered = footer.lower()
     for claim in ("tuned wins", "the tuned model is better", "proves the tuned"):
@@ -615,7 +615,7 @@ def test_footer_names_every_constraint_type_with_its_split():
         assert ctype in footer
     assert "heldout_type" in footer
     # the two collapses the write-up turns on
-    assert "78.0% ->  43.9%" in footer
+    assert "78.0% ->  41.5%" in footer
     assert "72.0% ->   4.0%" in footer
 
 
@@ -625,12 +625,17 @@ def test_footer_is_printed_on_every_report():
 
 
 def test_footer_numbers_match_the_committed_mvp_package():
-    """The footer's numbers are RE-DERIVED here from runs/mvp. If the package is
-    ever re-run, this fails rather than letting the demo quote stale figures."""
-    run_dir = REPO_ROOT / "runs" / "mvp"
+    """The footer's numbers are RE-DERIVED here from the package that holds the
+    checkpoint models.json currently pins. If the package is ever re-run, or the
+    pin moves to a different checkpoint, this fails rather than letting the demo
+    quote figures for a model the grader will not download.
+
+    The run dir is runs/final rather than runs/mvp because the pin moved: runs/mvp
+    is the frozen MVP package and is pinned by `tuned_mvp`."""
+    run_dir = REPO_ROOT / "runs" / "final"
     results = sorted(run_dir.glob("*.results.json"))
     if len(results) != 2:
-        pytest.skip("runs/mvp is not the two-cell MVP package")
+        pytest.skip("runs/final is not the two-cell final package")
     cfg = json.loads((REPO_ROOT / "configs" / "models.json").read_text())
     want = {"base": cfg["base"], "tuned": f"hf:{cfg['tuned']}"}
     cells = {}
@@ -639,7 +644,7 @@ def test_footer_numbers_match_the_committed_mvp_package():
         for role, spec in want.items():
             if data["model"] == spec:
                 cells[role] = (data, path)
-    assert set(cells) == {"base", "tuned"}, "runs/mvp does not hold both pinned models"
+    assert set(cells) == {"base", "tuned"}, "runs/final does not hold both pinned models"
 
     for i, role in enumerate(("base", "tuned")):
         data, path = cells[role]

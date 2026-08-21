@@ -51,7 +51,8 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 import harness
 import judge as judge_mod
-from harness import STRATEGIES, aggregate, build_constraint_lookup, score_scenario
+from harness import (STRATEGIES, HarnessError, aggregate, build_constraint_lookup,
+                     score_scenario, validate_eval_set)
 from scenarios.render import render_user_message
 
 REPO_ROOT = Path(__file__).resolve().parent
@@ -443,6 +444,17 @@ def main():
     constraint_lookup = build_constraint_lookup(load_jsonl(args.constraints))
     exemplars = load_jsonl(args.exemplars) if args.exemplars else None
 
+    # Before a single token is generated or a single judge call is billed. An
+    # eval set is often somebody else's file -- the staff held-out set is by
+    # definition one we have never seen -- and the fields aggregate() needs were
+    # previously read only at the very end, so a missing one destroyed a
+    # finished run and wrote nothing.
+    try:
+        validate_eval_set(scenarios, constraint_lookup, render_user_message)
+    except HarnessError as exc:
+        print(f"FAIL {args.eval_set}: {exc}", file=sys.stderr)
+        return 2
+
     if args.judge.startswith("mock"):
         _, _, score = args.judge.partition(":")
         judge_fn = judge_mod.MockJudge(int(score) if score else 4)
@@ -472,4 +484,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # sys.exit(main()), not main(): a bare call discards the return value, so a
+    # refused eval set would exit 0 and every caller would read the run as a
+    # success that simply produced no output.
+    sys.exit(main())

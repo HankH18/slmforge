@@ -970,8 +970,8 @@ def check_declarations_are_visible(gate, regions, normalized, covered):
             f"the visible text of the declared region, not only in the comment.")
 
 
-def check_report_metrics(gate, text, block):
-    """docs/MVP_REPORT.md must CONTAIN the generated block, byte for byte, and
+def check_report_metrics(gate, text, block, report_rel="docs/MVP_REPORT.md"):
+    """The report must CONTAIN the generated block, byte for byte, and
     state no rate-shaped number outside it.
 
     WHY THIS IS NOT A PARSER ANY MORE. The rule this replaced was already the
@@ -1022,7 +1022,7 @@ def check_report_metrics(gate, text, block):
     n_begin, n_end = text.count(BEGIN_METRICS), text.count(END_METRICS)
     if n_begin != 1 or n_end != 1:
         gate.fail(
-            f"docs/MVP_REPORT.md holds {n_begin} {BEGIN_METRICS!r} marker(s) and "
+            f"{report_rel} holds {n_begin} {BEGIN_METRICS!r} marker(s) and "
             f"{n_end} {END_METRICS!r} marker(s); exactly one of each is required. "
             f"The report's numbers are generated, not written: run "
             f"`python scripts/check_mvp.py --emit-metrics` and paste the block it "
@@ -1031,7 +1031,7 @@ def check_report_metrics(gate, text, block):
         i0 = next(i for i, ln in enumerate(lines) if BEGIN_METRICS in ln)
         i1 = next(i for i, ln in enumerate(lines) if END_METRICS in ln)
         if i1 < i0:
-            gate.fail(f"docs/MVP_REPORT.md closes the generated metrics block at "
+            gate.fail(f"{report_rel} closes the generated metrics block at "
                       f"line {i1 + 1}, before it opens it at line {i0 + 1}")
         else:
             block_lines = set(range(i0, i1 + 1))
@@ -1042,12 +1042,12 @@ def check_report_metrics(gate, text, block):
                 diff = "\n".join(
                     "      " + d for d in difflib.unified_diff(
                         found.splitlines(), block.splitlines(),
-                        fromfile="docs/MVP_REPORT.md lines "
+                        fromfile=f"{report_rel} lines "
                                  f"{i0 + 1}-{i1 + 1} (as committed)",
                         tofile="re-derived from the committed transcripts",
                         lineterm="", n=1))
                 gate.fail(
-                    f"docs/MVP_REPORT.md's generated metrics block is not the one "
+                    f"{report_rel}'s generated metrics block is not the one "
                     f"this gate re-derives from the transcripts. It is generated "
                     f"output, not prose: regenerate it with "
                     f"`python scripts/check_mvp.py --emit-metrics` rather than "
@@ -1058,7 +1058,7 @@ def check_report_metrics(gate, text, block):
     covered = sorted(block_lines & set(exempt))
     if covered:
         gate.fail(
-            f"docs/MVP_REPORT.md line {covered[0] + 1}: the generated metrics "
+            f"{report_rel} line {covered[0] + 1}: the generated metrics "
             f"block sits inside a non-metric declaration "
             f"({exempt[covered[0]]!r}). The block IS the measurement -- the "
             f"declaration is for config values, counts and dates, and a report "
@@ -1085,7 +1085,7 @@ def check_report_metrics(gate, text, block):
             for tier, ev, _, _ in fatal:
                 if tier in ("V", "E") or METRIC_WORDS.search(norm):
                     gate.fail(
-                        f"docs/MVP_REPORT.md line {line_no + 1} is declared "
+                        f"{report_rel} line {line_no + 1} is declared "
                         f"non-metric ({exempt[line_no]!r}) but states a number in "
                         f"metric vocabulary: {ev!r} in {raw.strip()!r}. The "
                         f"declaration is for config values, counts and dates; a "
@@ -1093,7 +1093,7 @@ def check_report_metrics(gate, text, block):
                         f"generated from the transcripts.")
                 else:
                     gate.fail(
-                        f"docs/MVP_REPORT.md line {line_no + 1} is declared "
+                        f"{report_rel} line {line_no + 1} is declared "
                         f"non-metric ({exempt[line_no]!r}) but states {ev!r}, and "
                         f"a percentage, a printed fraction or a number carrying a "
                         f"rate unit can never be declared away -- there is no "
@@ -1104,7 +1104,7 @@ def check_report_metrics(gate, text, block):
         for tier, ev, _, _ in fatal:
             if tier == "E":
                 gate.fail(
-                    f"docs/MVP_REPORT.md line {line_no + 1} speaks metric "
+                    f"{report_rel} line {line_no + 1} speaks metric "
                     f"vocabulary beside {ev!r}, a performance number this gate "
                     f"cannot check: {where}. Let the block carry the claim, or -- "
                     f"if {ev!r} really is a count, a seed or a config value -- "
@@ -1112,7 +1112,7 @@ def check_report_metrics(gate, text, block):
                     f"without metric vocabulary. Line: {raw.strip()!r}")
             else:
                 gate.fail(
-                    f"docs/MVP_REPORT.md line {line_no + 1} states {ev!r}, a "
+                    f"{report_rel} line {line_no + 1} states {ev!r}, a "
                     f"performance number this gate cannot check: {where}, and the "
                     f"line is not declared non-metric. Regenerate the block with "
                     f"`python scripts/check_mvp.py --emit-metrics` and let it "
@@ -1142,13 +1142,13 @@ def check_report_metrics(gate, text, block):
                 continue
             first, last = touched[0][2], touched[-1][2]
             gate.fail(
-                f"docs/MVP_REPORT.md lines {first + 1}-{last + 1} state "
+                f"{report_rel} lines {first + 1}-{last + 1} state "
                 f"{' '.join(m.group(0).split())!r} across a line break, a "
                 f"performance number this gate cannot check: {where}. Splitting a "
                 f"claim over two lines does not make it a different claim.")
 
     if block_ok:
-        gate.note(f"the generated metrics block in docs/MVP_REPORT.md is "
+        gate.note(f"the generated metrics block in {report_rel} is "
                   f"byte-identical to the one re-derived from the committed "
                   f"transcripts ({len(BLOCK_RATES) + len(BLOCK_COUNTS)} rows x "
                   f"base|tuned|delta, {len(block.splitlines())} lines)")
@@ -1161,7 +1161,7 @@ def check_report_metrics(gate, text, block):
 
 
 # ------------------------------------------------------------------ package
-def load_models_json(gate, root):
+def load_models_json(gate, root, pin_key="tuned"):
     path = root / "configs" / "models.json"
     if not gate.require(path.exists(), "configs/models.json missing"):
         return None
@@ -1173,9 +1173,9 @@ def load_models_json(gate, root):
     if not isinstance(cfg, dict):
         gate.fail("configs/models.json is not a JSON object")
         return None
-    tuned = cfg.get("tuned")
+    tuned = cfg.get(pin_key)
     if not isinstance(tuned, str) or not TUNED_RE.match(tuned):
-        gate.fail(f"configs/models.json['tuned'] == {tuned!r}; expected "
+        gate.fail(f"configs/models.json[{pin_key!r}] == {tuned!r}; expected "
                   f"'<owner>/<name>@<40-hex-sha>' -- the spec's Verification "
                   f"Requirements need the public HF repo id AND the exact commit")
         return None
@@ -1342,22 +1342,22 @@ def score_role(gate, role, spec, cells, eval_index, instances):
 
 # ------------------------------------------------------------------- report
 def check_report(gate, root, cfg, base_spec, run_dir, block, rubric_hash,
-                 eval_rel):
-    report_path = root / "docs" / "MVP_REPORT.md"
-    if not gate.require(report_path.exists(), "docs/MVP_REPORT.md missing"):
+                 eval_rel, report_path, pin_key="tuned"):
+    report_rel = report_path.relative_to(root).as_posix()
+    if not gate.require(report_path.exists(), f"{report_rel} missing"):
         return
     text = report_path.read_text()
     if not text.strip():
-        gate.fail("docs/MVP_REPORT.md is empty")
+        gate.fail(f"{report_rel} is empty")
         return
 
-    tuned = cfg["tuned"]
+    tuned = cfg[pin_key]
     repo_id, _, model_sha = tuned.partition("@")
 
     # --- pinned versions: public repo id + exact commit ------------------
     if tuned not in text:
-        gate.fail(f"docs/MVP_REPORT.md does not contain the pinned tuned model "
-                  f"{tuned!r} from configs/models.json['tuned'] -- the spec's "
+        gate.fail(f"{report_rel} does not contain the pinned tuned model "
+                  f"{tuned!r} from configs/models.json[{pin_key!r}] -- the spec's "
                   f"Verification Requirements need the exact HF repo id + commit "
                   f"hash")
     else:
@@ -1365,12 +1365,12 @@ def check_report(gate, root, cfg, base_spec, run_dir, block, rubric_hash,
                   f"models.json: {tuned}")
     for other in SHA40_RE.findall(text):
         if other != model_sha and f"{repo_id}@{other}" in text:
-            gate.fail(f"docs/MVP_REPORT.md pins {repo_id}@{other} but "
-                      f"configs/models.json['tuned'] says {tuned}")
+            gate.fail(f"{report_rel} pins {repo_id}@{other} but "
+                      f"configs/models.json[{pin_key!r}] says {tuned}")
 
     base_repo = base_spec.split(":", 1)[1]
     if base_repo not in text and base_repo.split("@", 1)[0] not in text:
-        gate.fail(f"docs/MVP_REPORT.md never mentions the base model "
+        gate.fail(f"{report_rel} never mentions the base model "
                   f"{base_repo!r} -- a base-vs-tuned report must name both")
 
     # --- the eval-code commit hash --------------------------------------
@@ -1380,7 +1380,7 @@ def check_report(gate, root, cfg, base_spec, run_dir, block, rubric_hash,
         if m and "eval" in ln.lower() and m.group(0) != model_sha:
             eval_shas.add(m.group(0))
     if not eval_shas:
-        gate.fail("docs/MVP_REPORT.md has no eval-code commit hash: the spec "
+        gate.fail(f"{report_rel} has no eval-code commit hash: the spec "
                   "requires the exact eval-code commit alongside the model "
                   "commit. Write it on a line that says 'eval', e.g. "
                   "`| eval-code commit | <40-hex-sha> |`")
@@ -1388,10 +1388,10 @@ def check_report(gate, root, cfg, base_spec, run_dir, block, rubric_hash,
         gate.note(f"eval-code commit recorded: {sorted(eval_shas)[0]}")
 
     if rubric_hash not in text:
-        gate.fail(f"docs/MVP_REPORT.md does not state the judge rubric hash "
+        gate.fail(f"{report_rel} does not state the judge rubric hash "
                   f"{rubric_hash!r} the numbers were scored under")
     if eval_rel not in text:
-        gate.fail(f"docs/MVP_REPORT.md does not name the eval set {eval_rel!r} "
+        gate.fail(f"{report_rel} does not name the eval set {eval_rel!r} "
                   f"both models were scored on")
 
     # --- the report states both headline metrics -------------------------
@@ -1402,10 +1402,10 @@ def check_report(gate, root, cfg, base_spec, run_dir, block, rubric_hash,
     normalized = text.lower().replace("-", "_").replace(" ", "_")
     for metric in ("spec_adherence", "robustness"):
         if metric not in normalized:
-            gate.fail(f"docs/MVP_REPORT.md never reports {metric}")
+            gate.fail(f"{report_rel} never reports {metric}")
 
     # --- the numbers are the GENERATED ones, and nothing else is a number --
-    check_report_metrics(gate, text, block)
+    check_report_metrics(gate, text, block, report_rel)
 
     # --- one-command repro line ------------------------------------------
     report_cmds = logical_commands(text)
@@ -1413,10 +1413,10 @@ def check_report(gate, root, cfg, base_spec, run_dir, block, rubric_hash,
              if "eval.py" in c and "--model" in c and "--eval-set" in c]
     pinned_repro = [c for c in repro if tuned in c]
     if not repro:
-        gate.fail("docs/MVP_REPORT.md has no one-command repro line "
+        gate.fail(f"{report_rel} has no one-command repro line "
                   "(`eval.py --model ... --eval-set ...`)")
     elif not pinned_repro:
-        gate.fail(f"the repro line in docs/MVP_REPORT.md does not pin "
+        gate.fail(f"the repro line in {report_rel} does not pin "
                   f"{tuned!r}: {repro[0]!r}")
     else:
         readme_path = root / "README.md"
@@ -1426,7 +1426,7 @@ def check_report(gate, root, cfg, base_spec, run_dir, block, rubric_hash,
             readme_cmds = set(logical_commands(readme_path.read_text()))
             for cmd in pinned_repro:
                 if cmd not in readme_cmds:
-                    gate.fail(f"the repro line in docs/MVP_REPORT.md is not "
+                    gate.fail(f"the repro line in {report_rel} is not "
                               f"byte-consistent with README.md.\n"
                               f"      report: {cmd}\n"
                               f"      README has: "
@@ -1441,14 +1441,14 @@ def check_report(gate, root, cfg, base_spec, run_dir, block, rubric_hash,
     for tp in transcripts:
         rel = tp.relative_to(root).as_posix()
         if rel not in text:
-            gate.fail(f"docs/MVP_REPORT.md does not reference the transcripts "
+            gate.fail(f"{report_rel} does not reference the transcripts "
                       f"file {rel} -- the spec requires the raw judge transcripts "
                       f"to be pointed at, not just produced")
 
     # --- every path it cites exists --------------------------------------
     for rel in referenced_paths(text):
         if not (root / rel).exists():
-            gate.fail(f"docs/MVP_REPORT.md references {rel} which does not exist "
+            gate.fail(f"{report_rel} references {rel} which does not exist "
                       f"on disk")
 
 
@@ -1458,6 +1458,15 @@ def main(argv=None):
     ap.add_argument("--root", default=str(REPO_ROOT),
                     help="repo root holding runs/mvp, docs/, configs/, README.md")
     ap.add_argument("--run-dir", default=None, help="override runs/mvp")
+    ap.add_argument("--report", default=None,
+                    help="override docs/MVP_REPORT.md. The repo carries one "
+                         "frozen package per submission -- the MVP report and "
+                         "runs/mvp record what was submitted at MVP and must "
+                         "keep re-deriving after a later checkpoint is published")
+    ap.add_argument("--pin-key", default="tuned",
+                    help="which configs/models.json key names the checkpoint "
+                         "this package documents (default 'tuned', the current "
+                         "published model)")
     ap.add_argument("--emit-metrics", action="store_true",
                     help="print the generated metrics block for "
                          "docs/MVP_REPORT.md on stdout and exit 0. The report is "
@@ -1468,9 +1477,16 @@ def main(argv=None):
 
     root = Path(args.root).resolve()
     run_dir = Path(args.run_dir).resolve() if args.run_dir else root / "runs" / "mvp"
+    report_path = (Path(args.report).resolve() if args.report
+                   else root / "docs" / "MVP_REPORT.md")
     emit = args.emit_metrics
     log = sys.stderr if emit else sys.stdout
-    gate = Gate(f"MVP submission check: {root}", stream=log)
+    # The banner names the package, so a passing run says WHICH one passed.
+    # "MVP" stays the default wording: it is the package this gate was written
+    # for and the one the default arguments still check.
+    label = {"MVP_REPORT": "MVP", "FINAL_REPORT": "FINAL"}.get(
+        report_path.stem, report_path.stem)
+    gate = Gate(f"{label} submission check: {root}", stream=log)
     print(f"checking {root} against judge rubric {judge_mod.rubric_hash()}",
           file=log)
 
@@ -1483,10 +1499,10 @@ def main(argv=None):
                   f"transcripts for BOTH the tuned and the base model.")
         return gate.finish()
 
-    cfg = load_models_json(gate, root)
+    cfg = load_models_json(gate, root, args.pin_key)
     if cfg is None:
         return gate.finish()
-    tuned_spec = f"hf:{cfg['tuned']}"
+    tuned_spec = f"hf:{cfg[args.pin_key]}"
     base_spec = cfg["base"]
     if tuned_spec == base_spec:
         gate.fail("configs/models.json pins the same repo@commit for 'tuned' and "
@@ -1549,7 +1565,7 @@ def main(argv=None):
         return 0
 
     check_report(gate, root, cfg, base_spec, run_dir, block, rubric_hash,
-                 eval_rel)
+                 eval_rel, report_path, args.pin_key)
     return gate.finish()
 
 

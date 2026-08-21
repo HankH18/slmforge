@@ -1,8 +1,9 @@
 # Brainlift — Forbidden-Constraint Holder
 
-**Status: in progress.** Sections 1–6 are complete and every number in them is
-re-derivable from artifacts committed in this repo. Sections 7 and 8 carry
-clearly marked placeholders for measurements currently in flight.
+Every number in this document is re-derivable from artifacts committed in this
+repo. The headline tables come from `scripts/check_mvp.py` and
+`scripts/curve_report.py`, which recompute them from the raw transcripts and
+refuse to agree with a figure typed in by hand.
 
 ---
 
@@ -401,7 +402,7 @@ On the graded metric, the intervention looks like a failure:
 
 | | base | v1 | v2 |
 |---|---|---|---|
-| `spec_adherence` | 0.0890 | 0.0748 | 0.0820 |
+| `spec_adherence` | 0.0890 | 0.0748 | 0.0816 |
 | `robustness` | 0.1029 | 0.1014 | 0.0870 |
 | `banned_letter` instances passed | 0/105 | 1/105 | 1/105 |
 
@@ -437,16 +438,47 @@ have concluded their data work was worthless while the underlying error fell 59%
 — and would have gone looking for a hyperparameter, which is precisely the move
 the project's own rules forbid.
 
-Two things I will be watching that are not the headline:
+### The held-out collapse: answered, and worse than expected
 
-- **Does the held-out collapse persist?** The letter fix does nothing for
-  `banned_punctuation` or `sentence_initial_letter`. If v2 improves the letter
-  and the held-out types stay collapsed, the honest reading is "composition fixes
-  the type you compose for, and generalization across constraint *shape* is a
-  separate, unsolved problem" — not "data → behavior held, done."
-- **Incidental passes.** A constraint passed by writing badly is not a constraint
-  held. Any comparison against the base model on held-out types is flattering the
-  duller writer until an incidental-pass rate is measured.
+The open question above was whether the held-out collapse would persist. It does
+— and it does not merely persist, it *deepens monotonically with dataset size*,
+which is a stronger and more uncomfortable result than "the fix does not
+generalize."
+
+Violation rate by constraint type across the whole sweep, lower is better
+(`scripts/curve_report.py`, re-derived from the transcripts):
+
+| N | `banned_words` (trained) | `banned_punctuation` (never trained) | `sentence_initial_letter` (never trained) |
+|---:|---:|---:|---:|
+| 0 (base) | 0.114 | 0.220 | 0.292 |
+| 106 | 0.105 | 0.488 | 0.280 |
+| 211 | 0.073 | 0.537 | 0.600 |
+| 423 | 0.065 | 0.537 | 0.920 |
+| 846 | 0.057 | 0.585 | 0.960 |
+
+Every trained-family column falls with N. Every untrained-family column rises
+with N. Split the eval set the same way and the two halves move in opposite
+directions: train-split `spec_adherence` goes 0.1149 → 0.1379, held-out-split
+goes 0.0508 → 0.0000.
+
+So the aggregate metric is not flat because nothing happened. **It is flat
+because two real effects of opposite sign are cancelling inside it**, and 60 of
+the 147 eval scenarios carry an untrained constraint type. This is the second
+way the metric hid the data work, and it is independent of the cliff: even a
+metric with no threshold would report ~zero here, because the gain and the loss
+genuinely offset.
+
+The honest reading is the one that was pre-committed as the bad case:
+composition fixes the type you compose for, and generalization across constraint
+*shape* is a separate, unsolved problem. Buying compliance on the trained
+families cost generalization on the untrained ones, and the more data was spent,
+the more it cost.
+
+**Incidental passes** remain unmeasured. A constraint passed by writing badly is
+not a constraint held, and any comparison against the base model on held-out
+types flatters the duller writer until an incidental-pass rate exists. Note that
+this cuts *against* the base model here — base wins on the held-out families,
+and some of that win may be incidental rather than held.
 
 ---
 
@@ -502,19 +534,58 @@ auditable rather than asserted. That last property is load-bearing here: after
 §4, a subset that happened to drop the hard letters would post a flattering
 number at small N and misplace the minimum entirely.
 
-**What the curve will answer.** Train the identical pinned configuration at
-log-spaced N over nested subsets of the same corpus, evaluate every checkpoint on
-the same 147-scenario eval set with the same judge and rubric hash, and read off
-where spec-adherence stops climbing. The minimum viable N is the smallest point
-whose spec-adherence is indistinguishable from the largest point's — i.e. the
-knee, not the maximum.
+**The definition above does not survive contact with the data, and saying why
+is the finding.** The rule as originally written — *the smallest point whose
+spec-adherence is indistinguishable from the largest point's* — silently assumes
+the metric can distinguish points at all. It cannot. Here are the 95% Wilson
+intervals, re-derived by `scripts/curve_report.py`:
 
-**How N will be justified.** Three things have to be stated together, or the
-number is just a point on a chart:
+| N | `spec_adherence` | 95% CI |
+|---:|---:|---|
+| 0 (base) | 0.0890 | [0.053, 0.146] |
+| 106 | 0.0612 | [0.033, 0.112] |
+| 211 | 0.0884 | [0.052, 0.145] |
+| 423 | 0.0816 | [0.047, 0.137] |
+| 846 | 0.0816 | [0.047, 0.137] |
 
-1. **The knee, with its uncertainty.** A single seed at 147 scenarios cannot
-   resolve small differences; the justification has to say how large a gap the
-   eval set can actually resolve before declaring two points equal.
+Every interval contains every other point's estimate. The entire observed range
+of `spec_adherence` across an 8× sweep is 2.8 percentage points; one point's
+interval is about 9 wide. Applied literally, the rule therefore names **N=106**
+— the smallest checkpoint trained — which is plainly false, since N=106 has the
+*worst* measured behaviour on the sweep and a median of 35 banned-letter
+occurrences against the full set's 14.
+
+A definition that returns the wrong answer on data this clean is the wrong
+definition. The mistake is using a cliff metric to locate a knee: the metric
+resolves nothing until compliance is perfect, so it has no knee to find.
+
+**The definition this project actually uses.** Locate the minimum viable N on a
+measure that *moves*, and state the cliff metric's blindness as a separate
+result rather than burying it. On the paired continuous measure — banned-letter
+occurrences per response, counted with the checker's own normalisation
+(`scripts/compare_checkpoints.py`) — the picture is not ambiguous at all:
+
+- base → v2 (N=846): median 34 → 14, lower on 89 of 105 paired scenarios,
+  sign-test **p = 1.9 × 10⁻¹³**, bootstrap 95% CI on the median difference
+  **[−26, −15]**.
+- v1 → v2, the two data iterations: median 20 → 14, lower on 75 of 105,
+  **p = 6.1 × 10⁻⁸**, CI **[−9, −4]**.
+
+Both are overwhelming. On the same rows, `spec_pass` gives McNemar exact
+**p = 1.000** for both comparisons — 12 passes against 13, and 12 against 11.
+
+**That contrast is the single most useful sentence this project produced:** the
+graded metric cannot distinguish two checkpoints that a paired test on the same
+147 scenarios separates at p ≈ 10⁻⁸. Anyone reporting only `spec_adherence`
+would have called both data iterations worthless.
+
+**How N is justified.** Three things stated together, or the number is just a
+point on a chart:
+
+1. **Which measure, and what it can resolve.** Stated above: `spec_adherence` on
+   147 scenarios resolves nothing below ~9 percentage points, so it cannot carry
+   the claim; the occurrence measure resolves the difference decisively and is
+   what the minimum is defined on.
 2. **The composition at that N**, from the subset manifest — specifically whether
    the hard letters are still represented at the intended share. A minimum viable
    size is only meaningful alongside a minimum viable *mix*.

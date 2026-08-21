@@ -4,7 +4,7 @@
 
 Five checkpoints — the base model plus four QLoRA fine-tunes at N = 106 / 211 / 423 / 846 — evaluated on the identical 147-scenario eval set with the identical judge and rubric. On `spec_adherence` the curve is flat-to-noisy and no trained point clears base. Counting how often the banned letter actually appears, the same five checkpoints run **34 → 35 → 33 → 29 → 14** occurrences in the median response. The behaviour is being learned. The graded metric cannot see it until the count reaches zero.
 
-Every number below was re-derived from the raw transcripts at commit `d85a12a`, not read from a stored aggregate. See [§7](#7-how-these-numbers-were-produced).
+Every number below is re-derived from the raw transcripts by `scripts/curve_report.py`, not read from a stored aggregate and not typed in by hand — `python scripts/curve_report.py --check` fails if this report and the transcripts disagree. See [§7](#7-how-these-numbers-were-produced).
 
 ---
 
@@ -96,6 +96,26 @@ The length-normalised column is the honest test of whether the model is avoiding
 
 What would bracket it: **extend the sweep upward**, at roughly 2× and 4× the current N (≈ 1,700 and ≈ 3,400 rows), with the larger corpus built so the present 846 rows stay a prefix of it — otherwise the existing four points are no longer members of the same nested family and the whole curve has to be re-run. Refining downward — adding points at 50, 75, 150 — would only measure the flat part more precisely, and the flat part is already the least interesting region on the chart.
 
+### Status of the extension
+
+The upward extension was started and is **blocked on compute, not on method.**
+
+* The 2× corpus is being generated with the identical recipe, teacher and seed. The sampler was verified prefix-stable before spending anything — replaying the first samples from the teacher cache reproduces `data/train/v2.jsonl` byte for byte apart from provenance timestamps — so the larger corpus contains the present 846 rows and the nested family survives. (Set inclusion, not prefix equality: the v2 run abandoned some samples on a teacher error and those requests were never cached, so any that now succeed become additional rows interleaved among the existing ones. Inclusion is the property the curve needs; it is checked directly rather than assumed.)
+* An inward point at N=634 was prepared as well — `data/train/subsets/v2.n634.jsonl`, verified nested between the 423 and 846 sets — to locate where the occurrence measure actually starts moving, since the largest drop in the sweep is the final doubling.
+* Neither has a checkpoint. The training platform refused both runs: *"Workspace has exceeded its spend limit."* The N=634 run reached the third epoch before the workspace was cut off mid-run; no artifacts were written.
+
+So the curve stands at five points and the bound stands. `docs/CURVE_PREREGISTRATION.md` records eight falsifiable predictions for the 2× point, committed before any of it was trained; they remain untested, and the subset and corpus are on disk so that the extension is one training command per point once GPU access is restored.
+
+### What the minimum viable N can be stated as today
+
+Not on `spec_adherence` — the interval table in §6 shows it resolves nothing at this sample size, so the rule "the smallest N indistinguishable from the largest" would name N=106, the *worst* point on the sweep. Using a cliff metric to locate a knee fails because the metric has no knee.
+
+On the measure that does move, `scripts/compare_checkpoints.py` pairs the checkpoints scenario by scenario rather than comparing headline rates:
+
+Base against N=846 gives a median occurrence count of 34 against 14, lower on 89 of the 105 paired scenarios, sign-test p ≈ 1.9 × 10⁻¹³, bootstrap 95 % CI on the median difference [−26, −15]. The two data iterations, v1 against v2, give 20 against 14, lower on 75 of 105, p ≈ 6.1 × 10⁻⁸, CI [−9, −4]. On the same rows `spec_pass` gives McNemar exact p = 1.000 for both comparisons.
+
+That contrast is the result. The graded metric cannot separate two checkpoints that a paired test on the identical scenarios separates overwhelmingly. **The behaviour first moves decisively in the last doubling, so the minimum viable N on the sensitive measure lies between 423 and 846** — which is why the prepared inward point sits at 634. On the graded pass/fail measure the bound is unchanged: no N in the measured range holds the behaviour, and the threshold is above 846.
+
 Two costs belong with that number. Generation is the expensive half: `data/train/v2.report.json` records 3,142 uncached teacher generations to keep 846 rows under the hard letter mix — 3.7 per surviving row, with 178 of 1,024 requests giving up entirely after ten attempts, and 2,302 of the 2,367 rejections caused by a `banned_letter` violation — so a 2× point is on the order of 6,300 teacher generations. Training is cheap by comparison: about 24 GPU-minutes on an A10G at the pinned configuration, extrapolating from the 707 s the 846-row run took. Neither is the blocker. The blocker is that the answer to "what is the minimum viable N" is currently "more than we have measured", and saying anything narrower would be inventing a number the data does not support.
 
 ---
@@ -120,7 +140,17 @@ Two costs belong with that number. Generation is the expensive half: `data/train
 
 This is why the "all checkers pass" column in §3 *falls* as N rises while the letter behaviour improves: the trained types hold or improve, the two untrained types collapse, and the all-or-nothing aggregate follows the collapse. Generalisation across constraint *shape* is a separate, unsolved problem from generalisation within a trained type, and this curve measures the second, not the first.
 
-**Single seed, one eval set, 147 scenarios.** No error bars. Differences of a few passing scenarios are not resolvable, and nothing here should be read as resolving them.
+**Single seed, one eval set, 147 scenarios.** Differences of a few passing scenarios are not resolvable, and nothing here should be read as resolving them. That is now quantified rather than asserted — `scripts/curve_report.py` reports a 95 % Wilson interval for every point:
+
+| N | `spec_adherence` | 95 % CI |
+|---:|---:|---|
+| 0 (base) | 0.0890 | [0.053, 0.146] |
+| 106 | 0.0612 | [0.033, 0.112] |
+| 211 | 0.0884 | [0.052, 0.145] |
+| 423 | 0.0816 | [0.047, 0.137] |
+| 846 | 0.0816 | [0.047, 0.137] |
+
+Every interval contains every other point's estimate. The whole observed range across an 8× sweep is under three percentage points; a single point's interval is about nine wide. **The graded metric on this eval set cannot resolve anything smaller than roughly nine percentage points**, which is larger than any effect this sweep produced.
 
 ---
 
@@ -128,7 +158,15 @@ This is why the "all checkers pass" column in §3 *falls* as N rises while the l
 
 `spec_adherence` and `robustness` were recomputed with `scripts/gate_check.py:score_cell`, the same function that gates the G1 ablation and the MVP report — the checker verdicts are re-run from `(constraint, output)` against the pinned instance library, `spec_pass` is re-derived from *those* verdicts plus the row's quality score, and the stored aggregate is compared to the result rather than trusted. All five cells returned clean, with zero disagreements against their stored `metrics` blocks and full 147-scenario coverage.
 
-The occurrence column is not stored anywhere and was computed from the transcripts directly: for each of the 105 eval scenarios carrying a `banned_letter` constraint, the response is put through `constraints.checkers._fold` (the same normalisation the checker uses — invisible-character stripping, NFKD, diacritic and homoglyph folding, casefold) and occurrences of the banned letter are counted, then the median is taken across the 105 rows. Using the checker's own fold means a response cannot lower its count with a zero-width space or a fullwidth character.
+The occurrence column is computed from the transcripts: for each of the 105 eval scenarios carrying a `banned_letter` constraint, the response is put through `constraints.checkers._fold` (the same normalisation the checker uses — invisible-character stripping, NFKD, diacritic and homoglyph folding, casefold) and occurrences of the banned letter are counted, then the median is taken across the 105 rows. Using the checker's own fold means a response cannot lower its count with a zero-width space or a fullwidth character.
+
+**Every number in this report is now re-derived by a committed script rather than computed once in a shell.** `scripts/curve_report.py` reads `runs/efficiency/points.json` — which declares *which* runs are curve points and is refused if a metric is written into it — recomputes each point from its raw rows, and writes `runs/efficiency/curve.json`:
+
+```bash
+python scripts/curve_report.py --check --markdown
+```
+
+`--check` re-derives everything and exits non-zero if the committed curve is not what the transcripts produce, so a figure edited by hand into the report fails rather than persists. The tables in §3, §4 and §6 are its output. One deliberate difference from the harness's own stored `by_constraint_type` block: the base run quarantined a row, an empty output satisfies every checker vacuously, and those free passes lower its stored rates, so this script counts only scored rows — the same denominator `spec_adherence` uses.
 
 The base run quarantined one row (`s-0103`, three consecutive judge refusals, no score produced), which is why its denominator is 146 rather than 147. That row still contributes to the occurrence count, which needs no judge.
 

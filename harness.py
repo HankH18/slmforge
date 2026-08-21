@@ -74,6 +74,7 @@ __all__ = [
     "compute_spec_pass",
     "score_scenario",
     "validate_transcript_row",
+    "validate_eval_set",
     "aggregate",
 ]
 
@@ -385,6 +386,99 @@ def _scenario_map(scenarios: Any) -> Dict[str, Mapping[str, Any]]:
             raise HarnessError(f"scenario has no usable 'scenario_id': {s!r}")
         out[sid] = s
     return out
+
+
+
+def validate_eval_set(scenarios: Sequence[Mapping[str, Any]],
+                      constraint_lookup: Mapping[str, Mapping[str, Any]],
+                      renderer: Optional[Callable[..., str]] = None) -> None:
+    """Everything a run will need from an eval set, checked BEFORE it spends.
+
+    The failure this exists to stop: ``pressure``, ``split`` and ``k`` are read
+    only inside :func:`aggregate`, which runs after every generation and every
+    judge call. A staff-supplied scenario file missing one of them therefore
+    burned the whole run -- GPU time and paid judge calls -- and then raised,
+    and ``write_outputs`` was never reached, so NOTHING survived on disk. A file
+    that cannot be scored has to be rejected while it is still free.
+
+    Reports EVERY problem, not the first. Handed a file with three separate
+    mistakes, telling the sender about one of them buys three round trips.
+
+    ``renderer`` is optional so this stays importable without the scenarios
+    package; pass ``scenarios.render.render_user_message`` to also prove every
+    row renders into a prompt.
+    """
+    problems: List[str] = []
+    if not scenarios:
+        raise HarnessError("the eval set is empty; there is nothing to score")
+
+    seen: Dict[str, int] = {}
+    for i, scenario in enumerate(scenarios):
+        where = f"row {i + 1}"
+        if not isinstance(scenario, Mapping):
+            problems.append(f"{where}: not a JSON object")
+            continue
+
+        sid = scenario.get("scenario_id")
+        if not isinstance(sid, str) or not sid:
+            problems.append(f"{where}: 'scenario_id' is missing or not a "
+                            f"non-empty string")
+        else:
+            where = f"{where} ({sid})"
+            if sid in seen:
+                problems.append(f"{where}: duplicate scenario_id, first seen at "
+                                f"row {seen[sid]} -- a repeated id re-weights "
+                                f"every rate it appears in")
+            seen[sid] = i + 1
+
+        task = scenario.get("task")
+        if not isinstance(task, str) or not task.strip():
+            problems.append(f"{where}: 'task' is missing or empty; there is no "
+                            f"prompt to send")
+
+        ids = scenario.get("constraints")
+        if not isinstance(ids, Sequence) or isinstance(ids, (str, bytes)):
+            problems.append(f"{where}: 'constraints' must be a list of "
+                            f"constraint-id strings")
+        elif not ids:
+            problems.append(f"{where}: 'constraints' is empty; a scenario with "
+                            f"no constraint passes vacuously")
+        else:
+            for cid in ids:
+                if not isinstance(cid, str):
+                    problems.append(
+                        f"{where}: constraint {cid!r} is a "
+                        f"{type(cid).__name__}, not an id string. Inline "
+                        f"constraint objects are not supported -- write them to "
+                        f"a constraints file and pass --constraints")
+                elif cid not in constraint_lookup:
+                    problems.append(f"{where}: references unknown constraint id "
+                                    f"{cid!r}")
+
+        # The three that used to surface only in aggregate(), after the money.
+        for key, why in (("pressure", "the robustness metric is defined over it"),
+                         ("split", "the generalization breakdown is defined over it"),
+                         ("k", "the composition breakdown is defined over it")):
+            if key not in scenario:
+                problems.append(f"{where}: no {key!r}; {why}, and it is read only "
+                                f"after every generation and judge call have been "
+                                f"paid for")
+        pressure = scenario.get("pressure")
+        if pressure is not None and pressure not in PRESSURES:
+            problems.append(f"{where}: pressure {pressure!r} is not one of "
+                            f"{list(PRESSURES)}")
+
+        if renderer is not None and not problems:
+            try:
+                renderer(scenario, constraint_lookup)
+            except Exception as exc:  # noqa: BLE001 - any render failure is fatal
+                problems.append(f"{where}: does not render into a prompt "
+                                f"({type(exc).__name__}: {exc})")
+
+    if problems:
+        head = (f"the eval set cannot be scored -- {len(problems)} problem(s). "
+                f"Refusing to start a run that would fail after paying for it:")
+        raise HarnessError(head + "\n  - " + "\n  - ".join(problems[:40]))
 
 
 def aggregate(rows: Sequence[Mapping[str, Any]],

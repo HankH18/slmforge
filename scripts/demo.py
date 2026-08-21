@@ -121,28 +121,31 @@ DEMO_ID_INDEX_BASE = 900
 ROLES: Tuple[str, ...] = ("base", "tuned")
 
 # --------------------------------------------------------------------------
-# The measured MVP result. HARD-CODED HONESTY.
+# The measured result for the PUBLISHED checkpoint. HARD-CODED HONESTY.
 #
-# Source: runs/mvp/*.results.json (metrics.spec_adherence,
-# metrics.by_constraint_type) and runs/mvp/*.transcripts.jsonl (quality_score),
-# n = 147 scenarios, one eval set, one judge. tests/test_demo.py RECOMPUTES
-# every number below from those files and fails if this table drifts from them.
+# Source: runs/final/*.results.json (metrics.spec_adherence,
+# metrics.by_constraint_type) and runs/final/*.transcripts.jsonl
+# (quality_score), n = 147 scenarios, one eval set, one judge. That package was
+# produced by running the model pulled from the Hub at the commit
+# configs/models.json pins as `tuned`, so the footer describes the artifact a
+# grader would download. tests/test_demo.py RECOMPUTES every number below from
+# those files and fails if this table drifts from them.
 #
 # These are printed on every run because the honest headline is that the tuned
 # model is WORSE on spec_adherence, and a grader who ran one lucky prompt must
 # not walk away with the opposite impression.
 # --------------------------------------------------------------------------
 MVP_N = 147
-MVP_SPEC_ADHERENCE: Tuple[float, float] = (0.0890, 0.0748)      # base, tuned
-MVP_QUALITY_GE3: Tuple[float, float] = (61.2, 74.8)             # % of rows judged >= 3
+MVP_SPEC_ADHERENCE: Tuple[float, float] = (0.0890, 0.0816)      # base, tuned
+MVP_QUALITY_GE3: Tuple[float, float] = (61.2, 72.1)             # % of rows judged >= 3
 #: type -> (base, tuned) share of individual checks that HELD, in percent.
 MVP_BY_TYPE: Dict[str, Tuple[float, float]] = {
-    "banned_words": (88.7, 95.2),
+    "banned_words": (88.7, 94.4),
     "banned_phrases": (100.0, 100.0),
     "banned_letter": (0.0, 1.0),
-    "banned_punctuation": (78.0, 43.9),
+    "banned_punctuation": (78.0, 41.5),
     "sentence_initial_letter": (72.0, 4.0),
-    "no_lists": (98.1, 95.2),
+    "no_lists": (98.1, 98.1),
     "no_quotation_marks": (100.0, 100.0),
 }
 
@@ -598,7 +601,7 @@ def format_footer() -> str:
         "this is not spec_pass (= every checker passes AND judged task quality >= 3).",
         "One prompt is an anecdote; it is not the measurement.",
         "",
-        f"The measurement is {MVP_N} scenarios in runs/mvp/, written up in docs/MVP_REPORT.md.",
+        f"The measurement is {MVP_N} scenarios in runs/final/, written up in docs/FINAL_REPORT.md.",
         "Its headline is that fine-tuning made the headline metric WORSE:",
         f"    spec_adherence          base {base_sa:.4f}   ->   tuned {tuned_sa:.4f}   (worse)",
         "",
@@ -620,7 +623,7 @@ def format_footer() -> str:
         f"Task quality judged >= 3 rose {q_base:.1f}% -> {q_tuned:.1f}% of {MVP_N} rows.",
         "So the tuned model improved on the TRAINED types and on task quality, and",
         "collapsed on the two HELD-OUT types. Whichever way this one prompt lands, it",
-        "does not settle that. Read docs/MVP_REPORT.md before quoting either side.",
+        "does not settle that. Read docs/FINAL_REPORT.md before quoting either side.",
     ]
     return "\n".join(lines)
 

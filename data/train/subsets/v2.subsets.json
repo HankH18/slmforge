@@ -100,6 +100,38 @@
       },
       "path": "data/train/subsets/v2.n423.jsonl",
       "sha256": "4cd9c73eefb66d6b3741e9ca4d5c153467288f1ebbe334bab12444c7dfdef195"
+    },
+    "634": {
+      "rows": 634,
+      "type_counts": {
+        "banned_letter": 404,
+        "banned_phrases": 434,
+        "banned_words": 429,
+        "no_lists": 441,
+        "no_quotation_marks": 428
+      },
+      "type_shares": {
+        "banned_letter": 0.1891,
+        "banned_phrases": 0.2032,
+        "banned_words": 0.2008,
+        "no_lists": 0.2065,
+        "no_quotation_marks": 0.2004
+      },
+      "banned_letter_rows": 404,
+      "letter_counts": {
+        "e": 114,
+        "a": 80,
+        "o": 45,
+        "i": 45,
+        "r": 39,
+        "s": 30,
+        "l": 18,
+        "u": 16,
+        "m": 12,
+        "p": 5
+      },
+      "path": "data/train/subsets/v2.n634.jsonl",
+      "sha256": "f35c149d5e93bdb1d065dc21620b9b7ddbf359ae0221859ce5d305a21903f1e3"
     }
   }
 }

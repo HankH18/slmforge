@@ -8,25 +8,54 @@ proving with numbers that the tuned model beats the prompted base model at it.
 | Document | What it answers |
 |---|---|
 | [`docs/BRAINLIFT.md`](docs/BRAINLIFT.md) | The behavior thesis, and whether data → behavior held. Read this first. |
+| [`docs/FINAL_REPORT.md`](docs/FINAL_REPORT.md) | The final base-vs-tuned table, measured against the checkpoint pulled from the Hub. |
+| [`docs/EFFICIENCY_CURVE.md`](docs/EFFICIENCY_CURVE.md) | Data-Efficiency Curve: performance vs dataset size, and what the minimum viable N can and cannot be. |
 | [`docs/ABLATION_G1.md`](docs/ABLATION_G1.md) | Prompt-Ceiling Ablation: 2 frontier families × 3 strategies × 147 scenarios, and the failure mode that survives the best prompt. |
-| [`docs/MVP_REPORT.md`](docs/MVP_REPORT.md) | Base-vs-tuned numbers, re-derived from the raw transcripts by `scripts/check_mvp.py`. |
+| [`docs/CURVE_PREREGISTRATION.md`](docs/CURVE_PREREGISTRATION.md) | Predictions for the upward extension of the curve, committed before that checkpoint was trained. |
+| [`docs/MVP_REPORT.md`](docs/MVP_REPORT.md) | The frozen MVP record. Pins the v1 checkpoint; still re-derives. |
 | [`docs/PIVOT_SPEC.md`](docs/PIVOT_SPEC.md) | The Behavior Spec and the numbered requirements. |
 
-Published checkpoint:
-[`HankH18/qwen3-1.7b-forbidden-constraint-holder`](https://huggingface.co/HankH18/qwen3-1.7b-forbidden-constraint-holder)
-— merged fp16 at the repo root, LoRA adapter under `adapter/`, pinned by commit
-hash in `configs/models.json`.
+Published artifacts, both public and both pinned by commit hash in
+`configs/models.json`:
 
-Two commands worth knowing before the rest of this file:
+| | |
+|---|---|
+| Model | [`HankH18/qwen3-1.7b-forbidden-constraint-holder`](https://huggingface.co/HankH18/qwen3-1.7b-forbidden-constraint-holder) — merged fp16 at the repo root, LoRA adapter under `adapter/` |
+| Dataset | [`HankH18/forbidden-constraint-holder-sft`](https://huggingface.co/datasets/HankH18/forbidden-constraint-holder-sft) — the training rows, **plus every rejected teacher attempt** and the generation ledger |
+
+`configs/models.json` carries two model pins on purpose: `tuned` is the current
+published checkpoint, `tuned_mvp` is the one `docs/MVP_REPORT.md` documents. Both
+are commits of the same repo, so either still pulls, and `scripts/check_mvp.py`
+gates each package against its own pin.
+
+Commands worth knowing before the rest of this file:
 
 ```bash
-# re-derive every number in the base-vs-tuned report from the committed transcripts
-python scripts/check_mvp.py
+# re-derive every number in the final base-vs-tuned report from the committed transcripts
+python scripts/check_mvp.py --pin-key tuned --report docs/FINAL_REPORT.md --run-dir runs/final
+
+# the MVP package, still re-deriving against the checkpoint it was submitted with
+python scripts/check_mvp.py --pin-key tuned_mvp --report docs/MVP_REPORT.md --run-dir runs/mvp
+
+# re-derive the whole data-efficiency curve from the committed transcripts
+python scripts/curve_report.py --check --markdown
 
 # run your own prompt and your own forbidden constraint against base and tuned, side by side
 python scripts/demo.py --prompt "Write a short notice about a library reopening." \
                        --constraint banned_punctuation:, --constraint banned_words:however
 ```
+
+**Before running the harness on a scenario file it has never seen** — the staff
+held-out set, or anything else — check it for free first:
+
+```bash
+python scripts/preflight_evalset.py <scenarios.jsonl> [constraints.jsonl]
+```
+
+It renders every row, resolves every constraint id, runs each constraint through
+the pinned checker and prints what the set contains. `eval.py` performs the same
+validation before it generates a token, because three of the fields it needs used
+to be read only *after* every generation and judge call had been paid for.
 
 ## Behavior Spec (the graded spec)
 
@@ -82,6 +111,11 @@ set -a && . ./.env && set +a
 # base model, zero-shot
 python eval.py --model hf:Qwen/Qwen3-1.7B --eval-set data/scenarios/corpus.jsonl
 
+# base vs. tuned — the FINAL comparison, against the published checkpoint
+python eval.py --model hf:HankH18/qwen3-1.7b-forbidden-constraint-holder@c19712a72932b503f28fe063d1962acc9e8c3fb8 \
+               --compare-with hf:Qwen/Qwen3-1.7B@70d244cc86ccca08cf5af4e1e306ecf908b1ad5e \
+               --eval-set data/scenarios/corpus.jsonl --out runs/final
+
 # base vs. tuned — the MVP comparison
 python eval.py --model hf:HankH18/qwen3-1.7b-forbidden-constraint-holder@b97eb115de1f1837db60550361669950d158e95e \
                --compare-with hf:Qwen/Qwen3-1.7B@70d244cc86ccca08cf5af4e1e306ecf908b1ad5e \
@@ -94,6 +128,11 @@ python eval.py --model openai:<id> --strategy few_shot \
 
 # any unseen scenario set, same harness and same checkers
 python eval.py --model hf:<repo>@<commit> --eval-set <path-to-scenarios.jsonl>
+
+# the staff held-out set, with their own constraint library — preflight it first
+python eval.py --model hf:HankH18/qwen3-1.7b-forbidden-constraint-holder@c19712a72932b503f28fe063d1962acc9e8c3fb8 \
+               --eval-set <path-to-staff-set.jsonl> \
+               --constraints <path-to-their-constraints.jsonl> --out <your-run-dir>
 ```
 
 Note the `hf:` provider prefix. The project doc writes the repro line as
@@ -179,12 +218,28 @@ Network-free — mock generators and mock judges throughout.
 | `constraints/` | Registry and the deterministic checkers — the ground-truth layer |
 | `scenarios/` | Corpus generator, reachability prover, the shared prompt renderer |
 | `training/` | Modal QLoRA app |
-| `scripts/` | `gate_check.py` (the G1 gate), `check_loop.py`, `check_mvp.py`, `push_model.py` |
+| `scripts/` | the gates and the publishing tools — see below |
 | `data/scenarios/` | Corpus, constraint instances, few-shot exemplars, smoke set |
 | `data/fixtures/` | Golden checker fixtures |
 | `runs/` | Ablation, smoke and MVP run artifacts |
 | `archive/abstainer/` | The retired first target — see below |
 | `docs/` | Project spec (source of truth), pivot spec/design/tasks |
+
+### `scripts/`
+
+| Script | What it does |
+|---|---|
+| `check_mvp.py` | Gates a submission package: re-derives every number from the transcripts and requires the report's generated block back byte for byte. `--pin-key` / `--report` / `--run-dir` select which package. |
+| `curve_report.py` | Re-derives the whole data-efficiency curve from the committed transcripts. `--check` fails on a hand-edited `curve.json`. |
+| `compare_checkpoints.py` | Paired comparison of two eval cells — McNemar on `spec_pass`, sign test and bootstrap on banned-letter occurrences. Two checkpoints on one eval set are one sample measured twice. |
+| `preflight_evalset.py` | Validates an unseen scenario file for free, before any model loads. |
+| `gate_check.py` | The G1 prompt-ceiling ablation gate. |
+| `check_loop.py` | The generate → train → eval loop checker. |
+| `push_model.py` | Publishes the checkpoint to a public HF repo and pins the resulting commit. `--check` re-verifies the pin. |
+| `push_dataset.py` | The same for the dataset, with a secret/PII scan that runs before anything is uploaded. |
+| `model_card.py` | Renders the HF model card from the run artifacts, so it cannot drift from the run it describes. |
+| `make_subset.py` | Deterministic nested subsets for the curve. |
+| `demo.py` | Base-vs-tuned on your own prompt and your own constraints. |
 
 ## The abstainer archive
 

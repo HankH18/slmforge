@@ -150,6 +150,31 @@ def _sanitize(spec: str) -> str:
 
 
 # ------------------------------------------------------- derived breakdowns
+def wilson_interval(successes: int, n: int, z: float = 1.96) -> Optional[List[float]]:
+    """95% Wilson score interval for a proportion.
+
+    The curve's own stated rule for a minimum viable N -- "the smallest point
+    whose spec_adherence is indistinguishable from the largest point's" -- is
+    unusable without this. Every point on this curve is indistinguishable from
+    every other, so applied naively the rule names the SMALLEST N on the sweep,
+    which is nonsense. The interval turns that into a statement anyone can
+    check: it says how large a gap 147 scenarios can resolve at all, and the
+    whole observed range of spec_adherence is narrower than a single point's
+    interval.
+
+    Wilson rather than the normal approximation because these proportions sit
+    near 0.08 on n=147, where the normal interval reaches below zero.
+    """
+    if n <= 0:
+        return None
+    p = successes / n
+    denom = 1 + z * z / n
+    centre = (p + z * z / (2 * n)) / denom
+    half = z * ((p * (1 - p) / n + z * z / (4 * n * n)) ** 0.5) / denom
+    return [round(max(0.0, centre - half), PLACES),
+            round(min(1.0, centre + half), PLACES)]
+
+
 def banned_letter_of(constraint: Mapping[str, Any]) -> str:
     letter = constraint.get("params", {}).get("letter")
     if not isinstance(letter, str) or len(letter) != 1:
@@ -302,8 +327,12 @@ def score_point(pt: Mapping[str, Any], decl: Mapping[str, Any],
         "run_dir": pt["run_dir"],
         "n_scored": stats["n"],
         "spec_adherence": round(stats["spec_adherence"], PLACES),
+        "spec_adherence_ci95": wilson_interval(stats["n_spec_pass"], stats["n"]),
         "robustness": (round(stats["robustness"], PLACES)
                        if stats["robustness"] is not None else None),
+        "robustness_ci95": (wilson_interval(
+            round(stats["robustness"] * stats["n_adversarial"]),
+            stats["n_adversarial"]) if stats["robustness"] is not None else None),
         "passed": stats["n_spec_pass"],
         "n_adversarial": stats["n_adversarial"],
         "all_checkers": extra["all_checkers_pass"],
@@ -345,11 +374,12 @@ def markdown_tables(curve: Mapping[str, Any]) -> str:
     pts = curve["points"]
     out: List[str] = []
 
-    out.append("| N | `spec_adherence` | `robustness` | passes | all checkers pass | "
-               "median banned-letter occurrences |")
-    out.append("|---|---|---|---|---|---|")
+    out.append("| N | `spec_adherence` | 95% CI | `robustness` | passes | "
+               "all checkers pass | median banned-letter occurrences |")
+    out.append("|---|---|---|---|---|---|---|")
     for p in pts:
-        out.append(f"| {p['n']} | {p['spec_adherence']:.4f} | "
+        lo, hi = p["spec_adherence_ci95"]
+        out.append(f"| {p['n']} | {p['spec_adherence']:.4f} | [{lo:.3f}, {hi:.3f}] | "
                    f"{p['robustness']:.4f} | {p['passed']}/{p['n_scored']} | "
                    f"{p['all_checkers']}/{p['n_scored']} | "
                    f"{p['median_banned_letter_occurrences']} |")

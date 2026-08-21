@@ -257,14 +257,26 @@ def push(args):
     print(f"  ok   HF_TOKEN can write ({why})")
 
     repo_id = args.repo if "/" in args.repo else f"{username}/{args.repo}"
+    # The note lands in the PUBLIC commit log, which is where someone pulling a
+    # pinned revision looks to find out which checkpoint they have. "tuned" alone
+    # stops meaning anything the moment there are two of them.
+    note = f" — {args.note}" if args.note else ""
+    card = Path(args.card).resolve() if args.card else None
+    if card is not None and not card.is_file():
+        return die(f"--card {card} is not a file; nothing was pushed")
     try:
         api.create_repo(repo_id, repo_type="model", private=False, exist_ok=True)
         merged_commit = api.upload_folder(
             repo_id=repo_id, folder_path=str(merged),
-            commit_message="merged fp16 model (Grounded Abstainer, tuned)")
+            commit_message=f"merged fp16 model (forbidden-constraint-holder{note})")
         adapter_commit = api.upload_folder(
             repo_id=repo_id, folder_path=str(adapter), path_in_repo="adapter",
-            commit_message="LoRA adapter (Grounded Abstainer, tuned)")
+            commit_message=f"LoRA adapter (forbidden-constraint-holder{note})")
+        if card is not None:
+            adapter_commit = api.upload_file(
+                repo_id=repo_id, path_or_fileobj=str(card), path_in_repo="README.md",
+                commit_message=f"model card (forbidden-constraint-holder{note})")
+            print(f"  ok   model card uploaded from {card}")
     except HfHubHTTPError as exc:
         return die(f"push to {repo_id} failed: {exc}")
 
@@ -302,6 +314,12 @@ def main(argv=None):
     ap.add_argument("--adapter", help="LoRA adapter directory to publish")
     ap.add_argument("--merged", help="merged fp16 model directory to publish")
     ap.add_argument("--repo", help="repo name (or owner/name) to publish to")
+    ap.add_argument("--note", default=None,
+                    help="short description of WHICH checkpoint this is (e.g. "
+                         "'v2 dataset, 846 rows'); goes in the public commit log")
+    ap.add_argument("--card", default=None,
+                    help="model card to upload as README.md; render one with "
+                         "scripts/model_card.py so it cannot drift from the run")
     ap.add_argument("--models-json", default=str(REPO_ROOT / "configs" / "models.json"),
                     help="models.json to append the 'tuned' pin to")
     ap.add_argument("--env-file", default=str(REPO_ROOT / ".env"),

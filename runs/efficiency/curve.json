@@ -16,7 +16,15 @@
       "run_dir": "runs/mvp",
       "n_scored": 146,
       "spec_adherence": 0.089,
+      "spec_adherence_ci95": [
+        0.0528,
+        0.1464
+      ],
       "robustness": 0.1029,
+      "robustness_ci95": [
+        0.0508,
+        0.1976
+      ],
       "passed": 13,
       "n_adversarial": 68,
       "all_checkers": 27,
@@ -89,7 +97,15 @@
       "run_dir": "runs/efficiency/n106",
       "n_scored": 147,
       "spec_adherence": 0.0612,
+      "spec_adherence_ci95": [
+        0.0325,
+        0.1123
+      ],
       "robustness": 0.058,
+      "robustness_ci95": [
+        0.0228,
+        0.1398
+      ],
       "passed": 9,
       "n_adversarial": 69,
       "all_checkers": 24,
@@ -162,7 +178,15 @@
       "run_dir": "runs/efficiency/n211",
       "n_scored": 147,
       "spec_adherence": 0.0884,
+      "spec_adherence_ci95": [
+        0.0524,
+        0.1454
+      ],
       "robustness": 0.1014,
+      "robustness_ci95": [
+        0.05,
+        0.1949
+      ],
       "passed": 13,
       "n_adversarial": 69,
       "all_checkers": 22,
@@ -235,7 +259,15 @@
       "run_dir": "runs/efficiency/n423",
       "n_scored": 147,
       "spec_adherence": 0.0816,
+      "spec_adherence_ci95": [
+        0.0473,
+        0.1373
+      ],
       "robustness": 0.087,
+      "robustness_ci95": [
+        0.0405,
+        0.177
+      ],
       "passed": 12,
       "n_adversarial": 69,
       "all_checkers": 18,
@@ -308,7 +340,15 @@
       "run_dir": "runs/mvp_v2",
       "n_scored": 147,
       "spec_adherence": 0.0816,
+      "spec_adherence_ci95": [
+        0.0473,
+        0.1373
+      ],
       "robustness": 0.087,
+      "robustness_ci95": [
+        0.0405,
+        0.177
+      ],
       "passed": 12,
       "n_adversarial": 69,
       "all_checkers": 20,

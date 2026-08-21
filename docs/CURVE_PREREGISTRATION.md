@@ -15,6 +15,13 @@ recipe on it.
 A prediction written after seeing the number is not a prediction. This file
 exists so that the upward extension can *fail*.
 
+> **Status: predictions stand, untested.** The 2× corpus was generated and an
+> inward point at N=634 was prepared, but the training platform refused both runs
+> — *"Workspace has exceeded its spend limit"* — so neither checkpoint exists.
+> Nothing below has been edited since it was committed, and the corpus and the
+> subset are on disk, so testing these predictions is one training command per
+> point once GPU access is restored. See `EFFICIENCY_CURVE.md` §5.
+
 ---
 
 ## 1. What is actually being tested
