@@ -192,6 +192,27 @@ Regenerate and verify the artifacts match a fresh build:
 python -m scenarios.build --check
 ```
 
+## Training data
+
+| File | Rows | What |
+|---|---:|---|
+| `data/train/v1.jsonl` | 881 | The first corpus. Rejection-filtered for quality only, which silently selected against difficulty — see [`docs/BRAINLIFT.md`](docs/BRAINLIFT.md) §4. |
+| `data/train/v2.jsonl` | 846 | The published dataset and the corpus the published checkpoint was trained on. Letter mix corrected at **request** time. |
+| `data/train/v3.jsonl` | 1,815 | The 2× corpus for the upward extension of the data-efficiency curve. Contains all 846 v2 rows; **no checkpoint trained on it yet** (the training platform is over its spend limit). |
+| `data/train/subsets/` | — | Nested subsets for the curve: 106 / 211 / 423 / 634. The 634 point is prepared and untrained, for the same reason. |
+
+Each ships three sidecars: `.rejected.jsonl` (every rejected teacher attempt with
+the checker failures that rejected it), `.dpo_negatives.jsonl`, and
+`.report.json` (the generation ledger). The suite audits every training file:
+
+```bash
+python -m datagen.audit data/train/v3.jsonl
+```
+
+Every row is re-rendered through the shared renderer, every checker is re-run
+against the stored text, and the file is checked for held-out constraint types
+and for overlap with the eval corpus.
+
 ## The prompt renderer
 
 `scenarios/render.py` turns a scenario into the user message. **It is the one
