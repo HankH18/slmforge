@@ -128,6 +128,39 @@ def test_no_shared_scenarios_is_an_error_not_an_empty_result(mod):
                     {"c-lex-001": WORDS})
 
 
+def test_rows_are_joined_by_scenario_id_not_by_position(mod):
+    """THE PROPERTY THE DOCSTRING CLAIMS. Every other test in this file builds
+    rows_a and rows_b in the same order, so a positional join would pass all of
+    them. Shuffle one side and the answer must not move."""
+    index, a, b = {}, [], []
+    for i in range(12):
+        sid = f"s-{i:02d}"
+        index[sid] = _scen(sid, ["c-chr-001"])
+        a.append(_row(sid, "e" * 10, i < 6))
+        b.append(_row(sid, "e" * 2, i < 6))
+    inst = {"c-chr-001": LETTER}
+
+    ordered = mod.compare(a, b, index, inst)
+    reversed_b = mod.compare(a, list(reversed(b)), index, inst)
+    assert ordered == reversed_b
+
+    # And a genuine per-row difference must survive reordering: give ONE
+    # scenario a different value on the b side and check it lands on that
+    # scenario, not on whichever row happens to sit opposite it.
+    b_odd = [dict(r, output="e" * 40) if r["scenario_id"] == "s-00" else r for r in b]
+    straight = mod.compare(a, b_odd, index, inst)
+    shuffled = mod.compare(a, list(reversed(b_odd)), index, inst)
+    assert straight == shuffled
+    assert straight["banned_letter_occurrences"]["b_higher_on"] == 1
+
+
+def test_a_negative_count_raises_instead_of_reporting_certainty(mod):
+    """range(k+1) is empty for k < 0, so the sum is 0 and the function would
+    answer p = 0.0 -- a perfect p-value -- for an impossible input."""
+    with pytest.raises(mod.CompareError, match="counts"):
+        mod.two_sided_sign_p(-1, 5)
+
+
 def test_sign_p_is_symmetric_and_bounded(mod):
     assert mod.two_sided_sign_p(0, 0) == 1.0
     assert mod.two_sided_sign_p(3, 4) == mod.two_sided_sign_p(4, 3)

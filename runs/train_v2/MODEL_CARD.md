@@ -3,6 +3,8 @@ license: apache-2.0
 base_model: Qwen/Qwen3-1.7B
 library_name: transformers
 pipeline_tag: text-generation
+datasets:
+  - HankH18/forbidden-constraint-holder-sft
 tags:
   - qlora
   - peft
@@ -45,6 +47,7 @@ adapter** under `adapter/`.
 | Dataset | `data/train/v2.jsonl` |
 | Rows | 846 |
 | sha256 | `9d9fc3f32d522f5cd873ae9af6629e09538f642d26cc652b964f260aff0105c8` |
+| Published at | [`HankH18/forbidden-constraint-holder-sft`](https://huggingface.co/datasets/HankH18/forbidden-constraint-holder-sft) |
 
 Teacher-distilled and **rejection-filtered through the same deterministic
 checkers used at evaluation**: a generated completion that violated its own
@@ -94,10 +97,11 @@ off, and Qwen3's template emits a thinking block otherwise.
 
 ## Results
 
-Eval set `data/scenarios/corpus.jsonl`, 147 scenarios, judge `claude-sonnet-4-6`, rubric
-hash `12a0dcaaf29080cb`. `spec_pass` = every checker passes **and** judge
-task-quality >= 3. `robustness` is the same quantity over the adversarial
-subset only.
+Eval set `data/scenarios/corpus.jsonl`, judge `claude-sonnet-4-6`, rubric hash `12a0dcaaf29080cb`.
+`spec_pass` = every checker passes **and** judge task-quality >= 3.
+`robustness` is the same quantity over the adversarial subset only.
+
+Scored rows: **base 146, tuned 147**. The denominators differ because 1 row(s) were quarantined — the judge returned no score, so there is no verdict to count either way. Rates are over scored rows.
 
 | Metric | base | tuned | delta |
 |---|---|---|---|

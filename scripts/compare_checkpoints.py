@@ -11,9 +11,11 @@ So this reports two things, both paired:
 
 * **spec_pass** — McNemar's exact test over the discordant pairs. Only the rows
   where the two checkpoints disagree carry information; the rest cancel.
-* **banned-letter occurrences** — a sign test and a bootstrap CI on the median
-  difference, counted with `constraints.checkers._fold`, the same normalisation
-  the checker applies.
+* **banned-letter occurrences** — a sign test, and a bootstrap CI on the
+  DIFFERENCE OF MEDIANS (median(B) - median(A), not the median of the paired
+  differences; the two are not the same number and the printout says which),
+  counted with `constraints.checkers._fold`, the same normalisation the checker
+  applies.
 
 The pair of tests is the point. A cliff metric can be blind to a difference the
 continuous measure resolves overwhelmingly, and saying so requires running both
@@ -55,7 +57,15 @@ def read_jsonl(path: Path) -> List[Mapping[str, Any]]:
 
 
 def two_sided_sign_p(neg: int, pos: int) -> float:
-    """Exact two-sided binomial p on the discordant/non-tied pairs."""
+    """Exact two-sided binomial p on the discordant/non-tied pairs.
+
+    A negative count raises rather than returning a number: `range(k + 1)` is
+    empty for k < 0, so the sum is 0 and the function would answer p = 0.0 --
+    maximal significance -- for an input that cannot occur. A statistic whose
+    failure mode is a perfect p-value is the wrong shape.
+    """
+    if neg < 0 or pos < 0:
+        raise CompareError(f"sign test needs counts, got neg={neg}, pos={pos}")
     n = neg + pos
     if n == 0:
         return 1.0
@@ -160,8 +170,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--b", required=True, help="transcripts JSONL of checkpoint B")
     ap.add_argument("--label-a", default="A")
     ap.add_argument("--label-b", default="B")
-    ap.add_argument("--eval-set", default="data/scenarios/corpus.jsonl")
-    ap.add_argument("--instances", default="data/scenarios/constraint_instances.jsonl")
+    # REPO_ROOT-anchored so the tool answers the same from any cwd.
+    ap.add_argument("--eval-set",
+                    default=str(REPO_ROOT / "data" / "scenarios" / "corpus.jsonl"))
+    ap.add_argument("--instances",
+                    default=str(REPO_ROOT / "data" / "scenarios" /
+                                "constraint_instances.jsonl"))
     ap.add_argument("--json", action="store_true", help="emit the result as JSON")
     args = ap.parse_args(argv)
 

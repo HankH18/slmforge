@@ -109,7 +109,12 @@ def redact_error_details(path: Path, out: Path) -> int:
             row = json.loads(line)
             detail = row.get("detail")
             if isinstance(detail, str) and detail:
-                cls = detail.split(":", 1)[0].strip()
+                # Take the leading exception class if there is one, else drop the
+                # body entirely. Keying on "does it contain a colon" published a
+                # colon-free provider body verbatim -- and a billing message is
+                # exactly the kind of text that carries no colon.
+                head = detail.split(":", 1)[0].strip()
+                cls = head if head.isidentifier() else "provider_error"
                 if cls != detail:
                     row["detail"] = cls
                     row["_detail_redacted"] = (
@@ -121,7 +126,7 @@ def redact_error_details(path: Path, out: Path) -> int:
 
 
 def dataset_card(repo_id: str, dataset: Path, report: Mapping[str, Any],
-                 model_repo: Optional[str]) -> str:
+                 model_repo: Optional[str], redacted: int = 0) -> str:
     letters = report.get("banned_letter_distribution", {})
     kept = letters.get("kept", {})
     keep_rate = letters.get("keep_rate", {})
@@ -173,6 +178,15 @@ def dataset_card(repo_id: str, dataset: Path, report: Mapping[str, Any],
         "The rejected rows are published deliberately. The accept rate is not a",
         "footnote here — which constraints the teacher *could not satisfy* is the",
         "finding this dataset was rebuilt around (below).",
+        "",
+        (f"**One redaction.** {redacted} rejection row(s) failed with a provider "
+         f"error rather than a checker verdict, and their `detail` field carried "
+         f"the raw provider response body — the author's account state, not "
+         f"anything about the data. Those bodies were replaced with the "
+         f"exception class alone and the row marked `_detail_redacted`. No row "
+         f"was dropped or reordered; the rejection reason is intact."
+         if redacted else
+         "No row in this release was redacted."),
         "",
         "## Row schema",
         "",
@@ -345,6 +359,17 @@ def push(args) -> int:
                                             staging / paths["rejected.jsonl"].name)
             print(f"  ok   redacted {redacted} raw provider error bodies")
 
+        # The card is written here, BEFORE the scan, so the scan actually covers
+        # every file that gets uploaded. Writing it afterwards meant the one file
+        # this project composes itself was the one file never checked, while the
+        # run printed "no secret ... in any staged file".
+        report = json.loads(report_path.read_text())
+        repo_hint = args.repo if "/" in args.repo else \
+            f"{os.environ.get('HF_USERNAME', '')}/{args.repo}"
+        (staging / "README.md").write_text(
+            dataset_card(repo_hint, dataset, report, args.model_repo,
+                         redacted=redacted))
+
         residual = scan_for_secrets(
             {p.name: p for p in staging.iterdir() if p.is_file()})
         if residual:
@@ -378,10 +403,6 @@ def push(args) -> int:
         print(f"  ok   HF_TOKEN can write ({why})")
 
         repo_id = args.repo if "/" in args.repo else f"{username}/{args.repo}"
-        report = json.loads(report_path.read_text())
-        (staging / "README.md").write_text(
-            dataset_card(repo_id, dataset, report, args.model_repo))
-
         try:
             api.create_repo(repo_id, repo_type="dataset", private=False,
                             exist_ok=True)

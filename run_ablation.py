@@ -31,7 +31,7 @@ from typing import Any, Dict, List
 
 import eval as E
 import judge as judge_mod
-from harness import build_constraint_lookup
+from harness import HarnessError, build_constraint_lookup, validate_eval_set
 
 REPO_ROOT = Path(__file__).resolve().parent
 
@@ -121,6 +121,17 @@ def main() -> int:
         return 2
 
     constraint_lookup = build_constraint_lookup(E.load_jsonl(str(constraints_path)))
+
+    # Before a single cell runs. This is the most expensive path in the repo --
+    # every model x every strategy over the whole set -- so an eval set that
+    # cannot be scored costs the most here and used to surface only in
+    # aggregate(), at the very end, with nothing written.
+    try:
+        validate_eval_set(scenarios, constraint_lookup, E.render_user_message)
+    except HarnessError as exc:
+        print(f"ERROR {eval_set_path}: {exc}", file=sys.stderr)
+        return 2
+
     exemplars = E.load_jsonl(str(exemplars_path))
 
     judge_model = cfg["judge"]["model"]

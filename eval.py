@@ -56,8 +56,12 @@ from harness import (STRATEGIES, HarnessError, aggregate, build_constraint_looku
 from scenarios.render import render_user_message
 
 REPO_ROOT = Path(__file__).resolve().parent
-DEFAULT_EVAL_SET = "data/scenarios/corpus.jsonl"
-DEFAULT_CONSTRAINTS = "data/scenarios/constraint_instances.jsonl"
+DEFAULT_EVAL_SET = str(REPO_ROOT / "data" / "scenarios" / "corpus.jsonl")
+# REPO_ROOT-anchored, not cwd-relative. A grader running the documented command
+# from their own directory used to get a clean PREFLIGHT PASS followed by
+# "constraint_instances.jsonl does not exist" from eval.py, because preflight
+# anchors its default at the repo and this did not.
+DEFAULT_CONSTRAINTS = str(REPO_ROOT / "data" / "scenarios" / "constraint_instances.jsonl")
 
 # ---------------------------------------------------------------- strategies
 #

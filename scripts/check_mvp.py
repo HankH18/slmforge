@@ -213,6 +213,11 @@ METRIC_KEYS = ("spec_adherence", "robustness", "fail_rate")
 #: The literal fence around the GENERATED block. Everything between these two
 #: markers is written by render_metric_block and checked byte for byte;
 #: everything outside them is swept for rate-shaped numbers.
+#: Which models.json pin goes with which report. The repo carries one frozen
+#: package per submission and they name different checkpoints, so the report
+#: chosen decides the pin unless --pin-key overrides it.
+DEFAULT_PIN_KEY_BY_REPORT = {"MVP_REPORT": "tuned_mvp", "FINAL_REPORT": "tuned"}
+
 BEGIN_METRICS = "<!-- BEGIN GENERATED METRICS -->"
 END_METRICS = "<!-- END GENERATED METRICS -->"
 #: rows of the generated table, in printed order: the three rates gate_check
@@ -871,7 +876,7 @@ def _paragraph(text, i):
     return run
 
 
-def declared_non_metric_lines(gate, text):
+def declared_non_metric_lines(gate, text, report_rel="docs/MVP_REPORT.md"):
     """(exempt, regions) for the lines the report EXPLICITLY declares carry no
     number this gate re-derived.
 
@@ -889,7 +894,7 @@ def declared_non_metric_lines(gate, text):
     for i, line in enumerate(text.splitlines()):
         if NON_METRIC_CLOSE_RE.search(line):
             if open_at is None:
-                gate.fail(f"docs/MVP_REPORT.md line {i + 1} closes a non-metric "
+                gate.fail(f"{report_rel} line {i + 1} closes a non-metric "
                           f"block that was never opened")
             else:
                 regions[open_at][0].append(i)
@@ -898,13 +903,13 @@ def declared_non_metric_lines(gate, text):
         m = NON_METRIC_OPEN_RE.search(line)
         if m:
             if open_at is not None:
-                gate.fail(f"docs/MVP_REPORT.md line {i + 1} opens a non-metric "
+                gate.fail(f"{report_rel} line {i + 1} opens a non-metric "
                           f"block inside the one opened at line {open_at + 1}")
             open_at, why = i, m.group(1).strip()
             exempt[i] = why
             regions[i] = ([i], why, i)
             if not why:
-                gate.fail(f"docs/MVP_REPORT.md line {i + 1}: a non-metric block "
+                gate.fail(f"{report_rel} line {i + 1}: a non-metric block "
                           f"must state WHY the numbers in it are not results "
                           f"(`<!-- non-metric-block: <reason> -->`)")
             continue
@@ -919,17 +924,18 @@ def declared_non_metric_lines(gate, text):
             for j in regions[i][0]:
                 exempt.setdefault(j, exempt[i])
             if not exempt[i]:
-                gate.fail(f"docs/MVP_REPORT.md line {i + 1}: a non-metric "
+                gate.fail(f"{report_rel} line {i + 1}: a non-metric "
                           f"declaration must state WHY the number is not a result "
                           f"(`<!-- non-metric: <reason> -->`)")
     if open_at is not None:
-        gate.fail(f"docs/MVP_REPORT.md opens a non-metric block at line "
+        gate.fail(f"{report_rel} opens a non-metric block at line "
                   f"{open_at + 1} and never closes it -- an unterminated block "
                   f"would exempt the whole rest of the report")
     return exempt, regions
 
 
-def check_declarations_are_visible(gate, regions, normalized, covered):
+def check_declarations_are_visible(gate, regions, normalized, covered,
+                                   report_rel="docs/MVP_REPORT.md"):
     """A declaration that actually exempts a number must SAY SO IN THE REPORT.
 
     `<!-- non-metric: ... -->` renders as nothing, so the hatch used to cost an
@@ -961,7 +967,7 @@ def check_declarations_are_visible(gate, regions, normalized, covered):
         if any(DISCLAIMER_RE.search(normalized.get(i, "")) for i in window):
             continue
         gate.fail(
-            f"docs/MVP_REPORT.md line {opened_at + 1} declares "
+            f"{report_rel} line {opened_at + 1} declares "
             f"{why!r} non-metric, and that declaration is an HTML comment: it "
             f"renders as NOTHING, so a grader reading the report sees the "
             f"numbers under it with no qualification at all. Say it where the "
@@ -1054,7 +1060,7 @@ def check_report_metrics(gate, text, block, report_rel="docs/MVP_REPORT.md"):
                     f"editing it.\n{diff}")
 
     # --- (b) the block may not be declared away ---------------------------
-    exempt, regions = declared_non_metric_lines(gate, text)
+    exempt, regions = declared_non_metric_lines(gate, text, report_rel)
     covered = sorted(block_lines & set(exempt))
     if covered:
         gate.fail(
@@ -1121,7 +1127,8 @@ def check_report_metrics(gate, text, block, report_rel="docs/MVP_REPORT.md"):
                     f"count or a date. Line: {raw.strip()!r}")
 
     # A declaration that actually hid a number must be visible to the reader.
-    check_declarations_are_visible(gate, regions, normalized, exempted_numbers)
+    check_declarations_are_visible(gate, regions, normalized,
+                                   exempted_numbers, report_rel)
 
     # A rate split across a newline is still one rate. The joined text is read
     # only where a hit STRADDLES a line boundary -- everything inside one line
@@ -1463,10 +1470,14 @@ def main(argv=None):
                          "frozen package per submission -- the MVP report and "
                          "runs/mvp record what was submitted at MVP and must "
                          "keep re-deriving after a later checkpoint is published")
-    ap.add_argument("--pin-key", default="tuned",
+    ap.add_argument("--pin-key", default=None,
                     help="which configs/models.json key names the checkpoint "
-                         "this package documents (default 'tuned', the current "
-                         "published model)")
+                         "this package documents. Defaults to the key that goes "
+                         "with --report: 'tuned' for FINAL_REPORT, 'tuned_mvp' "
+                         "for the MVP package. The three defaults have to name "
+                         "ONE package or the bare command checks an incoherent "
+                         "triple -- a report against a pin whose transcripts are "
+                         "in a different directory.")
     ap.add_argument("--emit-metrics", action="store_true",
                     help="print the generated metrics block for "
                          "docs/MVP_REPORT.md on stdout and exit 0. The report is "
@@ -1479,19 +1490,62 @@ def main(argv=None):
     run_dir = Path(args.run_dir).resolve() if args.run_dir else root / "runs" / "mvp"
     report_path = (Path(args.report).resolve() if args.report
                    else root / "docs" / "MVP_REPORT.md")
+    # Keep the three in step. --report is what names the package, so the pin key
+    # follows it unless the caller says otherwise -- but only if that key is
+    # actually there. A package that declares just 'tuned' (the shape before
+    # this repo carried two frozen submissions, and the shape every synthetic
+    # fixture uses) must keep working with no flags at all.
+    pin_key = args.pin_key
+    if pin_key is None:
+        preferred = DEFAULT_PIN_KEY_BY_REPORT.get(report_path.stem, "tuned")
+        available = {}
+        try:
+            available = read_json(root / "configs" / "models.json")
+        except (GateError, OSError):
+            available = {}
+        pin_key = preferred if isinstance(available, dict) and preferred in available \
+            else "tuned"
     emit = args.emit_metrics
     log = sys.stderr if emit else sys.stdout
-    # The banner names the package, so a passing run says WHICH one passed.
-    # "MVP" stays the default wording: it is the package this gate was written
-    # for and the one the default arguments still check.
+    # The banner names what was actually CHECKED. Deriving it from the report's
+    # filename alone let a PASS line attest to a package it had not gated: a
+    # copy of MVP_REPORT.md named FINAL_REPORT.md printed "PASS FINAL submission
+    # check" while verifying the MVP pin against runs/mvp. The pin key and the
+    # run dir are what identify a package, so they go in the line.
     label = {"MVP_REPORT": "MVP", "FINAL_REPORT": "FINAL"}.get(
         report_path.stem, report_path.stem)
-    gate = Gate(f"{label} submission check: {root}", stream=log)
+    try:
+        where = run_dir.relative_to(root).as_posix()
+    except ValueError:
+        where = str(run_dir)
+    gate = Gate(f"{label} submission check [pin={pin_key} run={where}]: {root}",
+                stream=log)
     print(f"checking {root} against judge rubric {judge_mod.rubric_hash()}",
           file=log)
 
     if not root.is_dir():
         gate.fail(f"{root} does not exist")
+        return gate.finish()
+    # relative_to() raises on a path that is not a descendant, and check_report
+    # called it before its own exists() check -- so a --report outside --root, or
+    # a relative --report resolved against a different cwd, ended the run with an
+    # unhandled ValueError AFTER the whole re-derivation had already been paid
+    # for. Decide it here, before anything is scored.
+    for label_, path_ in (("--report", report_path), ("--run-dir", run_dir)):
+        try:
+            path_.relative_to(root)
+        except ValueError:
+            gate.fail(f"{label_} {path_} is not inside --root {root}. A package "
+                      f"is gated as a whole; a report or run directory from "
+                      f"somewhere else on disk is not part of it.")
+            return gate.finish()
+    # Not under --emit-metrics: that command exists to produce the block an
+    # author pastes INTO the report, so requiring the report first inverts the
+    # order of the only workflow it has.
+    if not emit and not report_path.is_file():
+        # Same wording check_report used, so the message names the report the
+        # way the rest of the gate does rather than as an absolute path.
+        gate.fail(f"{report_path.relative_to(root).as_posix()} missing")
         return gate.finish()
     if not run_dir.is_dir() or not any(run_dir.iterdir()):
         gate.fail(f"{run_dir} is missing or empty -- no MVP run artifacts "
@@ -1499,10 +1553,10 @@ def main(argv=None):
                   f"transcripts for BOTH the tuned and the base model.")
         return gate.finish()
 
-    cfg = load_models_json(gate, root, args.pin_key)
+    cfg = load_models_json(gate, root, pin_key)
     if cfg is None:
         return gate.finish()
-    tuned_spec = f"hf:{cfg[args.pin_key]}"
+    tuned_spec = f"hf:{cfg[pin_key]}"
     base_spec = cfg["base"]
     if tuned_spec == base_spec:
         gate.fail("configs/models.json pins the same repo@commit for 'tuned' and "
@@ -1565,7 +1619,7 @@ def main(argv=None):
         return 0
 
     check_report(gate, root, cfg, base_spec, run_dir, block, rubric_hash,
-                 eval_rel, report_path, args.pin_key)
+                 eval_rel, report_path, pin_key)
     return gate.finish()
 
 

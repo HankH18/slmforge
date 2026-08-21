@@ -566,8 +566,8 @@ occurrences per response, counted with the checker's own normalisation
 (`scripts/compare_checkpoints.py`) — the picture is not ambiguous at all:
 
 - base → v2 (N=846): median 34 → 14, lower on 89 of 105 paired scenarios,
-  sign-test **p = 1.9 × 10⁻¹³**, bootstrap 95% CI on the median difference
-  **[−26, −15]**.
+  sign-test **p = 1.9 × 10⁻¹³**, bootstrap 95% CI on the difference of
+  medians **[−26, −15]**.
 - v1 → v2, the two data iterations: median 20 → 14, lower on 75 of 105,
   **p = 6.1 × 10⁻⁸**, CI **[−9, −4]**.
 

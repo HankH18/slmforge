@@ -389,6 +389,25 @@ def _scenario_map(scenarios: Any) -> Dict[str, Mapping[str, Any]]:
 
 
 
+#: How many problems a refusal message lists before it says how many it omitted.
+MAX_REPORTED_PROBLEMS = 40
+
+#: A probe string the pinned checkers are run over to prove a constraint OBJECT
+#: is one they accept. Deliberately bland: the verdict is irrelevant, only
+#: whether the checker refuses the constraint itself.
+CONSTRAINT_PROBE = "A short probe sentence, with nothing unusual about it."
+
+
+def is_nonempty_text(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def row_problems(problems: Sequence[str], before: int) -> bool:
+    """Did THIS row contribute a problem? See the per-row guard below."""
+    return len(problems) > before
+
+
+
 def validate_eval_set(scenarios: Sequence[Mapping[str, Any]],
                       constraint_lookup: Mapping[str, Mapping[str, Any]],
                       renderer: Optional[Callable[..., str]] = None) -> None:
@@ -415,6 +434,11 @@ def validate_eval_set(scenarios: Sequence[Mapping[str, Any]],
     seen: Dict[str, int] = {}
     for i, scenario in enumerate(scenarios):
         where = f"row {i + 1}"
+        # Guard the renderer per ROW, not globally. Guarding on "no problems at
+        # all" meant one bad row silenced the render check for every row after
+        # it, so a file with several unrenderable rows reported one and cost a
+        # round trip per remaining fault.
+        before = len(problems)
         if not isinstance(scenario, Mapping):
             problems.append(f"{where}: not a JSON object")
             continue
@@ -456,6 +480,9 @@ def validate_eval_set(scenarios: Sequence[Mapping[str, Any]],
                                     f"{cid!r}")
 
         # The three that used to surface only in aggregate(), after the money.
+        # PRESENCE is not enough: aggregate sorts these values, so a `k` that is
+        # a string, a list or null raises TypeError there -- in exactly the place
+        # this validator exists to make unreachable.
         for key, why in (("pressure", "the robustness metric is defined over it"),
                          ("split", "the generalization breakdown is defined over it"),
                          ("k", "the composition breakdown is defined over it")):
@@ -463,22 +490,64 @@ def validate_eval_set(scenarios: Sequence[Mapping[str, Any]],
                 problems.append(f"{where}: no {key!r}; {why}, and it is read only "
                                 f"after every generation and judge call have been "
                                 f"paid for")
-        pressure = scenario.get("pressure")
-        if pressure is not None and pressure not in PRESSURES:
-            problems.append(f"{where}: pressure {pressure!r} is not one of "
-                            f"{list(PRESSURES)}")
+        if "pressure" in scenario and scenario["pressure"] not in PRESSURES:
+            # No `is not None` escape. An explicit null passes the presence check
+            # and is then dropped from every pressure cell while still counting
+            # in n, so by_pressure stops summing to the scored total.
+            problems.append(f"{where}: pressure {scenario['pressure']!r} is not "
+                            f"one of {list(PRESSURES)}")
+        if "split" in scenario and not is_nonempty_text(scenario["split"]):
+            problems.append(f"{where}: split {scenario['split']!r} is not a "
+                            f"non-empty string; the split breakdown sorts these")
+        if "k" in scenario:
+            k = scenario["k"]
+            if isinstance(k, bool) or not isinstance(k, int):
+                problems.append(
+                    f"{where}: k is {k!r} ({type(k).__name__}), not an integer. "
+                    f"aggregate() sorts the k values, so a non-integer raises "
+                    f"there -- after every generation and judge call.")
+            elif isinstance(ids, Sequence) and not isinstance(ids, (str, bytes)) \
+                    and ids and k != len(ids):
+                problems.append(
+                    f"{where}: k is {k} but the row lists {len(ids)} "
+                    f"constraint(s). Nothing downstream re-derives k, so every "
+                    f"by_k cell this row lands in would be mislabelled.")
 
-        if renderer is not None and not problems:
+        if renderer is not None and not row_problems(problems, before):
             try:
                 renderer(scenario, constraint_lookup)
             except Exception as exc:  # noqa: BLE001 - any render failure is fatal
                 problems.append(f"{where}: does not render into a prompt "
                                 f"({type(exc).__name__}: {exc})")
 
+    # A constraint id can resolve perfectly and still be unscoreable: the pinned
+    # checkers reject an id outside the registry's pattern, a family or split
+    # that disagrees with the registry, or ANY unrecognised key. That refusal
+    # used to land at SCORING time -- after the whole run was paid for -- and
+    # under a mock generator it was worse than a crash: eval.py caught it as a
+    # generator error, quarantined the row, dropped it from the denominator and
+    # exited 0 reporting a rate over the rows that survived.
+    referenced = {cid for s_ in scenarios if isinstance(s_, Mapping)
+                  for cid in (s_.get("constraints") or [])
+                  if isinstance(cid, str) and cid in constraint_lookup}
+    for cid in sorted(referenced):
+        try:
+            check(constraint_lookup[cid], CONSTRAINT_PROBE)
+        except Exception as exc:  # noqa: BLE001 - any refusal is fatal to the run
+            problems.append(
+                f"constraint {cid!r}: the pinned checker refuses this constraint "
+                f"({type(exc).__name__}: {exc})")
+
     if problems:
         head = (f"the eval set cannot be scored -- {len(problems)} problem(s). "
                 f"Refusing to start a run that would fail after paying for it:")
-        raise HarnessError(head + "\n  - " + "\n  - ".join(problems[:40]))
+        shown = problems[:MAX_REPORTED_PROBLEMS]
+        body = "\n  - " + "\n  - ".join(shown)
+        if len(problems) > len(shown):
+            # Silent truncation reads as "that was all of them".
+            body += (f"\n  - ... and {len(problems) - len(shown)} further "
+                     f"problem(s) not shown")
+        raise HarnessError(head + body)
 
 
 def aggregate(rows: Sequence[Mapping[str, Any]],

@@ -27,17 +27,22 @@ What "re-derived" means here, precisely:
 
   These deliberately do NOT always equal the `by_constraint_type` block the
   harness stores. `harness.aggregate` counts a constraint check for every row,
-  including a QUARANTINED one -- a row where the generator or the judge produced
-  nothing. An empty output satisfies every checker vacuously, so a quarantined
-  row donates a free pass to each of its constraint types and quietly lowers the
-  violation rate. This script counts only the rows `gate_check.score_cell`
-  scores, which is the same denominator `spec_adherence` uses.
+  including a QUARANTINED one -- a row with no `spec_pass`, because the judge or
+  the generator produced no usable result. This script counts only the rows
+  `gate_check.score_cell` scores, which is the same denominator
+  `spec_adherence` uses: a row that does not count toward the headline should
+  not count toward the breakdown printed beside it.
 
-  On the committed runs this touches exactly one cell: the base model
-  quarantined one of 147 scenarios, so its stored rates are computed over 4
-  extra vacuous passes. `sentence_initial_letter` is 7/24 = 0.2917 here and
-  7/25 = 0.280 there. Every fine-tuned point quarantined nothing and the two
-  agree exactly.
+  On the committed runs this touches exactly one cell. The base run's scenario
+  `s-0103` was quarantined because the JUDGE failed all three attempts, so no
+  quality score exists and `spec_pass` is None -- but its output is real (336
+  characters) and it PASSES all four of its checkers. So the four checks this
+  script drops are four checks the base model passed, and excluding them makes
+  base's per-type violation rates slightly HIGHER here than in the stored block:
+  `sentence_initial_letter` is 7/24 = 0.2917 here and 7/25 = 0.280 there. The
+  difference runs against this report's own claim that base beats the tuned
+  model on the held-out families, not for it. Every fine-tuned point quarantined
+  nothing and the two agree exactly.
 * the banned-letter occurrence counts are computed from the response text with
   `constraints.checkers._fold`, the same normalisation the checker applies, so
   a response cannot lower its count with a zero-width space or a fullwidth
@@ -238,8 +243,13 @@ def derive_breakdowns(rows: Sequence[Mapping[str, Any]],
                 occ = count_occurrences(output, letter)
                 letter_occurrences.append(occ)
                 letter_lengths.append(len(output))
-                if output:
-                    letter_per_1000.append(1000.0 * occ / len(output))
+                # Density needs a length to divide by. Skipping only THIS list on
+                # an empty output would compute the per-1,000 column over a
+                # different row set than the two columns printed beside it, and
+                # the report presents all three as cuts of the same rows. An
+                # empty scored output has no occurrences either, so 0 is the
+                # honest density and it keeps the row sets identical.
+                letter_per_1000.append(1000.0 * occ / len(output) if output else 0.0)
                 if letter == "e":
                     e_ban_occurrences.append(occ)
 

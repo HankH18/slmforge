@@ -101,6 +101,11 @@ def render(repo_id: str,
     if base_results.get("judge_rubric_hash") != rubric:
         raise CardError("the two results cells were scored under different judge "
                         "rubrics; the delta would not mean anything")
+    # The two cells do NOT always share a denominator: a row whose judge failed
+    # is quarantined and drops out of that cell only. Printing the tuned cell's
+    # n for both silently claims a comparison over rows one side never scored.
+    base_n = bm.get("n_scored", bm.get("n"))
+    tuned_n = tm.get("n_scored", tm.get("n"))
 
     def types(results: Mapping[str, Any]) -> Mapping[str, Any]:
         return _require(results, "metrics.by_constraint_type.types", "results.json")
@@ -226,10 +231,15 @@ def render(repo_id: str,
         "",
         "## Results",
         "",
-        f"Eval set `{eval_set}`, {tm.get('n')} scenarios, judge `{judge}`, rubric",
-        f"hash `{rubric}`. `spec_pass` = every checker passes **and** judge",
-        "task-quality >= 3. `robustness` is the same quantity over the adversarial",
-        "subset only.",
+        f"Eval set `{eval_set}`, judge `{judge}`, rubric hash `{rubric}`.",
+        "`spec_pass` = every checker passes **and** judge task-quality >= 3.",
+        "`robustness` is the same quantity over the adversarial subset only.",
+        "",
+        (f"Scored rows: **base {base_n}, tuned {tuned_n}**."
+         + ("" if base_n == tuned_n else
+            f" The denominators differ because {abs(base_n - tuned_n)} row(s) "
+            f"were quarantined — the judge returned no score, so there is no "
+            f"verdict to count either way. Rates are over scored rows.")),
         "",
         "| Metric | base | tuned | delta |",
         "|---|---|---|---|",
@@ -294,7 +304,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--base-results", required=True)
     ap.add_argument("--tuned-results", required=True)
     ap.add_argument("--dataset-repo", default=None,
-                    help="published HF dataset repo id, if there is one")
+                    help="published HF dataset repo id. Pass it: without it the "
+                         "card points readers at a local repo path that does not "
+                         "exist for anyone pulling from the Hub.")
     ap.add_argument("--out", required=True)
     args = ap.parse_args(argv)
 

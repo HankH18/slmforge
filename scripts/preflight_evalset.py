@@ -43,14 +43,25 @@ DEFAULT_CONSTRAINTS = REPO_ROOT / "data" / "scenarios" / "constraint_instances.j
 
 
 def read_jsonl(path: Path) -> List[Mapping[str, Any]]:
+    """Read the file the way eval.py reads it, byte for byte.
+
+    NOT `read_text().splitlines()`: that also splits on U+2028, U+2029, U+0085,
+    \x0b and \x0c, while eval.py iterates the file object and splits only on
+    universal newlines. A staff file written with ensure_ascii=False whose task
+    text contains a raw U+2028 -- legal inside a JSON string -- was rejected here
+    and scored perfectly by eval.py, which makes this tool's "exit 0 means
+    eval.py will accept it" promise false in the direction that bounces a valid
+    set. Two readers is what created the divergence; there is now one.
+    """
     rows = []
-    for lineno, line in enumerate(path.read_text().splitlines(), 1):
-        if not line.strip():
-            continue
-        try:
-            rows.append(json.loads(line))
-        except json.JSONDecodeError as exc:
-            raise SystemExit(f"FAIL {path}:{lineno}: not valid JSON ({exc})")
+    with open(path) as fh:
+        for lineno, line in enumerate(fh, 1):
+            if not line.strip():
+                continue
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError as exc:
+                raise SystemExit(f"FAIL {path}:{lineno}: not valid JSON ({exc})")
     return rows
 
 

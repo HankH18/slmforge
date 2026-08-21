@@ -4,7 +4,7 @@
 
 Five checkpoints — the base model plus four QLoRA fine-tunes at N = 106 / 211 / 423 / 846 — evaluated on the identical 147-scenario eval set with the identical judge and rubric. On `spec_adherence` the curve is flat-to-noisy and no trained point clears base. Counting how often the banned letter actually appears, the same five checkpoints run **34 → 35 → 33 → 29 → 14** occurrences in the median response. The behaviour is being learned. The graded metric cannot see it until the count reaches zero.
 
-Every number below is re-derived from the raw transcripts by `scripts/curve_report.py`, not read from a stored aggregate and not typed in by hand — `python scripts/curve_report.py --check` fails if this report and the transcripts disagree. See [§7](#7-how-these-numbers-were-produced).
+Every number below is re-derived from the raw transcripts by `scripts/curve_report.py` rather than read from a stored aggregate, and the tables are transcribed from its `--markdown` output. `python scripts/curve_report.py --check` re-derives every point and fails if **`runs/efficiency/curve.json`** and the transcripts disagree; it does not parse this document, so the binding between the JSON and these tables is transcription, and a reader checking a figure should run `--markdown` and compare. See [§7](#7-how-these-numbers-were-produced).
 
 ---
 
@@ -112,7 +112,7 @@ Not on `spec_adherence` — the interval table in §6 shows it resolves nothing 
 
 On the measure that does move, `scripts/compare_checkpoints.py` pairs the checkpoints scenario by scenario rather than comparing headline rates:
 
-Base against N=846 gives a median occurrence count of 34 against 14, lower on 89 of the 105 paired scenarios, sign-test p ≈ 1.9 × 10⁻¹³, bootstrap 95 % CI on the median difference [−26, −15]. The two data iterations, v1 against v2, give 20 against 14, lower on 75 of 105, p ≈ 6.1 × 10⁻⁸, CI [−9, −4]. On the same rows `spec_pass` gives McNemar exact p = 1.000 for both comparisons.
+Base against N=846 gives a median occurrence count of 34 against 14, lower on 89 of the 105 paired scenarios, sign-test p ≈ 1.9 × 10⁻¹³, bootstrap 95 % CI on the difference of medians [−26, −15]. The two data iterations, v1 against v2, give 20 against 14, lower on 75 of 105, p ≈ 6.1 × 10⁻⁸, CI [−9, −4]. On the same rows `spec_pass` gives McNemar exact p = 1.000 for both comparisons.
 
 That contrast is the result. The graded metric cannot separate two checkpoints that a paired test on the identical scenarios separates overwhelmingly. **The behaviour first moves decisively in the last doubling, so the minimum viable N on the sensitive measure lies between 423 and 846** — which is why the prepared inward point sits at 634. On the graded pass/fail measure the bound is unchanged: no N in the measured range holds the behaviour, and the threshold is above 846.
 
@@ -166,9 +166,9 @@ The occurrence column is computed from the transcripts: for each of the 105 eval
 python scripts/curve_report.py --check --markdown
 ```
 
-`--check` re-derives everything and exits non-zero if the committed curve is not what the transcripts produce, so a figure edited by hand into the report fails rather than persists. The tables in §3, §4 and §6 are its output. One deliberate difference from the harness's own stored `by_constraint_type` block: the base run quarantined a row, an empty output satisfies every checker vacuously, and those free passes lower its stored rates, so this script counts only scored rows — the same denominator `spec_adherence` uses.
+`--check` re-derives everything and exits non-zero if `runs/efficiency/curve.json` is not what the transcripts produce, so a figure edited by hand into **the JSON** fails rather than persists. The tables in §3, §4 and §6 are transcribed from `--markdown`; the gate covers the JSON they come from, not this markdown file, so `--markdown` is the command that checks a table cell. One deliberate difference from the harness's own stored `by_constraint_type` block: the base run quarantined a row, an empty output satisfies every checker vacuously, and those free passes lower its stored rates, so this script counts only scored rows — the same denominator `spec_adherence` uses.
 
-The base run quarantined one row (`s-0103`, three consecutive judge refusals, no score produced), which is why its denominator is 146 rather than 147. That row still contributes to the occurrence count, which needs no judge.
+The base run quarantined one row (`s-0103`, three consecutive judge refusals, no score produced), which is why its denominator is 146 rather than 147. `scripts/curve_report.py` excludes that row from every rate it computes, including the occurrence columns — a row with no `spec_pass` should not count toward a breakdown printed beside `spec_adherence`. It makes no difference to the occurrence numbers here, because `s-0103` carries no `banned_letter` constraint. It does move the per-type table: the row's output is real and passes all four of its checkers, so dropping it raises base's per-type violation rates slightly — `sentence_initial_letter` is 7/24 rather than 7/25 — which runs against this report's own claim about the held-out families rather than for it.
 
 ---
 
