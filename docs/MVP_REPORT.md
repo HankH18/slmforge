@@ -118,7 +118,9 @@ prose itself.
 
 *Describing the writing, not gate-re-derived measurements:* at an unchanged median
 of six sentences and roughly ninety words per answer, the median number of
-punctuation marks per answer rose from four to ten.
+punctuation marks per answer rose from four to ten, counting the characters
+`, ; : ! ? - -- ( ) [ ] " '`. Restricting the count to sentence-internal
+punctuation alone (`, ; :`) gives the same picture on a smaller base.
 
 <!-- /not-a-gate-metric-block -->
 
