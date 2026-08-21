@@ -63,14 +63,15 @@ from scenarios.render import render_user_message                  # noqa: E402
 
 from datagen import DatagenError                                  # noqa: E402
 from datagen.filter import decide, fluency_report                 # noqa: E402
-from datagen.sampling import (assert_has_negative,                # noqa: E402
+from datagen.sampling import (LETTER_MIXES, assert_has_negative,    # noqa: E402
                               assert_train_split_only, build_scenarios,
-                              eval_pair_keys, pair_key, type_shares)
+                              eval_pair_keys, letter_of, pair_key, type_shares)
 from datagen.task_pool import assert_disjoint_from_corpus         # noqa: E402
 from datagen.teacher import (CACHE_DIR, TeacherCache, call_teacher,  # noqa: E402
                              repair_turns, resolve_teacher)
 
-__all__ = ["generate", "write_outputs", "sidecar_paths", "summarise", "main"]
+__all__ = ["generate", "write_outputs", "sidecar_paths", "summarise",
+           "letter_histograms", "main"]
 
 #: Fraction of --n that must survive before the batch counts as usable.
 DEFAULT_KEEP_FRACTION = 0.75
@@ -276,6 +277,43 @@ def generate(samples: Sequence[Any],
             "cache": {"hits": cache.hits, "misses": cache.misses}}
 
 
+def letter_histograms(rows: Sequence[Mapping[str, Any]],
+                      rejections: Sequence[Mapping[str, Any]],
+                      lookup: Mapping[str, Mapping[str, Any]]) -> Dict[str, Any]:
+    """Realised ``banned_letter`` distribution: kept, rejected, and keep rate.
+
+    This is the evidence that a ``--letter-mix`` actually moved the curriculum.
+    Without it the intervention is an assertion: the REQUEST distribution is
+    knowable from the sampler alone, but what survives the rejection filter is
+    not, and the survivors are what the model trains on.
+
+    Counted the same way on both sides -- occurrences of a ``banned_letter``
+    instance in a row's constraint set -- so the two are comparable and the keep
+    rate is well defined. Rejections are per ATTEMPT, not per scenario, matching
+    :data:`datagen.sampling.V1_LETTER_OUTCOMES`, so this run's keep rates can be
+    read straight against that measured baseline.
+    """
+    def tally(records: Sequence[Mapping[str, Any]]) -> Counter:
+        counts: Counter = Counter()
+        for record in records:
+            for cid in record.get("constraints", []):
+                con = lookup.get(cid)
+                if con is not None and con.get("type") == "banned_letter":
+                    counts[letter_of(cid, lookup)] += 1
+        return counts
+
+    kept = tally(rows)
+    rejected = tally(rejections)
+    letters = sorted(set(kept) | set(rejected))
+    return {
+        "kept": {letter: kept[letter] for letter in letters},
+        "rejected": {letter: rejected[letter] for letter in letters},
+        "keep_rate": {letter: round(kept[letter] / (kept[letter] + rejected[letter]), 4)
+                      for letter in letters
+                      if kept[letter] + rejected[letter] > 0},
+    }
+
+
 def summarise(rows: Sequence[Mapping[str, Any]],
               rejections: Sequence[Mapping[str, Any]],
               negatives: Sequence[Mapping[str, Any]],
@@ -299,6 +337,7 @@ def summarise(rows: Sequence[Mapping[str, Any]],
         "attempt_histogram": dict(Counter(row["provenance"]["attempt"] for row in rows)),
         "k_distribution": dict(Counter(row["scenario"]["k"] for row in rows)),
         "pressure_distribution": dict(Counter(row["scenario"]["pressure"] for row in rows)),
+        "banned_letter_distribution": letter_histograms(rows, rejections, lookup),
         "type_counts": dict(type_counts),
         "type_shares": {t: round(v, 4) for t, v in shares.items()},
         "max_type_share": round(max(shares.values()), 4) if shares else 0.0,
@@ -342,6 +381,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--min-kept", type=int, default=None,
                     help=f"minimum kept rows; default ceil({DEFAULT_KEEP_FRACTION:.2f} * n)")
     ap.add_argument("--seed", type=int, default=20260820)
+    ap.add_argument("--letter-mix", choices=list(LETTER_MIXES), default="uniform",
+                    help="how a banned_letter instance is picked: 'uniform' is one "
+                         "per letter with equal probability; 'hard' weights the "
+                         "REQUEST by English letter frequency divided by the "
+                         "measured teacher keep rate, so the KEPT distribution "
+                         "lands on English frequency instead of on whichever "
+                         "letters the teacher finds easy")
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--no-cache", action="store_true",
                     help="bypass datagen/.cache (this re-bills the teacher)")
@@ -362,8 +408,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     print(f"teacher: {teacher}  ({reason})")
     print(f"held-out types never sampled: "
           f"{', '.join(registry.types_by_split('heldout_type'))}")
+    print(f"banned_letter request mix: {args.letter_mix}")
 
-    samples = build_scenarios(args.n, instances, corpus, seed=args.seed)
+    samples = build_scenarios(args.n, instances, corpus, seed=args.seed,
+                              letter_mix=args.letter_mix)
     print(f"sampled {len(samples)} scenarios from {len({s.task_id for s in samples})} "
           f"fresh tasks")
 
@@ -379,6 +427,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                        result["give_ups"], instances, args.n)
     report.update({"teacher": teacher, "teacher_resolved_by": reason,
                    "attempts": args.attempts, "seed": args.seed,
+                   "letter_mix": args.letter_mix,
                    "min_kept": min_kept, "cache": result["cache"],
                    "generated_utc": datetime.now(timezone.utc).isoformat()})
 
@@ -394,6 +443,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
           f"(accept rate {report['accept_rate']:.1%}), gave up on {report['gave_up']}")
     print(f"k: {report['k_distribution']}   pressure: {report['pressure_distribution']}")
     print(f"type shares: {report['type_shares']}  (max {report['max_type_share']:.1%})")
+    letters = report["banned_letter_distribution"]
+    print(f"banned_letter ({args.letter_mix}) kept: {letters['kept']}")
+    print(f"banned_letter ({args.letter_mix}) rejected: {letters['rejected']}")
+    print(f"banned_letter ({args.letter_mix}) keep rate: {letters['keep_rate']}")
     print(f"attempts: {report['attempt_histogram']}")
     print(f"rejections: {report['rejections']} {report['rejection_reasons']}")
     print(f"candidate DPO negatives: {report['dpo_negatives']}")

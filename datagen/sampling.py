@@ -34,6 +34,14 @@ DISJOINTNESS
     additionally refuses to emit a (task, constraint-set) pair that appears in
     the eval corpus, or twice in its own output.
 
+BANNED-LETTER REQUEST WEIGHTING
+    Instance choice is uniform by default. For ``banned_letter`` that is a trap:
+    the pipeline rejection-filters teacher output through the real checkers, and
+    the teacher's success rate depends enormously on WHICH letter is banned, so
+    a uniform REQUEST distribution produces a kept distribution dominated by the
+    easy letters. ``letter_mix="hard"`` divides out that bias at request time.
+    See :data:`LETTER_REQUEST_WEIGHTS` for the measurement and the arithmetic.
+
 A note on "negative": every train-split type is a prohibition -- do not use
 these words, this letter, lists, quotation marks -- so the behaviour spec's
 "at least one negative constraint" is satisfied structurally rather than by
@@ -64,7 +72,9 @@ from datagen.task_pool import TASKS, Task, compatible_nudges, normalize_text
 __all__ = ["TRAIN_TYPES", "HELDOUT_TYPES", "NEGATIVE_TYPES", "Sample",
            "assert_train_split_only", "assert_has_negative", "proportional_plan",
            "eval_k_weights", "eval_adversarial_weights", "build_scenarios",
-           "pair_key", "eval_pair_keys", "type_shares"]
+           "pair_key", "eval_pair_keys", "type_shares",
+           "ENGLISH_LETTER_FREQUENCY", "V1_LETTER_OUTCOMES", "LETTER_KEEP_RATES",
+           "LETTER_REQUEST_WEIGHTS", "LETTER_MIXES", "letter_of"]
 
 #: Types a training example may use, in registry order.
 TRAIN_TYPES: Tuple[str, ...] = tuple(registry.types_by_split("train"))
@@ -77,6 +87,121 @@ HELDOUT_TYPES: Tuple[str, ...] = tuple(registry.types_by_split("heldout_type"))
 #: is held out, so this is every train type -- stated rather than assumed.
 NEGATIVE_TYPES: Tuple[str, ...] = tuple(
     t for t in registry.list_types() if t != "sentence_initial_letter")
+
+
+# ------------------------------------------------- banned-letter request weights
+#: Standard English relative letter frequencies, for the ten letters the
+#: ``banned_letter`` instance library covers. A property of the LANGUAGE, not of
+#: this project's eval set -- which is the whole point: see
+#: :data:`LETTER_REQUEST_WEIGHTS`.
+ENGLISH_LETTER_FREQUENCY: Dict[str, float] = {
+    "e": 0.127, "a": 0.082, "o": 0.075, "i": 0.070, "s": 0.063,
+    "r": 0.060, "l": 0.040, "u": 0.028, "m": 0.024, "p": 0.019,
+}
+
+#: ``letter -> (kept, rejected)`` measured over the v1 training run
+#: (``data/train/v1.jsonl`` and ``v1.rejected.jsonl``): occurrences of each
+#: ``banned_letter`` instance among kept rows, and among rejection-ledger
+#: records. Rejections are per ATTEMPT, not per scenario, which is why the
+#: row totals differ per letter even though every letter was requested equally.
+#: :func:`datagen.generate.summarise` re-measures exactly these two counts on
+#: every run, so a later run can be compared against this baseline directly.
+V1_LETTER_OUTCOMES: Dict[str, Tuple[int, int]] = {
+    "e": (32, 166), "a": (33, 168), "i": (44, 113), "o": (48, 113),
+    "r": (56, 125), "u": (44, 79), "s": (56, 64), "l": (83, 34),
+    "p": (71, 27), "m": (78, 29),
+}
+
+#: ``letter -> kept / (kept + rejected)``, derived from :data:`V1_LETTER_OUTCOMES`.
+LETTER_KEEP_RATES: Dict[str, float] = {
+    letter: kept / (kept + rejected)
+    for letter, (kept, rejected) in V1_LETTER_OUTCOMES.items()
+}
+
+#: ``letter -> probability of REQUESTING that letter`` under ``letter_mix="hard"``.
+#:
+#: THE PROBLEM. :func:`build_scenarios` picks an instance uniformly from the
+#: pool, so every letter is requested equally often. But
+#: :mod:`datagen.generate` rejection-filters the teacher's draft through the
+#: real checkers, and writing without an ``e`` is far harder than writing
+#: without a ``p``. Measured over the v1 run (:data:`V1_LETTER_OUTCOMES`):
+#:
+#:     letter   kept   rejected   reject rate   keep rate
+#:       e        32       166        83.8%       0.1616
+#:       a        33       168        83.6%       0.1642
+#:       i        44       113        72.0%       0.2803
+#:       o        48       113        70.2%       0.2981
+#:       r        56       125        69.1%       0.3094
+#:       u        44        79        64.2%       0.3577
+#:       s        56        64        53.3%       0.4667
+#:       l        83        34        29.1%       0.7094
+#:       p        71        27        27.6%       0.7245
+#:       m        78        29        27.1%       0.7290
+#:
+#: Uniform requests therefore left v1 at l=83, m=78, p=71 ... a=33, e=32. The
+#: quality gate silently built a curriculum of EASY examples, and the model was
+#: trained on the easy tail of the exact skill it is graded on: v1 satisfied
+#: 1 of 105 ``banned_letter`` eval instances.
+#:
+#: THE FIX. Weight the REQUEST by how hard the letter is, so that what SURVIVES
+#: the filter lands where we want it:
+#:
+#:     raw(letter)  = ENGLISH_LETTER_FREQUENCY[letter] / LETTER_KEEP_RATES[letter]
+#:     weight       = raw(letter) / sum(raw)
+#:
+#: Since kept(letter) is proportional to request(letter) * keep_rate(letter), and
+#: request is proportional to frequency / keep_rate, the keep rate cancels and the
+#: KEPT distribution comes out proportional to English letter frequency. The
+#: division is what compensates for the filter's bias against difficulty; without
+#: it the gate re-imposes its own curriculum on whatever we ask for.
+#:
+#: WHY ENGLISH FREQUENCY, not our eval histogram. Our eval corpus happens to use
+#: e(35), a(31), o(14), i(13), s(12), and copying that histogram would train
+#: against our own answer key -- the improvement would be real on this eval and
+#: unfalsifiable anywhere else. English letter frequency is a property of the
+#: LANGUAGE: it predicts what any held-out eval built from English text will
+#: emphasise, so a model trained to it transfers rather than memorises. The two
+#: targets happen to agree in their ordering, which is exactly why the honest one
+#: costs us nothing.
+#:
+#: Worked out, the weights (and the kept share each projects, at the v1 keep
+#: rates) are:
+#:
+#:     letter   raw = freq/keep   weight    projected kept share   English share
+#:       e          0.7858        0.3403           21.6%              21.6%
+#:       a          0.4995        0.2163           13.9%              13.9%
+#:       o          0.2516        0.1089           12.8%              12.8%
+#:       i          0.2498        0.1082           11.9%              11.9%
+#:       s          0.1350        0.0585           10.7%              10.7%
+#:       r          0.1939        0.0840           10.2%              10.2%
+#:       l          0.0564        0.0244            6.8%               6.8%
+#:       u          0.0783        0.0339            4.8%               4.8%
+#:       m          0.0329        0.0143            4.1%               4.1%
+#:       p          0.0262        0.0114            3.2%               3.2%
+#:
+#: Derived here rather than pasted in, so that correcting a keep rate or adding a
+#: letter to the library re-derives the weights instead of leaving a stale
+#: literal behind. :func:`build_scenarios` additionally refuses to run in "hard"
+#: mode if the library contains a ``banned_letter`` instance this table does not
+#: cover, because a silently unweighted letter is the original bug again.
+LETTER_REQUEST_WEIGHTS: Dict[str, float] = {}
+_raw_letter_weights = {
+    letter: ENGLISH_LETTER_FREQUENCY[letter] / LETTER_KEEP_RATES[letter]
+    for letter in ENGLISH_LETTER_FREQUENCY
+}
+_raw_letter_total = sum(_raw_letter_weights.values())
+LETTER_REQUEST_WEIGHTS.update(
+    {letter: raw / _raw_letter_total
+     for letter, raw in _raw_letter_weights.items()})
+del _raw_letter_weights, _raw_letter_total
+
+#: The instance-selection mixes ``build_scenarios`` accepts. ``uniform`` is the
+#: default and is the historical behaviour, byte for byte.
+LETTER_MIXES: Tuple[str, ...] = ("uniform", "hard")
+
+#: The one type whose instance choice ``letter_mix`` touches. Everything else
+#: stays uniform whatever the mix.
+_WEIGHTED_TYPE = "banned_letter"
 
 
 class Sample(NamedTuple):
@@ -193,6 +318,45 @@ def _lexicon_of(cid: str) -> str:
     return meta.lexicon
 
 
+def letter_of(cid: str, lookup: Mapping[str, Mapping[str, Any]]) -> str:
+    """The letter a ``banned_letter`` instance bans, lowercased.
+
+    Raises rather than returning ``None`` for an instance without one: a letter
+    that cannot be identified cannot be weighted, and silently falling back to
+    uniform for it is the exact bug :data:`LETTER_REQUEST_WEIGHTS` exists to fix.
+    """
+    con = lookup.get(cid)
+    if con is None:
+        raise DatagenError(f"instance {cid!r} is not in the instance library")
+    letter = (con.get("params") or {}).get("letter")
+    if not isinstance(letter, str) or not letter:
+        raise DatagenError(
+            f"instance {cid!r} (type {con.get('type')!r}) carries no 'letter' "
+            f"parameter, so its request weight cannot be determined")
+    return letter.lower()
+
+
+def _letter_weights(pool: Sequence[str],
+                    lookup: Mapping[str, Mapping[str, Any]]) -> List[float]:
+    """:data:`LETTER_REQUEST_WEIGHTS` lined up with ``pool``, or a loud failure."""
+    weights: List[float] = []
+    for cid in pool:
+        letter = letter_of(cid, lookup)
+        weight = LETTER_REQUEST_WEIGHTS.get(letter)
+        if weight is None:
+            known = "".join(sorted(LETTER_REQUEST_WEIGHTS))
+            raise DatagenError(
+                f"instance {cid!r} bans {letter!r}, which has no measured keep "
+                f"rate in LETTER_REQUEST_WEIGHTS (covers {known!r}). Measure it "
+                f"before requesting it: an unweighted letter under "
+                f"letter_mix='hard' is the uniform-request bug all over again.")
+        weights.append(weight)
+    if not weights or sum(weights) <= 0:
+        raise DatagenError(
+            f"the banned_letter pool {list(pool)} carries no positive request weight")
+    return weights
+
+
 def _candidates(ctype: str, task: Task,
                 by_type: Mapping[str, List[str]]) -> Tuple[List[str], bool]:
     """Instance ids usable for ``ctype`` on ``task``, and whether they are topical.
@@ -284,17 +448,41 @@ def build_scenarios(n: int,
                     corpus_rows: Sequence[Mapping[str, Any]],
                     seed: int = 20260820,
                     tasks: Sequence[Task] = TASKS,
-                    max_type_share: float = 0.25) -> List[Sample]:
+                    max_type_share: float = 0.25,
+                    letter_mix: str = "uniform") -> List[Sample]:
     """``n`` training scenarios: fresh tasks x wide train-split constraint sets.
 
-    Deterministic in ``seed``: the same seed and library give byte-identical
-    scenarios, so a rerun re-uses the teacher cache instead of re-billing.
+    Deterministic in ``seed``: the same seed, library and ``letter_mix`` give
+    byte-identical scenarios, so a rerun re-uses the teacher cache instead of
+    re-billing.
+
+    ``letter_mix`` selects how a ``banned_letter`` instance is picked from its
+    pool, and touches no other type:
+
+    ``"uniform"`` (default)
+        Uniform, via ``rng.choice`` -- the historical behaviour, byte for byte.
+        The default is deliberately a no-op so that every caller and every test
+        written before this parameter existed keeps its exact output.
+    ``"hard"``
+        Weighted by :data:`LETTER_REQUEST_WEIGHTS`, so that what survives the
+        rejection filter in :mod:`datagen.generate` is distributed like English
+        letter frequency instead of like teacher convenience.
+
+    An unrecognised mix raises. It is never silently treated as uniform: the
+    failure mode being fixed here is precisely a curriculum quietly reverting to
+    the easy letters while the run still reports success.
     """
     if n <= 0:
         raise DatagenError(f"asked for {n} scenarios; there is no such thing as an "
                            f"empty training batch worth writing")
     if not tasks:
         raise DatagenError("the task pool is empty")
+    if letter_mix not in LETTER_MIXES:
+        raise DatagenError(
+            f"unknown letter_mix {letter_mix!r}; expected one of "
+            f"{', '.join(repr(m) for m in LETTER_MIXES)}. Refusing to fall back to "
+            f"uniform: a typo that silently restores the easy-letter curriculum is "
+            f"the bug this parameter exists to prevent.")
 
     by_type: Dict[str, List[str]] = {t: [] for t in TRAIN_TYPES}
     for cid, con in sorted(instances.items()):
@@ -306,6 +494,28 @@ def build_scenarios(n: int,
         raise DatagenError(f"the instance library has no instances of train types {missing}")
 
     rng = random.Random(seed)
+    # Validate the whole banned_letter pool up front, not lazily as letters come
+    # up: a library entry with no measured keep rate must fail the run, not the
+    # one unlucky scenario that happens to draw it.
+    weight_cache: Dict[Tuple[str, ...], List[float]] = {}
+    if letter_mix != "uniform":
+        letter_pool = by_type.get(_WEIGHTED_TYPE, [])
+        weight_cache[tuple(letter_pool)] = _letter_weights(letter_pool, instances)
+
+    def pick_instance(ctype: str, pool: List[str]) -> str:
+        """One instance id from ``pool``. Weighted only for the weighted type.
+
+        The uniform branch is the original ``rng.choice`` call, untouched, so it
+        draws from the RNG stream exactly as before and reproduces prior output.
+        """
+        if letter_mix == "uniform" or ctype != _WEIGHTED_TYPE:
+            return rng.choice(pool)
+        key = tuple(pool)
+        weights = weight_cache.get(key)
+        if weights is None:
+            weights = weight_cache[key] = _letter_weights(pool, instances)
+        return rng.choices(pool, weights=weights)[0]
+
     dealer = _TypeDealer(rng, TRAIN_TYPES)
     k_plan = proportional_plan(n, eval_k_weights(corpus_rows))
     adv_plan = proportional_plan(n, eval_adversarial_weights(corpus_rows))
@@ -332,7 +542,7 @@ def build_scenarios(n: int,
             cids, distractor = [], False
             for ctype in types:
                 pool, topical = _candidates(ctype, task, by_type)
-                cids.append(rng.choice(pool))
+                cids.append(pick_instance(ctype, pool))
                 distractor = distractor or topical
             assert_train_split_only(cids, instances)
             assert_has_negative(cids, instances)
