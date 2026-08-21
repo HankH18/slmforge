@@ -104,9 +104,15 @@ from pathlib import Path
 
 import modal
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-CONFIG_PATH = REPO_ROOT / "configs" / "train.json"
 REMOTE_REPO = "/repo"          # where the mounted repo slice lands in the container
+
+# In the Modal container this module does NOT sit inside the mounted repo slice, so
+# Path(__file__).parent.parent resolves to "/" and every repo-relative path silently
+# becomes an absolute path that does not exist ("/configs/train.json"). Resolve the
+# root from where the slice actually landed when running remotely.
+_LOCAL_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(REMOTE_REPO) if (Path(REMOTE_REPO) / "configs").is_dir() else _LOCAL_ROOT
+CONFIG_PATH = REPO_ROOT / "configs" / "train.json"
 REMOTE_VOL = "/vol"            # where the artifacts Volume is mounted
 REMOTE_HF_CACHE = "/root/.cache/huggingface"
 
@@ -125,22 +131,35 @@ PROMPT_CONTRACT_KEYS = ("render_fn", "sample_row_index", "sample_rendered_prompt
 ARTIFACT_KEYS = ("adapter", "adapter_bytes", "merged_fp16", "merged_bytes")
 
 # The one thing configs/train.json does NOT pin: the container's python deps.
-# Unsloth needs a CUDA runtime and a torch build matched to it, so we start from
-# NVIDIA's image rather than debian_slim. Versions are left to pip resolution on
-# purpose -- pinning a version string that was never built here would be a lie.
+# bitsandbytes ships CUDA kernels and needs a torch build matched to them, so we
+# start from NVIDIA's image rather than debian_slim.
+#
+# These ARE pinned, unlike the first cut, and the reason is not style. Unpinned
+# resolution installed a 9-month-old unsloth against a current transformers; the
+# old wrapper monkey-patched the new tokenizer loader and every run died with
+# "AttributeError: 'dict' object has no attribute 'model_type'". Unsloth is gone
+# (this file drives transformers.Trainer directly -- see train()), and with it
+# the only reason it was here: for a 1.7B model on ~900 examples its speedup is
+# irrelevant next to its version coupling. transformers is held on the 4.57 line
+# deliberately: 5.x REMOVED TrainingArguments.warmup_ratio, which
+# configs/train.json pins and this file passes, so resolving forward would break
+# a frozen config contract silently.
+#
+# torch 2.12 bundles a CUDA 13 runtime; bitsandbytes 0.50 ships CUDA 13 kernels,
+# so the pair is self-consistent and the base image only supplies the OS. If the
+# smoke run ever reports a driver-too-old error, torch==2.10.0 is the last cu12
+# release -- change it there, re-smoke, and do not touch anything else.
 PIP_PACKAGES = [
-    "unsloth",
-    "unsloth_zoo",
-    "bitsandbytes",
-    "accelerate",
-    "peft",
-    "transformers",
-    "datasets",
-    "trl",
-    "sentencepiece",
-    "protobuf",
-    "huggingface_hub",
-    "hf_transfer",
+    "torch==2.12.1",
+    "transformers==4.57.2",
+    "tokenizers==0.22.2",        # transformers 4.57 caps <=0.23.0; 0.23.0 final never shipped
+    "huggingface_hub==0.36.2",   # transformers 4.57 caps <1.0, and hf_transfer needs hub 0.x
+    "hf_transfer==0.1.9",
+    "accelerate==1.14.0",
+    "peft==0.20.0",
+    "bitsandbytes==0.50.1",
+    "sentencepiece==0.2.2",
+    "protobuf==6.33.6",
 ]
 
 
@@ -668,12 +687,13 @@ def train(smoke: bool, dataset_path: str, run_name: str) -> dict:
     t_zero = time.time()
     started_utc = datetime.now(timezone.utc).isoformat()
 
-    # unsloth must be imported before transformers/trl for its patches to land.
-    from unsloth import FastLanguageModel  # noqa: F401  (import order matters)
     import torch
     import transformers
     from huggingface_hub import snapshot_download
-    from transformers import Trainer, TrainingArguments
+    from peft import (LoraConfig, PeftModel, get_peft_model,
+                      prepare_model_for_kbit_training)
+    from transformers import (AutoModelForCausalLM, AutoTokenizer,
+                              BitsAndBytesConfig, Trainer, TrainingArguments)
 
     sys.path.insert(0, REMOTE_REPO)
 
@@ -711,27 +731,93 @@ def train(smoke: bool, dataset_path: str, run_name: str) -> dict:
     base_repo = resolved["base_model"]["repo"]
     base_rev = resolved["base_model"]["revision"]
     # Resolve the pin ourselves rather than trusting a revision= kwarg to survive
-    # Unsloth's wrapper: snapshot_download hard-pins the SHA, and Unsloth then
-    # loads a plain local directory.
+    # a wrapper: snapshot_download hard-pins the SHA, and every load below points
+    # at a plain local directory that cannot silently re-resolve to "main".
     snapshot_path = snapshot_download(repo_id=base_repo, revision=base_rev)
 
-    model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name=snapshot_path,
-        max_seq_length=tcfg["max_seq_length"],
-        dtype=qcfg["dtype"],
-        load_in_4bit=qcfg["load_in_4bit"],
-    )
-    model = FastLanguageModel.get_peft_model(
-        model,
+    # configs/train.json pins quantization.dtype=null, which meant "let the loader
+    # pick for this GPU". Reproduce that explicitly, using the SAME predicate the
+    # bf16/fp16 TrainingArguments flags use below, so the 4-bit compute dtype and
+    # the autocast dtype provably cannot drift apart.
+    bf16_ok = torch.cuda.is_bf16_supported()
+    if qcfg["dtype"] is None:
+        compute_dtype = torch.bfloat16 if bf16_ok else torch.float16
+    elif isinstance(qcfg["dtype"], str):
+        compute_dtype = getattr(torch, qcfg["dtype"])
+    else:
+        compute_dtype = qcfg["dtype"]
+
+    tokenizer = AutoTokenizer.from_pretrained(snapshot_path)
+
+    model_kwargs = dict(dtype=compute_dtype, device_map={"": 0})
+    if qcfg["load_in_4bit"]:
+        # transformers' own BitsAndBytesConfig defaults are quant_type="fp4" and
+        # use_double_quant=False -- i.e. NOT QLoRA. Leaving either implicit would
+        # train against a different quantization while the config looked identical,
+        # so both are stated here and recorded in the manifest.
+        model_kwargs["quantization_config"] = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_compute_dtype=compute_dtype,
+        )
+    model = AutoModelForCausalLM.from_pretrained(snapshot_path, **model_kwargs)
+
+    # configs/train.json is PINNED and sets lora.use_gradient_checkpointing to a
+    # library-specific sentinel string ("unsloth"). The only portable fact that
+    # string carries is "checkpointing ON", so any non-false value maps to True.
+    # The mapping lives HERE; the frozen config is not edited to suit this code.
+    gc_setting = lcfg["use_gradient_checkpointing"]
+    use_gc = gc_setting not in (False, None, 0, "", "false", "False", "no", "off")
+
+    if qcfg["load_in_4bit"]:
+        # Upcasts norms/lm_head to fp32 and freezes the NF4 base. It MUST run
+        # BEFORE get_peft_model: it sets requires_grad=False on every parameter it
+        # can see, so running it after would freeze the LoRA weights and the run
+        # would train nothing while still writing a plausible adapter.
+        model = prepare_model_for_kbit_training(
+            model, use_gradient_checkpointing=use_gc,
+            gradient_checkpointing_kwargs={"use_reentrant": False})
+    elif use_gc:
+        model.gradient_checkpointing_enable(
+            gradient_checkpointing_kwargs={"use_reentrant": False})
+
+    if use_gc:
+        # With a frozen 4-bit base plus checkpointing, the embedding OUTPUT must
+        # carry requires_grad or no gradient reaches the LoRA layers at all. That
+        # failure is silent: the loss is flat and nothing raises.
+        model.enable_input_require_grads()
+
+    # Incompatible with gradient checkpointing, and transformers 4.57 has no
+    # TrainingArguments.use_cache to switch it off for us.
+    model.config.use_cache = False
+
+    # lora.random_state has no LoraConfig field: peft draws the LoRA-A init from
+    # the global RNG, so seeding immediately before get_peft_model is the only
+    # place that key can be honoured. Read from lcfg, not tcfg -- the config keeps
+    # them separate even though both happen to be 42.
+    transformers.set_seed(lcfg["random_state"])
+    model = get_peft_model(model, LoraConfig(
         r=lcfg["r"],
         lora_alpha=lcfg["lora_alpha"],
         lora_dropout=lcfg["lora_dropout"],
-        target_modules=lcfg["target_modules"],
+        target_modules=list(lcfg["target_modules"]),
         bias=lcfg["bias"],
         use_rslora=lcfg["use_rslora"],
-        use_gradient_checkpointing=lcfg["use_gradient_checkpointing"],
-        random_state=lcfg["random_state"],
-    )
+        task_type="CAUSAL_LM",
+    ))
+
+    # Every ordering mistake above fails SILENTLY -- adapter written, loss flat,
+    # no exception -- which is exactly the shape of failure this project has paid
+    # for twice. Refuse to burn a GPU-hour on a run that cannot learn.
+    n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    if n_trainable == 0:
+        raise RuntimeError(
+            "no trainable parameters after get_peft_model -- the LoRA weights "
+            "were frozen; this run would write an adapter and learn nothing")
+    print(f"[slmforge] trainable params: {n_trainable} "
+          f"compute_dtype={compute_dtype} gradient_checkpointing={use_gc} "
+          f"load_in_4bit={bool(qcfg['load_in_4bit'])}")
     load_s = time.time() - t_load
 
     # ---- tokenize ------------------------------------------------------------
@@ -779,10 +865,12 @@ def train(smoke: bool, dataset_path: str, run_name: str) -> dict:
         logging_steps=tcfg["logging_steps"],
         seed=tcfg["seed"],
         data_seed=tcfg["seed"],
+        gradient_checkpointing=use_gc,
+        gradient_checkpointing_kwargs={"use_reentrant": False},
         save_strategy="no",
         report_to="none",
-        bf16=torch.cuda.is_bf16_supported(),
-        fp16=not torch.cuda.is_bf16_supported(),
+        bf16=bf16_ok,
+        fp16=not bf16_ok,
     )
     if "max_steps" in tcfg:  # only present under --smoke
         args_kwargs["max_steps"] = tcfg["max_steps"]
@@ -812,23 +900,27 @@ def train(smoke: bool, dataset_path: str, run_name: str) -> dict:
     adapter_s = time.time() - t_adapter
 
     t_merge = time.time()
+    # configs/train.json pins output.merged_save_method. Assert on it rather than
+    # let a pinned key go dead: config that nothing reads is config that lies, and
+    # the test guarding this key would then be guarding nothing.
     merge_method = ocfg["merged_save_method"]
-    if hasattr(model, "save_pretrained_merged"):
-        model.save_pretrained_merged(str(merged_dir), tokenizer,
-                                     save_method=merge_method)
-        merge_path = "unsloth.save_pretrained_merged"
-    else:
-        # Honest fallback: reload the pinned base in fp16 on CPU and merge the
-        # adapter into it. Slower, but produces a genuine fp16 merged model.
-        from peft import PeftModel
-        from transformers import AutoModelForCausalLM
+    if "16bit" not in merge_method:
+        raise ValueError(
+            f"output.merged_save_method={merge_method!r} is not a 16-bit merge; "
+            f"this code path only produces a 16-bit merged model")
+    merge_dtype = torch.bfloat16 if "bf16" in merge_method else torch.float16
 
-        base = AutoModelForCausalLM.from_pretrained(
-            snapshot_path, torch_dtype=torch.float16, device_map="cpu")
-        merged = PeftModel.from_pretrained(base, str(adapter_dir)).merge_and_unload()
-        merged.save_pretrained(str(merged_dir), safe_serialization=True)
-        tokenizer.save_pretrained(str(merged_dir))
-        merge_path = "peft.merge_and_unload(fp16, cpu)"
+    # Merge into a FRESH copy of the pinned base, never into the NF4 model we
+    # trained against -- that would bake quantization error into the shipped
+    # weights. fp32 in keeps the merge arithmetic off CPU half kernels; the cast
+    # down happens after the merge, not before.
+    base = AutoModelForCausalLM.from_pretrained(
+        snapshot_path, dtype=torch.float32, device_map="cpu")
+    merged = PeftModel.from_pretrained(base, str(adapter_dir)).merge_and_unload()
+    merged = merged.to(merge_dtype)
+    merged.save_pretrained(str(merged_dir), safe_serialization=True)
+    tokenizer.save_pretrained(str(merged_dir))
+    merge_path = f"peft.merge_and_unload(fp32 cpu -> {merge_method})"
     merge_s = time.time() - t_merge
 
     adapter_files, adapter_bytes = _dir_listing(adapter_dir)
@@ -867,11 +959,14 @@ def train(smoke: bool, dataset_path: str, run_name: str) -> dict:
         json.dumps(train_log, indent=2))
     artifacts_vol.commit()
 
-    try:
-        import unsloth as _unsloth
-        unsloth_version = getattr(_unsloth, "__version__", "unknown")
-    except Exception:  # noqa: BLE001
-        unsloth_version = "unknown"
+    def _version(mod_name):
+        # bitsandbytes in particular can fail to import when the CUDA runtime is
+        # not what its wheel expects, so every probe is wrapped.
+        try:
+            return getattr(importlib.import_module(mod_name), "__version__",
+                           "unknown")
+        except Exception:  # noqa: BLE001
+            return "unknown"
 
     # Everything that is NOT part of the pinned train_log shape rides in the
     # manifest instead, so the pinned artifact stays exactly the agreed keys.
@@ -891,7 +986,17 @@ def train(smoke: bool, dataset_path: str, run_name: str) -> dict:
                            "merge_path": merge_path},
         "env": {"python": sys.version.split()[0], "torch": torch.__version__,
                 "transformers": transformers.__version__,
-                "unsloth": unsloth_version},
+                "peft": _version("peft"),
+                "bitsandbytes": _version("bitsandbytes"),
+                "accelerate": _version("accelerate"),
+                # A library used to CHOOSE the quantization and the manifest just
+                # named the library. This file chooses it, so the manifest has to
+                # record the choice or the run is not reproducible from it.
+                "quantization": {"load_in_4bit": bool(qcfg["load_in_4bit"]),
+                                 "bnb_4bit_quant_type": "nf4",
+                                 "bnb_4bit_use_double_quant": True,
+                                 "bnb_4bit_compute_dtype": str(compute_dtype)},
+                "gradient_checkpointing": bool(use_gc)},
         "pull_commands": [
             f"modal volume get {ocfg['modal_volume']} "
             f"{run_name}/{ocfg['merged_dirname']} <local-dir>",

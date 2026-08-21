@@ -1,0 +1,56 @@
+{
+  "requested": 1024,
+  "kept": 881,
+  "accept_rate": 0.8603515625,
+  "gave_up": 143,
+  "rejections": 918,
+  "rejection_reasons": {
+    "constraint_violation": 918
+  },
+  "rejected_constraint_types": {
+    "banned_letter": 918
+  },
+  "dpo_negatives": 474,
+  "attempt_histogram": {
+    "1": 650,
+    "2": 148,
+    "4": 32,
+    "3": 51
+  },
+  "k_distribution": {
+    "2": 144,
+    "3": 303,
+    "4": 434
+  },
+  "pressure_distribution": {
+    "clean": 462,
+    "adversarial": 419
+  },
+  "type_counts": {
+    "no_lists": 604,
+    "no_quotation_marks": 593,
+    "banned_letter": 545,
+    "banned_words": 597,
+    "banned_phrases": 594
+  },
+  "type_shares": {
+    "banned_letter": 0.1858,
+    "banned_phrases": 0.2025,
+    "banned_words": 0.2035,
+    "no_lists": 0.2059,
+    "no_quotation_marks": 0.2022
+  },
+  "max_type_share": 0.2059,
+  "distractor_examples": 407,
+  "unique_tasks": 72,
+  "teacher": "openai:gpt-5.6-terra",
+  "teacher_resolved_by": "--teacher",
+  "attempts": 4,
+  "seed": 20260820,
+  "min_kept": 768,
+  "cache": {
+    "hits": 35,
+    "misses": 1764
+  },
+  "generated_utc": "2026-08-21T00:29:33.057547+00:00"
+}
