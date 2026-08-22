@@ -14,6 +14,7 @@ proving with numbers that the tuned model beats the prompted base model at it.
 | [`docs/CURVE_PREREGISTRATION.md`](docs/CURVE_PREREGISTRATION.md) | Predictions for the upward extension of the curve, committed before that checkpoint was trained. |
 | [`docs/MVP_REPORT.md`](docs/MVP_REPORT.md) | The frozen MVP record. Pins the v1 checkpoint; still re-derives. |
 | [`docs/ADVERSARIAL_EVAL.md`](docs/ADVERSARIAL_EVAL.md) | The hardened adversarial set: what it attacks, the family taxonomy, and what its size can and cannot resolve. |
+| [`docs/COMPOSITION.md`](docs/COMPOSITION.md) | Does holding get harder as constraints are stacked? Hold rate by constraint type and k, and which of the declines survive a stratified test. |
 | [`docs/PIVOT_SPEC.md`](docs/PIVOT_SPEC.md) | The Behavior Spec and the numbered requirements. |
 
 Published artifacts, both public and both pinned by commit hash in
@@ -273,6 +274,8 @@ passing silently.
 |---|---|
 | `check_mvp.py` | Gates a submission package: re-derives every number from the transcripts and requires the report's generated block back byte for byte. `--pin-key` / `--report` / `--run-dir` select which package. |
 | `curve_report.py` | Re-derives the whole data-efficiency curve from the committed transcripts. `--check` fails on a hand-edited `curve.json`. |
+| `adversarial_report.py` | Re-derives every figure in the **Results section** of `docs/ADVERSARIAL_EVAL.md` from the `runs/adversarial_v2` transcripts — aggregate, targeted-constraint hold rate, and its paired clean controls. `--check` fails on a hand-edited `adversarial_report.json` and on any unbound number in that section; figures in the doc's design sections are construction values and are not gated. |
+| `composition_report.py` | Re-derives every figure in `docs/COMPOSITION.md` — hold rate by constraint type and k, with the stratified trend tests. `--check DOC` fails on a hand-edited generated block; `--selftest` checks each statistic against its closed form. |
 | `compare_checkpoints.py` | Paired comparison of two eval cells — McNemar on `spec_pass`, sign test and bootstrap on banned-letter occurrences. Two checkpoints on one eval set are one sample measured twice. |
 | `preflight_evalset.py` | Validates an unseen scenario file for free, before any model loads. |
 | `adapt_evalset.py` | Makes a foreign constraint library scoreable by rewriting only the registry-pinned metadata, and writes down every change. Refuses anything it cannot adapt without altering what the set measures. |

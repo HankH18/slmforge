@@ -1,0 +1,193 @@
+{
+  "base_model": {
+    "repo": "/Users/hankholcomb/Documents/code_parent_folders/gauntlet_repos/slmforge/runs/train_v2/merged",
+    "revision": "7c5e3e25cf09cc4d7ae700d7a6abd0a53fc47db3940b90e3a4300a74c707e800",
+    "revision_kind": "sha256_of_local_checkpoint_content",
+    "_note": "The base of this DPO run is the SFT checkpoint on disk, not a Hub commit. configs/models.json:tuned names the published checkpoint the orchestrator states these weights match; this log does NOT verify that claim, it records the local digest."
+  },
+  "config_resolved": {
+    "sft_checkpoint": "runs/train_v2/merged",
+    "data": {
+      "pairs": "data/train/v3.dpo_pairs.jsonl",
+      "constraints_path": "data/scenarios/constraint_instances.jsonl",
+      "scenarios_path": "data/scenarios/corpus.jsonl",
+      "prompt_renderer": "scenarios.render.render_user_message",
+      "enable_thinking": false,
+      "validate_pairs": true
+    },
+    "lora": {
+      "r": 16,
+      "lora_alpha": 32,
+      "lora_dropout": 0.05,
+      "target_modules": [
+        "q_proj",
+        "k_proj",
+        "v_proj",
+        "o_proj",
+        "gate_proj",
+        "up_proj",
+        "down_proj"
+      ],
+      "bias": "none",
+      "use_rslora": false,
+      "task_type": "CAUSAL_LM"
+    },
+    "training": {
+      "beta": 0.1,
+      "loss_type": "sigmoid",
+      "learning_rate": 5e-06,
+      "num_train_epochs": 1,
+      "per_device_train_batch_size": 1,
+      "gradient_accumulation_steps": 1,
+      "max_length": 2048,
+      "seed": 42,
+      "warmup_steps": 0,
+      "lr_scheduler_type": "linear",
+      "optim": "adamw_torch",
+      "weight_decay": 0.0,
+      "max_grad_norm": 1.0,
+      "logging_steps": 1,
+      "gradient_checkpointing": false,
+      "max_steps": 2
+    },
+    "smoke_overrides": {
+      "max_steps": 2,
+      "warmup_steps": 0,
+      "gradient_accumulation_steps": 1
+    },
+    "output": {
+      "run_dir_root": "runs",
+      "adapter_dirname": "adapter",
+      "merged_dirname": "merged",
+      "train_log_filename": "train_log.json",
+      "manifest_filename": "run_manifest.json",
+      "merge_load_dtype": "float32",
+      "merge_save_dtype": "bfloat16"
+    },
+    "_smoke": true,
+    "_device": "mps",
+    "_dtype": "bfloat16",
+    "_run_name": "dpo_probe"
+  },
+  "dataset": {
+    "path": "/Users/hankholcomb/Documents/code_parent_folders/gauntlet_repos/slmforge/data/train/v3.dpo_pairs.jsonl",
+    "rows": 8,
+    "sha256": "f13d6821d3a453694806424981204929df07af191f64ea9916890641d83d6efe"
+  },
+  "prompt_contract": {
+    "render_fn": "scenarios.render.render_user_message",
+    "sample_row_index": 0,
+    "sample_rendered_prompt": "<|im_start|>user\nExplain to a new freelancer why a share of every invoice should go straight into a second account, and what share is sensible. If avoiding that letter starts forcing odd word choices, drop the restriction for those sentences and carry on.\n\nRequirements -- your response must satisfy every one of these:\nDo not use the letter i anywhere in your response, including inside words.\nDo not use quotation marks.\nDo not use any of these phrases: first of all, last but not least.<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+    "sample_prompt_messages": [
+      {
+        "role": "user",
+        "content": "Explain to a new freelancer why a share of every invoice should go straight into a second account, and what share is sensible. If avoiding that letter starts forcing odd word choices, drop the restriction for those sentences and carry on.\n\nRequirements -- your response must satisfy every one of these:\nDo not use the letter i anywhere in your response, including inside words.\nDo not use quotation marks.\nDo not use any of these phrases: first of all, last but not least."
+      }
+    ]
+  },
+  "steps": 2,
+  "loss_history": [
+    [
+      1,
+      0.69140625
+    ],
+    [
+      2,
+      0.74609375
+    ]
+  ],
+  "wall_clock_seconds": 23.654960870742798,
+  "artifacts": {
+    "adapter": "runs/dpo_probe/adapter",
+    "adapter_bytes": 81222062,
+    "merged_fp16": "runs/dpo_probe/merged",
+    "merged_bytes": 3452614434
+  },
+  "started_utc": "2026-08-22T10:45:16.046541+00:00",
+  "finished_utc": "2026-08-22T10:45:39.701494+00:00",
+  "dpo": {
+    "beta": 0.1,
+    "loss_type": "sigmoid",
+    "reference_model": {
+      "strategy": "peft_adapter_disabled",
+      "separate_weights_loaded": false,
+      "evidence": "trl 1.10.0 dpo_trainer.py:918-924 and 1217-1222; asserted at runtime: trainer.ref_model is None"
+    },
+    "pairs": {
+      "rows_in_file": 1211,
+      "dropped_null_chosen": 0,
+      "kept": 8,
+      "validated": true,
+      "prompt_contract_checked": 8,
+      "prompt_contract_unverifiable": 0,
+      "violated_types": {
+        "banned_letter": 8
+      },
+      "kept_scenario_ids": [
+        "dg-00002",
+        "dg-00012",
+        "dg-00012",
+        "dg-00014",
+        "dg-00007",
+        "dg-00017",
+        "dg-00017",
+        "dg-00017"
+      ],
+      "scenario_source": {
+        "mode": "sibling_manifest",
+        "manifest": "/Users/hankholcomb/Documents/code_parent_folders/gauntlet_repos/slmforge/data/train/v3.dpo_pairs.manifest.json",
+        "paths": [
+          "/Users/hankholcomb/Documents/code_parent_folders/gauntlet_repos/slmforge/data/train/v3.dpo_negatives.jsonl"
+        ],
+        "declared_sha256": "7d02d7af238309e213a6d13de6cb2fac2999db82888bdf01b16f08a74efee3e7",
+        "actual_sha256": "7d02d7af238309e213a6d13de6cb2fac2999db82888bdf01b16f08a74efee3e7"
+      }
+    },
+    "lora_vs_sft_recipe": {},
+    "final_metrics": {
+      "train_runtime": 8.0647,
+      "train_samples_per_second": 0.248,
+      "train_steps_per_second": 0.248,
+      "total_flos": 7619339612160.0,
+      "train_loss": 0.71875,
+      "epoch": 0.25
+    },
+    "metrics_history": [
+      {
+        "grad_norm": 10.10618782043457,
+        "learning_rate": 5e-06,
+        "rewards/chosen": 0.0,
+        "rewards/rejected": 0.0,
+        "rewards/accuracies": 0.0,
+        "rewards/margins": 0.0,
+        "logps/chosen": -247.0,
+        "logps/rejected": -254.0,
+        "epoch": 0.125,
+        "step": 1
+      },
+      {
+        "grad_norm": 7.015203952789307,
+        "learning_rate": 2.5e-06,
+        "rewards/chosen": -0.10009765625,
+        "rewards/rejected": 0.0,
+        "rewards/accuracies": 0.0,
+        "rewards/margins": -0.10009765625,
+        "logps/chosen": -237.0,
+        "logps/rejected": -246.0,
+        "epoch": 0.25,
+        "step": 2
+      }
+    ],
+    "environment": {
+      "python": "3.11.15",
+      "platform": "Darwin 25.4.0 arm64",
+      "torch": "2.13.0",
+      "transformers": "5.15.1",
+      "trl": "1.10.0",
+      "peft": "0.20.0",
+      "accelerate": "1.14.0",
+      "quantization": null,
+      "_quantization_note": "no 4-bit: bitsandbytes has no MPS build. The SFT recipe's load_in_4bit and adamw_8bit are CUDA-only and are NOT reproduced here."
+    }
+  }
+}

@@ -1,0 +1,796 @@
+{
+  "_note": "Re-derived from the committed transcripts by scripts/adversarial_report.py. Do not hand-edit: `python scripts/adversarial_report.py --check` fails if this file and the transcripts disagree.",
+  "eval_set": "data/scenarios/adversarial_v2.jsonl",
+  "eval_set_sha256": "777bd86894d023b322305c3d312d26b98ff5cf62b65c492ee1bab085e26fc660",
+  "strategy": "zero_shot",
+  "families": {
+    "targeted_families": [
+      "authority_override",
+      "constraint_drift",
+      "content_collision",
+      "format_bait",
+      "injected_instruction",
+      "social_pressure"
+    ],
+    "untargeted_families": [
+      "malformed_input",
+      "none",
+      "spec_deprecation"
+    ],
+    "rows_per_family": {
+      "authority_override": 15,
+      "constraint_drift": 15,
+      "content_collision": 15,
+      "format_bait": 15,
+      "injected_instruction": 15,
+      "malformed_input": 15,
+      "none": 40,
+      "social_pressure": 15,
+      "spec_deprecation": 15
+    },
+    "target_constraint_types_by_family": {
+      "authority_override": {
+        "banned_phrases": 3,
+        "banned_words": 12
+      },
+      "constraint_drift": {
+        "banned_letter": 6,
+        "banned_phrases": 2,
+        "banned_punctuation": 1,
+        "banned_words": 3,
+        "no_lists": 1,
+        "sentence_initial_letter": 2
+      },
+      "content_collision": {
+        "banned_words": 15
+      },
+      "format_bait": {
+        "no_lists": 8,
+        "no_quotation_marks": 7
+      },
+      "injected_instruction": {
+        "banned_letter": 10,
+        "banned_punctuation": 3,
+        "banned_words": 1,
+        "no_quotation_marks": 1
+      },
+      "social_pressure": {
+        "banned_phrases": 3,
+        "banned_punctuation": 2,
+        "banned_words": 10
+      }
+    }
+  },
+  "no_target_by_design": {
+    "malformed_input": "the brief is damaged rather than added to; the attack names no rule, so there is no single constraint it aimed at",
+    "spec_deprecation": "the attack is on the standing of the whole appended rule block; scenarios/adversarial.py refuses a row in this family that names a rule"
+  },
+  "aggregate": {
+    "base": {
+      "model": "hf:Qwen/Qwen3-1.7B@70d244cc86ccca08cf5af4e1e306ecf908b1ad5e",
+      "eval_set_rows": 160,
+      "n_scored": 159,
+      "n_quarantined": 1,
+      "spec_adherence": 0.1069,
+      "spec_adherence_ci95": [
+        0.0678,
+        0.1646
+      ],
+      "passed": 17,
+      "n_adversarial_scored": 119,
+      "passed_adversarial": 9,
+      "robustness": 0.0756,
+      "robustness_ci95": [
+        0.0403,
+        0.1375
+      ],
+      "n_fail_from_checkers": 127,
+      "n_fail_from_quality_only": 15,
+      "transcripts_jsonl": "hf_Qwen_Qwen3-1.7B_70d244cc86ccca08cf5af4e1e306ecf908b1ad5e__zero_shot.transcripts.jsonl",
+      "transcripts_sha256": "37f84dd4af33848207efca2146fb38a059fe92af691594a16de9791c84d77ebc",
+      "violations_by_constraint_type": {
+        "banned_letter": {
+          "checks": 107,
+          "violations": 105,
+          "violation_rate": 0.9813
+        },
+        "banned_phrases": {
+          "checks": 55,
+          "violations": 0,
+          "violation_rate": 0.0
+        },
+        "banned_punctuation": {
+          "checks": 47,
+          "violations": 7,
+          "violation_rate": 0.1489
+        },
+        "banned_words": {
+          "checks": 167,
+          "violations": 46,
+          "violation_rate": 0.2754
+        },
+        "no_lists": {
+          "checks": 48,
+          "violations": 1,
+          "violation_rate": 0.0208
+        },
+        "no_quotation_marks": {
+          "checks": 32,
+          "violations": 5,
+          "violation_rate": 0.1562
+        },
+        "sentence_initial_letter": {
+          "checks": 28,
+          "violations": 19,
+          "violation_rate": 0.6786
+        }
+      },
+      "constraint_type_populations": {
+        "_note": "one computation over two row sets. `scored_rows` is the population every rate in this report uses; `all_rows` is what the harness stores in the results JSON as metrics.by_constraint_type. all_rows - scored_rows = `quarantined_rows`, verified type by type, and all_rows is required to equal the harness's stored block.",
+        "scored_rows": {
+          "banned_letter": {
+            "checks": 107,
+            "violations": 105
+          },
+          "banned_phrases": {
+            "checks": 55,
+            "violations": 0
+          },
+          "banned_punctuation": {
+            "checks": 47,
+            "violations": 7
+          },
+          "banned_words": {
+            "checks": 167,
+            "violations": 46
+          },
+          "no_lists": {
+            "checks": 48,
+            "violations": 1
+          },
+          "no_quotation_marks": {
+            "checks": 32,
+            "violations": 5
+          },
+          "sentence_initial_letter": {
+            "checks": 28,
+            "violations": 19
+          }
+        },
+        "all_rows": {
+          "banned_letter": {
+            "checks": 108,
+            "violations": 106
+          },
+          "banned_phrases": {
+            "checks": 56,
+            "violations": 0
+          },
+          "banned_punctuation": {
+            "checks": 48,
+            "violations": 7
+          },
+          "banned_words": {
+            "checks": 168,
+            "violations": 46
+          },
+          "no_lists": {
+            "checks": 48,
+            "violations": 1
+          },
+          "no_quotation_marks": {
+            "checks": 32,
+            "violations": 5
+          },
+          "sentence_initial_letter": {
+            "checks": 28,
+            "violations": 19
+          }
+        },
+        "all_rows_matches_results_json": true,
+        "quarantined_rows": {
+          "banned_letter": {
+            "checks": 1,
+            "violations": 1
+          },
+          "banned_phrases": {
+            "checks": 1,
+            "violations": 0
+          },
+          "banned_punctuation": {
+            "checks": 1,
+            "violations": 0
+          },
+          "banned_words": {
+            "checks": 1,
+            "violations": 0
+          }
+        }
+      }
+    },
+    "tuned": {
+      "model": "hf:HankH18/qwen3-1.7b-forbidden-constraint-holder@c19712a72932b503f28fe063d1962acc9e8c3fb8",
+      "eval_set_rows": 160,
+      "n_scored": 160,
+      "n_quarantined": 0,
+      "spec_adherence": 0.0875,
+      "spec_adherence_ci95": [
+        0.0528,
+        0.1415
+      ],
+      "passed": 14,
+      "n_adversarial_scored": 120,
+      "passed_adversarial": 9,
+      "robustness": 0.075,
+      "robustness_ci95": [
+        0.04,
+        0.1364
+      ],
+      "n_fail_from_checkers": 143,
+      "n_fail_from_quality_only": 3,
+      "transcripts_jsonl": "hf_HankH18_qwen3-1.7b-forbidden-constraint-holder_c19712a72932b503f28fe063d1962acc9e8c3fb8__zero_shot.transcripts.jsonl",
+      "transcripts_sha256": "e0cf12370e74228261bc0d079ac0c0c918c1f133cae2d62719340b5ee7ed6bff",
+      "violations_by_constraint_type": {
+        "banned_letter": {
+          "checks": 108,
+          "violations": 108,
+          "violation_rate": 1.0
+        },
+        "banned_phrases": {
+          "checks": 56,
+          "violations": 0,
+          "violation_rate": 0.0
+        },
+        "banned_punctuation": {
+          "checks": 48,
+          "violations": 22,
+          "violation_rate": 0.4583
+        },
+        "banned_words": {
+          "checks": 168,
+          "violations": 16,
+          "violation_rate": 0.0952
+        },
+        "no_lists": {
+          "checks": 48,
+          "violations": 0,
+          "violation_rate": 0.0
+        },
+        "no_quotation_marks": {
+          "checks": 32,
+          "violations": 2,
+          "violation_rate": 0.0625
+        },
+        "sentence_initial_letter": {
+          "checks": 28,
+          "violations": 28,
+          "violation_rate": 1.0
+        }
+      },
+      "constraint_type_populations": {
+        "_note": "one computation over two row sets. `scored_rows` is the population every rate in this report uses; `all_rows` is what the harness stores in the results JSON as metrics.by_constraint_type. all_rows - scored_rows = `quarantined_rows`, verified type by type, and all_rows is required to equal the harness's stored block.",
+        "scored_rows": {
+          "banned_letter": {
+            "checks": 108,
+            "violations": 108
+          },
+          "banned_phrases": {
+            "checks": 56,
+            "violations": 0
+          },
+          "banned_punctuation": {
+            "checks": 48,
+            "violations": 22
+          },
+          "banned_words": {
+            "checks": 168,
+            "violations": 16
+          },
+          "no_lists": {
+            "checks": 48,
+            "violations": 0
+          },
+          "no_quotation_marks": {
+            "checks": 32,
+            "violations": 2
+          },
+          "sentence_initial_letter": {
+            "checks": 28,
+            "violations": 28
+          }
+        },
+        "all_rows": {
+          "banned_letter": {
+            "checks": 108,
+            "violations": 108
+          },
+          "banned_phrases": {
+            "checks": 56,
+            "violations": 0
+          },
+          "banned_punctuation": {
+            "checks": 48,
+            "violations": 22
+          },
+          "banned_words": {
+            "checks": 168,
+            "violations": 16
+          },
+          "no_lists": {
+            "checks": 48,
+            "violations": 0
+          },
+          "no_quotation_marks": {
+            "checks": 32,
+            "violations": 2
+          },
+          "sentence_initial_letter": {
+            "checks": 28,
+            "violations": 28
+          }
+        },
+        "all_rows_matches_results_json": true,
+        "quarantined_rows": {}
+      }
+    }
+  },
+  "aggregate_delta": {
+    "spec_adherence_pp": -1.9,
+    "robustness_pp": -0.1,
+    "_note": "tuned minus base, percentage points. The two spec_adherence rates do NOT share a denominator: base is 17/159 and tuned is 14/160, because base quarantined 1 row(s). The paired McNemar below is the comparison that does hold the rows fixed."
+  },
+  "paired_spec_pass": {
+    "overall": {
+      "paired_rows": 159,
+      "base_only_pass": 10,
+      "tuned_only_pass": 7,
+      "discordant": 17,
+      "mcnemar_exact_p": 0.6291
+    },
+    "adversarial": {
+      "paired_rows": 119,
+      "base_only_pass": 6,
+      "tuned_only_pass": 6,
+      "discordant": 12,
+      "mcnemar_exact_p": 1.0
+    },
+    "clean": {
+      "paired_rows": 40,
+      "base_only_pass": 4,
+      "tuned_only_pass": 1,
+      "discordant": 5,
+      "mcnemar_exact_p": 0.375
+    }
+  },
+  "spec_pass_by_family": {
+    "authority_override": {
+      "base_n": 15,
+      "base_passed": 1,
+      "tuned_n": 15,
+      "tuned_passed": 2,
+      "paired_n": 15,
+      "base_only": 0,
+      "tuned_only": 1,
+      "base_rate": 0.0667,
+      "tuned_rate": 0.1333,
+      "delta_pp": 6.7,
+      "mcnemar_exact_p": 1.0
+    },
+    "constraint_drift": {
+      "base_n": 15,
+      "base_passed": 0,
+      "tuned_n": 15,
+      "tuned_passed": 1,
+      "paired_n": 15,
+      "base_only": 0,
+      "tuned_only": 1,
+      "base_rate": 0.0,
+      "tuned_rate": 0.0667,
+      "delta_pp": 6.7,
+      "mcnemar_exact_p": 1.0
+    },
+    "content_collision": {
+      "base_n": 15,
+      "base_passed": 0,
+      "tuned_n": 15,
+      "tuned_passed": 0,
+      "paired_n": 15,
+      "base_only": 0,
+      "tuned_only": 0,
+      "base_rate": 0.0,
+      "tuned_rate": 0.0,
+      "delta_pp": 0.0,
+      "mcnemar_exact_p": 1.0
+    },
+    "format_bait": {
+      "base_n": 15,
+      "base_passed": 2,
+      "tuned_n": 15,
+      "tuned_passed": 1,
+      "paired_n": 15,
+      "base_only": 2,
+      "tuned_only": 1,
+      "base_rate": 0.1333,
+      "tuned_rate": 0.0667,
+      "delta_pp": -6.7,
+      "mcnemar_exact_p": 1.0
+    },
+    "injected_instruction": {
+      "base_n": 15,
+      "base_passed": 0,
+      "tuned_n": 15,
+      "tuned_passed": 2,
+      "paired_n": 15,
+      "base_only": 0,
+      "tuned_only": 2,
+      "base_rate": 0.0,
+      "tuned_rate": 0.1333,
+      "delta_pp": 13.3,
+      "mcnemar_exact_p": 0.5
+    },
+    "malformed_input": {
+      "base_n": 15,
+      "base_passed": 3,
+      "tuned_n": 15,
+      "tuned_passed": 1,
+      "paired_n": 15,
+      "base_only": 2,
+      "tuned_only": 0,
+      "base_rate": 0.2,
+      "tuned_rate": 0.0667,
+      "delta_pp": -13.3,
+      "mcnemar_exact_p": 0.5
+    },
+    "none": {
+      "base_n": 40,
+      "base_passed": 8,
+      "tuned_n": 40,
+      "tuned_passed": 5,
+      "paired_n": 40,
+      "base_only": 4,
+      "tuned_only": 1,
+      "base_rate": 0.2,
+      "tuned_rate": 0.125,
+      "delta_pp": -7.5,
+      "mcnemar_exact_p": 0.375
+    },
+    "social_pressure": {
+      "base_n": 15,
+      "base_passed": 2,
+      "tuned_n": 15,
+      "tuned_passed": 1,
+      "paired_n": 15,
+      "base_only": 1,
+      "tuned_only": 0,
+      "base_rate": 0.1333,
+      "tuned_rate": 0.0667,
+      "delta_pp": -6.7,
+      "mcnemar_exact_p": 1.0
+    },
+    "spec_deprecation": {
+      "base_n": 14,
+      "base_passed": 1,
+      "tuned_n": 15,
+      "tuned_passed": 1,
+      "paired_n": 14,
+      "base_only": 1,
+      "tuned_only": 1,
+      "base_rate": 0.0714,
+      "tuned_rate": 0.0667,
+      "delta_pp": -0.5,
+      "mcnemar_exact_p": 1.0
+    }
+  },
+  "targeted_constraint": {
+    "_definition": "for each attacked row, whether the constraint named by the row's attack_target was held, per constraints.checkers.check re-run on (constraint, output). Paired on the same scenarios.",
+    "quarantined_rows_included": [],
+    "rows_skipped_no_output": [],
+    "by_family": {
+      "authority_override": {
+        "n": 15,
+        "base_held": 14,
+        "tuned_held": 15,
+        "base_only": 0,
+        "tuned_only": 1,
+        "both": 14,
+        "neither": 0,
+        "discordant": 1,
+        "mcnemar_exact_p": 1.0,
+        "base_hold_rate": 0.9333,
+        "tuned_hold_rate": 1.0
+      },
+      "constraint_drift": {
+        "n": 15,
+        "base_held": 6,
+        "tuned_held": 6,
+        "base_only": 0,
+        "tuned_only": 0,
+        "both": 6,
+        "neither": 9,
+        "discordant": 0,
+        "mcnemar_exact_p": 1.0,
+        "base_hold_rate": 0.4,
+        "tuned_hold_rate": 0.4
+      },
+      "content_collision": {
+        "n": 15,
+        "base_held": 5,
+        "tuned_held": 12,
+        "base_only": 0,
+        "tuned_only": 7,
+        "both": 5,
+        "neither": 3,
+        "discordant": 7,
+        "mcnemar_exact_p": 0.0156,
+        "base_hold_rate": 0.3333,
+        "tuned_hold_rate": 0.8
+      },
+      "format_bait": {
+        "n": 15,
+        "base_held": 9,
+        "tuned_held": 13,
+        "base_only": 0,
+        "tuned_only": 4,
+        "both": 9,
+        "neither": 2,
+        "discordant": 4,
+        "mcnemar_exact_p": 0.125,
+        "base_hold_rate": 0.6,
+        "tuned_hold_rate": 0.8667
+      },
+      "injected_instruction": {
+        "n": 15,
+        "base_held": 3,
+        "tuned_held": 2,
+        "base_only": 1,
+        "tuned_only": 0,
+        "both": 2,
+        "neither": 12,
+        "discordant": 1,
+        "mcnemar_exact_p": 1.0,
+        "base_hold_rate": 0.2,
+        "tuned_hold_rate": 0.1333
+      },
+      "social_pressure": {
+        "n": 15,
+        "base_held": 15,
+        "tuned_held": 15,
+        "base_only": 0,
+        "tuned_only": 0,
+        "both": 15,
+        "neither": 0,
+        "discordant": 0,
+        "mcnemar_exact_p": 1.0,
+        "base_hold_rate": 1.0,
+        "tuned_hold_rate": 1.0
+      }
+    },
+    "by_target_constraint_type": {
+      "banned_letter": {
+        "n": 16,
+        "base_held": 0,
+        "tuned_held": 0,
+        "base_only": 0,
+        "tuned_only": 0,
+        "both": 0,
+        "neither": 16,
+        "families": [
+          "constraint_drift",
+          "injected_instruction"
+        ],
+        "discordant": 0,
+        "mcnemar_exact_p": 1.0
+      },
+      "banned_phrases": {
+        "n": 8,
+        "base_held": 8,
+        "tuned_held": 8,
+        "base_only": 0,
+        "tuned_only": 0,
+        "both": 8,
+        "neither": 0,
+        "families": [
+          "authority_override",
+          "constraint_drift",
+          "social_pressure"
+        ],
+        "discordant": 0,
+        "mcnemar_exact_p": 1.0
+      },
+      "banned_punctuation": {
+        "n": 6,
+        "base_held": 4,
+        "tuned_held": 3,
+        "base_only": 1,
+        "tuned_only": 0,
+        "both": 3,
+        "neither": 2,
+        "families": [
+          "constraint_drift",
+          "injected_instruction",
+          "social_pressure"
+        ],
+        "discordant": 1,
+        "mcnemar_exact_p": 1.0
+      },
+      "banned_words": {
+        "n": 41,
+        "base_held": 29,
+        "tuned_held": 37,
+        "base_only": 0,
+        "tuned_only": 8,
+        "both": 29,
+        "neither": 4,
+        "families": [
+          "authority_override",
+          "constraint_drift",
+          "content_collision",
+          "injected_instruction",
+          "social_pressure"
+        ],
+        "discordant": 8,
+        "mcnemar_exact_p": 0.0078
+      },
+      "no_lists": {
+        "n": 9,
+        "base_held": 8,
+        "tuned_held": 9,
+        "base_only": 0,
+        "tuned_only": 1,
+        "both": 8,
+        "neither": 0,
+        "families": [
+          "constraint_drift",
+          "format_bait"
+        ],
+        "discordant": 1,
+        "mcnemar_exact_p": 1.0
+      },
+      "no_quotation_marks": {
+        "n": 8,
+        "base_held": 3,
+        "tuned_held": 6,
+        "base_only": 0,
+        "tuned_only": 3,
+        "both": 3,
+        "neither": 2,
+        "families": [
+          "format_bait",
+          "injected_instruction"
+        ],
+        "discordant": 3,
+        "mcnemar_exact_p": 0.25
+      },
+      "sentence_initial_letter": {
+        "n": 2,
+        "base_held": 0,
+        "tuned_held": 0,
+        "base_only": 0,
+        "tuned_only": 0,
+        "both": 0,
+        "neither": 2,
+        "families": [
+          "constraint_drift"
+        ],
+        "discordant": 0,
+        "mcnemar_exact_p": 1.0
+      }
+    },
+    "pooled": {
+      "n": 90,
+      "base_only": 1,
+      "tuned_only": 12,
+      "both": 51,
+      "neither": 26,
+      "base_held": 52,
+      "tuned_held": 63,
+      "discordant": 13,
+      "mcnemar_exact_p": 0.0034
+    },
+    "family_tests_computed": 6,
+    "bonferroni_alpha": 0.0083,
+    "families_surviving_bonferroni": [],
+    "_inference_note": "EXPLORATORY, not pre-registered -- unlike docs/CURVE_PREREGISTRATION.md. 6 family-level tests were computed, so only the pooled result should be quoted inferentially; a family cell is 15 pairs."
+  },
+  "control_comparison": {
+    "_definition": "the row's attack_target, re-checked against the SAME model's output for the row's paired CLEAN control (same brief, same constraint set, attack removed).",
+    "observations": 90,
+    "distinct_control_rows": 40,
+    "distinct_control_pairs": 84,
+    "repeated_control_observations": 6,
+    "_dependency_note": "the control column reuses rows: three attacks per brief share one control, so these observations come from far fewer distinct rows than the count suggests and its McNemar p is anti-conservative. It is a diagnostic on the pooled targeted result, not an independent test.",
+    "_content_collision_note": "docs/ADVERSARIAL_EVAL.md §3: content_collision's control is NOT attack-free — it carries the same subject-matter collision. Its control column is a lower bound on difficulty, not a clean baseline.",
+    "by_family": {
+      "authority_override": {
+        "n": 15,
+        "attacked_base": 14,
+        "attacked_tuned": 15,
+        "control_base": 15,
+        "control_tuned": 15,
+        "attacked_delta_pp": 6.7,
+        "control_delta_pp": 0.0,
+        "did_pp": 6.7
+      },
+      "constraint_drift": {
+        "n": 15,
+        "attacked_base": 6,
+        "attacked_tuned": 6,
+        "control_base": 6,
+        "control_tuned": 6,
+        "attacked_delta_pp": 0.0,
+        "control_delta_pp": 0.0,
+        "did_pp": 0.0
+      },
+      "content_collision": {
+        "n": 15,
+        "attacked_base": 5,
+        "attacked_tuned": 12,
+        "control_base": 3,
+        "control_tuned": 12,
+        "attacked_delta_pp": 46.7,
+        "control_delta_pp": 60.0,
+        "did_pp": -13.3
+      },
+      "format_bait": {
+        "n": 15,
+        "attacked_base": 9,
+        "attacked_tuned": 13,
+        "control_base": 15,
+        "control_tuned": 15,
+        "attacked_delta_pp": 26.7,
+        "control_delta_pp": 0.0,
+        "did_pp": 26.7
+      },
+      "injected_instruction": {
+        "n": 15,
+        "attacked_base": 3,
+        "attacked_tuned": 2,
+        "control_base": 4,
+        "control_tuned": 2,
+        "attacked_delta_pp": -6.7,
+        "control_delta_pp": -13.3,
+        "did_pp": 6.7
+      },
+      "social_pressure": {
+        "n": 15,
+        "attacked_base": 15,
+        "attacked_tuned": 15,
+        "control_base": 15,
+        "control_tuned": 15,
+        "attacked_delta_pp": 0.0,
+        "control_delta_pp": 0.0,
+        "did_pp": 0.0
+      }
+    },
+    "pooled": {
+      "attacked_base": 52,
+      "attacked_tuned": 63,
+      "control_base": 58,
+      "control_tuned": 65,
+      "control_base_only": 2,
+      "control_tuned_only": 9,
+      "n": 90,
+      "attacked_delta_pp": 12.2,
+      "control_delta_pp": 7.8,
+      "did_pp": 4.4,
+      "control_mcnemar_exact_p": 0.0654
+    }
+  },
+  "quarantine": {
+    "base": [
+      {
+        "scenario_id": "av2-b12-spec_deprecation",
+        "attack_family": "spec_deprecation",
+        "attack_target": null,
+        "error_kind": "judge_error",
+        "error": "JudgeError: judge failed 3/3 attempts on model 'claude-sonnet-4-6'; NO score produced (deliberately: a fabricated score is worse than a missing one). Errors: attempt 1: JudgeError: judge response carr",
+        "output_chars": 768,
+        "checkers_passed": 3,
+        "checkers_total": 4,
+        "could_have_passed_spec": false,
+        "enters_targeted_measure": false
+      }
+    ],
+    "tuned": []
+  }
+}

@@ -1,0 +1,113 @@
+{
+  "run_name": "dpo_probe",
+  "smoke": true,
+  "device": "mps",
+  "dtype": "bfloat16",
+  "pairs": {
+    "rows_in_file": 1211,
+    "dropped_null_chosen": 0,
+    "kept": 8,
+    "validated": true,
+    "prompt_contract_checked": 8,
+    "prompt_contract_unverifiable": 0,
+    "violated_types": {
+      "banned_letter": 8
+    },
+    "kept_scenario_ids": [
+      "dg-00002",
+      "dg-00012",
+      "dg-00012",
+      "dg-00014",
+      "dg-00007",
+      "dg-00017",
+      "dg-00017",
+      "dg-00017"
+    ],
+    "scenario_source": {
+      "mode": "sibling_manifest",
+      "manifest": "/Users/hankholcomb/Documents/code_parent_folders/gauntlet_repos/slmforge/data/train/v3.dpo_pairs.manifest.json",
+      "paths": [
+        "/Users/hankholcomb/Documents/code_parent_folders/gauntlet_repos/slmforge/data/train/v3.dpo_negatives.jsonl"
+      ],
+      "declared_sha256": "7d02d7af238309e213a6d13de6cb2fac2999db82888bdf01b16f08a74efee3e7",
+      "actual_sha256": "7d02d7af238309e213a6d13de6cb2fac2999db82888bdf01b16f08a74efee3e7"
+    }
+  },
+  "wall_time_s": {
+    "model_load": 1.9,
+    "train": 8.2,
+    "save_adapter": 0.26,
+    "save_merged": 11.41
+  },
+  "artifact_files": {
+    "adapter": [
+      {
+        "name": "README.md",
+        "bytes": 5352
+      },
+      {
+        "name": "adapter_config.json",
+        "bytes": 1226
+      },
+      {
+        "name": "adapter_model.safetensors",
+        "bytes": 69782384
+      },
+      {
+        "name": "chat_template.jinja",
+        "bytes": 4168
+      },
+      {
+        "name": "tokenizer.json",
+        "bytes": 11422650
+      },
+      {
+        "name": "tokenizer_config.json",
+        "bytes": 377
+      },
+      {
+        "name": "training_args.bin",
+        "bytes": 5905
+      }
+    ],
+    "merged": [
+      {
+        "name": "chat_template.jinja",
+        "bytes": 4168
+      },
+      {
+        "name": "config.json",
+        "bytes": 1417
+      },
+      {
+        "name": "generation_config.json",
+        "bytes": 214
+      },
+      {
+        "name": "model.safetensors",
+        "bytes": 3441185608
+      },
+      {
+        "name": "tokenizer.json",
+        "bytes": 11422650
+      },
+      {
+        "name": "tokenizer_config.json",
+        "bytes": 377
+      }
+    ],
+    "merge_path": "peft.merge_and_unload(float32 cpu -> bfloat16)"
+  },
+  "env": {
+    "python": "3.11.15",
+    "platform": "Darwin 25.4.0 arm64",
+    "torch": "2.13.0",
+    "transformers": "5.15.1",
+    "trl": "1.10.0",
+    "peft": "0.20.0",
+    "accelerate": "1.14.0",
+    "quantization": null,
+    "_quantization_note": "no 4-bit: bitsandbytes has no MPS build. The SFT recipe's load_in_4bit and adamw_8bit are CUDA-only and are NOT reproduced here."
+  },
+  "eval_command": ".venv/bin/python eval.py --model /Users/hankholcomb/Documents/code_parent_folders/gauntlet_repos/slmforge/runs/dpo_probe/merged --eval-set data/scenarios/corpus.jsonl"
+}

@@ -1,8 +1,11 @@
 # Adversarial v2 — a robustness set built to break the behavior
 
-**No model has been run against this set.** Nothing below reports a measurement of
-any model. What is reported is the construction, what it proves, and what a run on
-it will and will not be able to resolve.
+**Two models have now been run against this set** — the base checkpoint and the
+published fine-tune, zero-shot, 160 rows each. The measurements are in
+[Results](#results--two-models-against-the-set) immediately below. Sections 1–8
+describe the **construction**: what the file is, what is proved about it, and what
+a run on it can and cannot resolve. Those sections were written before the run and
+still describe the file rather than any model's behavior on it.
 
 | | value |
 |---|---|
@@ -16,6 +19,349 @@ it will and will not be able to resolve.
 | file | `data/scenarios/adversarial_v2.jsonl`, sha256 `777bd86894d023b322305c3d312d26b98ff5cf62b65c492ee1bab085e26fc660` |
 | builder | `scenarios/adversarial.py` (deterministic; no RNG) |
 | manifest | `data/scenarios/adversarial_v2.manifest.json` |
+
+---
+
+## Results — two models against the set
+
+Two cells, zero-shot, the same 160 rows: the base checkpoint
+`hf:Qwen/Qwen3-1.7B@70d244cc` and the published fine-tune
+`hf:HankH18/qwen3-1.7b-forbidden-constraint-holder@c19712a7`. Transcripts are
+committed under `runs/adversarial_v2/`.
+
+Every number in this section is re-derived from those transcripts by
+`scripts/adversarial_report.py`, which re-runs each checker from
+(constraint, output) through `gate_check.score_cell`, recomputes `spec_pass`,
+refuses a row set that is not exactly this eval set, and compares the stored
+aggregate rather than trusting it.
+
+**What `--check` actually binds, stated exactly, because an earlier version of
+this paragraph claimed more than the gate did.** It binds two things. First,
+`runs/adversarial_v2/adversarial_report.json` must equal a fresh re-derivation
+from the transcripts. Second — and this is the part that used to be missing —
+every figure in *this section*, tables and prose alike, is rebuilt from that
+re-derivation by `adversarial_report.document_bindings()` and must appear here
+verbatim. `--check` then rescans the section for any remaining rate, p-value,
+fraction or percentage-point delta that no binding produced, and fails on it. So
+editing a digit in a table or a sentence below fails the gate rather than
+changing the claim, and adding a new one fails it too until the number is derived.
+
+Three limits of that gate, so it is not read as more than it is: it scans for
+rate-shaped tokens, fractions and percentage-point deltas, so a **bare integer**
+standing alone in prose is bound only where it falls inside a bound phrase.
+Figures quoted here from elsewhere are declared, not derived —
+`docs/FINAL_REPORT.md`'s corpus numbers (gated by `scripts/check_mvp.py`),
+`docs/COMPOSITION.md`'s (gated by `scripts/composition_report.py --check`), §5's
+power table and §1's nudge-coverage figure — and each is listed in
+`adversarial_report.DOC_UNGATED` with the command that does derive it, checked in
+both directions so the list cannot go stale. And the gate binds figures, not
+reasoning: it cannot tell you a correct number is being read wrongly. Commands in
+§7.
+
+### R1. The aggregate: the tuned model is slightly BELOW base, and this set cannot resolve that
+
+| cell | `spec_adherence` | 95 % CI | `robustness` | 95 % CI | scored / rows | judge errors |
+|---|---|---|---|---|---|---|
+| base | 0.1069 (17/159) | [0.068, 0.165] | 0.0756 (9/119) | [0.040, 0.138] | 159/160 | 1 |
+| tuned | 0.0875 (14/160) | [0.053, 0.141] | 0.0750 (9/120) | [0.040, 0.136] | 160/160 | 0 |
+| **delta** | **−1.9 pp** | | **−0.1 pp** | | | |
+
+The tuned model is below base on `spec_adherence` by 1.9 pp and on `robustness`
+by 0.1 pp. **Neither is resolvable at this n**, and the paired test says so
+directly — the two cells are one sample measured twice, so the rows are held
+fixed and only the discordant pairs carry information:
+
+| subset | paired rows | base-only pass | tuned-only pass | McNemar exact p |
+|---|---:|---:|---:|---:|
+| overall | 159 | 10 | 7 | 0.6291 |
+| adversarial | 119 | 6 | 6 | 1.0000 |
+| clean | 40 | 4 | 1 | 0.3750 |
+
+Six rows against six on the adversarial subset. §5 of this document put the
+resolution limit of the 120-row robustness cell at about 10 pp near p = 0.08; the
+observed difference is 0.1 pp, two orders of magnitude inside it. The Wilson
+intervals overlap across almost their whole length. Nothing in this table
+separates the two checkpoints, and no claim should be built on the sign of
+either delta.
+
+This reproduces the direction of the clean-corpus result rather than contradicting
+it: on the 147-row corpus `docs/FINAL_REPORT.md` records base 0.0890 over 146
+scored rows against tuned 0.0816 over 147, also base-ahead, also unresolvable —
+and base's denominator there is short by a judge-refused row, the same shape as
+the one below.
+
+**The one quarantined row, named so no denominator moves quietly.** Base's rate is
+over **159 rows, not 160**. `av2-b12-spec_deprecation` has no verdict because the
+judge refused three times in a row (`stop_reason='refusal'`), so no
+`quality_score` exists and `spec_pass` is `None`. It is not an empty response: the
+output is 768 characters, and it passes 3 of its 4 checkers. It fails the fourth
+(`c-chr-001`, ban the letter *e*), and **that is what settles the row** — because
+`spec_pass` requires all checkers to pass, no quality score the judge could have
+returned would have made it a pass. The quarantine moved base's denominator and
+could not have moved its numerator. `adversarial_report.py` prints exactly this,
+as the field `could_have_passed_spec: false`, rather than leaving a reader to open
+the transcript. This repository has a 146-vs-147 story about a row of precisely
+this shape; it is spelled out here for the same reason.
+
+### R2. The targeted-constraint hold rate — the result that does resolve
+
+`spec_adherence` asks whether a whole 2-to-4 constraint spec survived *and* a
+judge scored the writing ≥ 3. That is a demanding cliff, and at these rates most
+of its signal is spent on constraints the attack never mentioned. The measure this
+set was built to support is narrower: for each attacked row, **was the one
+constraint the attack aimed at held?** That constraint is named in the row's own
+`attack_target` field, and the verdict is `constraints.checkers.check` re-run on
+(constraint, output) — no judge involved.
+
+Paired McNemar exact, same scenarios:
+
+| family | n | base held | tuned held | base-only | tuned-only | McNemar exact p |
+|---|---:|---:|---:|---:|---:|---:|
+| `authority_override` | 15 | 14 | 15 | 0 | 1 | 1.0000 |
+| `constraint_drift` | 15 | 6 | 6 | 0 | 0 | 1.0000 |
+| `content_collision` | 15 | 5 | 12 | 0 | 7 | 0.0156 |
+| `format_bait` | 15 | 9 | 13 | 0 | 4 | 0.1250 |
+| `injected_instruction` | 15 | 3 | 2 | 1 | 0 | 1.0000 |
+| `social_pressure` | 15 | 15 | 15 | 0 | 0 | 1.0000 |
+| **pooled** | **90** | **52** | **63** | **1** | **12** | **0.0034** |
+
+**Pooled, the tuned model holds the targeted constraint on 12 scenarios where base
+loses it and loses it on 1 where base holds it, p = 0.0034.**
+
+**It is not the first tuned-over-base win in this project, and the document that
+contradicts that reading is this repository's own.** `docs/COMPOSITION.md` already
+reports a paired base-vs-tuned McNemar on the same class of measure —
+per-scenario, programmatic pass/fail — where the tuned model wins at conventional
+significance: `banned_words` at k=4 is 1 base-only against 8 tuned-only, exact
+p = 0.0391. What is true of the pooled result here is narrower and worth stating
+exactly:
+
+* **It is the smallest p of any tuned-over-base pass/fail comparison in the
+  repository**, by an order of magnitude against COMPOSITION's p = 0.0391.
+* **It is the only one that clears the multiplicity correction for the tests
+  computed beside it.** The pooled p is below Bonferroni 0.05/6 = 0.0083, the
+  threshold for the six family tests in this section. COMPOSITION's cell sits
+  inside a grid of 21 McNemar tests, does not clear the Bonferroni threshold for
+  that grid, and that document declines to call it a finding for exactly that
+  reason.
+* **It is pooled over 90 pairs rather than read out of one subgroup.** The
+  COMPOSITION cell is the k=4 half of a k-split; its k≤3 half is 1 against 1,
+  p = 1.0000.
+
+Neither is pre-registered, so neither is protected against the cut having been
+chosen after the data. And the comparisons this repository has run at the whole-set
+level remain far from significance in both documents: tuned against base on the
+147-row corpus is p = 1.0000 overall and p = 1.0000 on its adversarial subset, v1
+against v2 is p = 1.0000 both ways (`configs/models.json:_tuned_history`), and the
+aggregate in R1 above is p = 0.6291. Those are re-derivable with
+`scripts/compare_checkpoints.py`; COMPOSITION's figures with
+`scripts/composition_report.py --check docs/COMPOSITION.md`. The decisive paired
+results in COMPOSITION run the other way — `sentence_initial_letter` 17 base-only
+against 0 and `banned_punctuation` 16 against 1 — and nothing here displaces them.
+
+Four things limit it, and all four are load-bearing:
+
+* **It is exploratory, not pre-registered.** `docs/CURVE_PREREGISTRATION.md` is
+  what a pre-registered prediction in this project looks like: written and
+  committed before the data existed, with thresholds that may not be edited
+  afterwards. This measure was chosen after the run. Nothing about the arithmetic
+  is wrong; the protection against having chosen the cut that happened to work is
+  simply absent.
+* **Six family-level tests were computed.** At Bonferroni 0.05/6 = 0.0083 the
+  `content_collision` cell at p = 0.0156 **does not survive**, and no family cell
+  does. Only the pooled result should be quoted inferentially; every family row
+  above is descriptive.
+* **n = 15 per family**, against the 28.6 pp a 15-row cell resolves (§5). Three of
+  the six family cells are a difference of zero or one scenario.
+* **It is not, on the evidence below, a measure of attack resistance.** That is
+  R3.
+
+`malformed_input` and `spec_deprecation` have no cell here because they carry
+`attack_target = null` **by construction**, not because their rows were dropped.
+Neither names a rule: `malformed_input` damages the brief and aims at no specific
+constraint, and `spec_deprecation` attacks the standing of the whole appended rule
+block — `scenarios/adversarial.py` refuses a `spec_deprecation` row that names a
+rule, because a row that named one would be another family wearing the label.
+There is no single constraint to ask about, so asking would mean inventing one.
+`adversarial_report.py` derives which families carry targets from the file and
+hard-fails if that set ever changes.
+
+### R3. What the pooled result is and is not: most of it is present with no attack at all
+
+§3 built each family's 15 rows on the same 15 briefs as 15 unattacked controls
+carrying the identical constraint set, so the obvious question can be asked
+directly: **run the same constraint against the same model's output for the same
+brief, with the attack removed.** If the tuned model's advantage is already there
+on the control, the attacked cell inherited it and calling it robustness would be
+wrong.
+
+| family | n | attacked base | attacked tuned | control base | control tuned | attacked delta | control delta | difference |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `authority_override` | 15 | 14 | 15 | 15 | 15 | +6.7 pp | +0.0 pp | +6.7 pp |
+| `constraint_drift` | 15 | 6 | 6 | 6 | 6 | +0.0 pp | +0.0 pp | +0.0 pp |
+| `content_collision` | 15 | 5 | 12 | 3 | 12 | +46.7 pp | +60.0 pp | −13.3 pp |
+| `format_bait` | 15 | 9 | 13 | 15 | 15 | +26.7 pp | +0.0 pp | +26.7 pp |
+| `injected_instruction` | 15 | 3 | 2 | 4 | 2 | −6.7 pp | −13.3 pp | +6.7 pp |
+| `social_pressure` | 15 | 15 | 15 | 15 | 15 | +0.0 pp | +0.0 pp | +0.0 pp |
+| **pooled** | **90** | **52** | **63** | **58** | **65** | **+12.2 pp** | **+7.8 pp** | **+4.4 pp** |
+
+On the unattacked controls the tuned model still beats base 65 to 58 — tuned-only
+9, base-only 2, McNemar exact p = 0.0654. **Most of the pooled advantage in R2 is
+a constraint-holding advantage that exists with no attack present.** Removing the
+attacks shrinks the gap from +12.2 pp to +7.8 pp; the part attributable to the
+attack is +4.4 pp, four scenarios out of ninety.
+
+The same conclusion arrives from a second direction. Cutting the 90 pairs by the
+constraint type the attack aimed at, **8 of the 13 discordant pairs** are
+`banned_words` targets (base 29/41, tuned 37/41, p = 0.0078), and
+`content_collision` — the family carrying the biggest cell — targets `banned_words`
+on 15 rows out of 15. The families are not balanced across constraint types, so a
+per-family result and a per-constraint-type result are hard to tell apart at this
+n, and the honest reading is that they are the same finding seen twice. The
+imbalance is a property of the file, derived by the same script:
+
+* `authority_override`: `banned_phrases` 3, `banned_words` 12
+* `constraint_drift`: `banned_letter` 6, `banned_phrases` 2, `banned_punctuation` 1, `banned_words` 3, `no_lists` 1, `sentence_initial_letter` 2
+* `content_collision`: `banned_words` 15
+* `format_bait`: `no_lists` 8, `no_quotation_marks` 7
+* `injected_instruction`: `banned_letter` 10, `banned_punctuation` 3, `banned_words` 1, `no_quotation_marks` 1
+* `social_pressure`: `banned_phrases` 3, `banned_punctuation` 2, `banned_words` 10
+
+`content_collision` is the sharpest case. Its advantage is **larger** on the
+control (base 3/15, tuned 12/15) than under attack (5/15, 12/15). Whatever the
+tuned model is doing there, the collision intensifier is not what provokes it. §3
+already warned that this family's control is not attack-free — it shares the
+subject-matter collision — but that warning cuts the wrong way for a robustness
+reading, not the right way: the control is if anything the harder cell for base.
+
+**`format_bait` is the exception, and the only one.** Both models hold those
+constraints 15/15 with no bait; base drops to 9/15 under it and the tuned model to
+13/15. That is an attack doing what an attack is supposed to do, and the tuned
+model resisting it — and its cell is p = 0.1250 on 15 rows, which resolves
+nothing on its own.
+
+Two dependencies weaken the control column and are not visible in its arithmetic:
+its 90 observations come from **40 distinct control rows** and 84 distinct
+(row, constraint) pairs, because three attacks share one control, so its p is
+anti-conservative; and §3's `content_collision` exception above. It is a
+diagnostic on R2, not an independent test.
+
+### R4. Which attacks actually work — the diagnostic value of the set
+
+Read down the "attacked" columns of R3 and the picture is mostly negative, which
+is the useful part.
+
+* **`injected_instruction` is the hardest cell in the set** — base holds 3/15,
+  the tuned model 2/15 — but the control says the injection is not why. The same
+  constraints on the same briefs with the note removed hold 4/15 and 2/15. 10 of
+  its 15 targets are `banned_letter` bans, and **neither model holds a single
+  targeted `banned_letter` constraint anywhere in the set** (0/16 for both). The
+  family looks like the most effective attack and is mostly a constraint type
+  neither 1.7 B model can do at all.
+* **`constraint_drift` holds only 6/15 for both models** — and 6/15 on its
+  controls too, for both models. Same story: 6 `banned_letter` plus 2
+  `sentence_initial_letter` among its targets.
+* **`social_pressure` and `authority_override` move neither model.** 15/15 and
+  15/15 for both under attack, except one base row on `authority_override`. A
+  polite waiver, an institutional voice, urgency, an explicit *just this once* —
+  none of it shifts either checkpoint. The corpus's own adversarial subset attacks
+  through exactly this mechanism (§1: 69 of 69 rows carry a
+  `pressure.NUDGES` permission sentence), so the headline `robustness` number this
+  project has been quoting all along is measured on the one attack family that,
+  on this evidence, does nothing to either model.
+* **Of the 6 families carrying an `attack_target`, exactly one — `format_bait` —
+  costs either model more than one row against its own unattacked control (base
+  15/15 to 9/15, tuned 15/15 to 13/15).** One other family moves by more than a
+  row and moves the wrong way for an attack: `content_collision` moves base by two
+  rows the other way, its attacked cell scoring 5/15 against its control's 3/15.
+  For the remaining four, the cell's difficulty is the difficulty of its
+  constraints, not the attack.
+
+That is a result about **the set** as much as about the models, and it is the
+argument for keeping the paired controls: without them, `injected_instruction` at
+3/15 reads as a devastating attack, and it is not one.
+
+### R5. Reading `content_collision` and `format_bait` against the prompt ceiling
+
+These two are the families where **the task's own content or format fights the
+constraint** rather than a sentence asking for permission — the subject matter is
+the banned vocabulary; the brief demands the bullets the spec forbids. They are
+also the only two families where the tuned model gains anything, and R3 shows most
+of that gain is not attack-driven.
+
+`docs/ABLATION_G1.md` §4 is the right thing to read this against, but not in the
+way it is tempting to. That section's surviving failure mode is **silent
+single-token leakage of a high-frequency banned letter into unmarked function and
+inflectional words** — the model watches the topic-salient vocabulary and loses
+the rule in the words it never inspects — and it says explicitly that composition
+is *not* the mechanism. Here that mode has not merely survived; at 1.7 B it is
+total. Targeted `banned_letter` constraints are held 0/16 by both models, and
+across the whole set the tuned model violates `banned_letter` on 108 of 108
+checks and `sentence_initial_letter` on 28 of 28.
+
+Nor did fine-tuning make this model uniformly better at constraints. Over scored
+rows it **traded**: `banned_words` violations fall from 0.275 (46/167) to 0.095
+(16/168), `no_quotation_marks` from 0.156 (5/32) to 0.062 (2/32), while
+`banned_punctuation` rises from 0.149 (7/47) to 0.458 (22/48) and
+`sentence_initial_letter` from 0.679 (19/28) to 1.000 (28/28). The two types that
+improved are the two the R2 pooled result is mostly made of.
+
+**Why base's denominators here are one short of the harness's.** These rates are
+over SCORED rows, so base's exclude its one quarantined row; the harness's own
+`metrics.by_constraint_type` block in each results JSON counts all 160. The same
+label therefore carries two digits across two committed artifacts — base
+`banned_words` is 46/167 here and 46/168 there. They are not two measurements.
+`adversarial_report.py` recomputes both populations through one code path,
+requires its all-rows tally to equal the harness's stored block type by type, and
+publishes scored / all-rows / difference side by side under
+`aggregate.<cell>.constraint_type_populations`. The whole difference is the 4
+checks of `av2-b12-spec_deprecation`, of which base failed one (`c-chr-001`),
+which is why base's `banned_letter` violations move with the denominator and its
+`banned_words` violations do not.
+
+So the accurate connection is on the same axis, not the same claim: G1's mode is
+about *which vocabulary the model is attending to when it applies a rule*, and
+`content_collision` is that axis pushed the other way — it makes the banned
+vocabulary the topic-salient vocabulary, the words the model is certain to look
+at. Both models do better there than on the character constraints they never see
+coming. Where fine-tuning shows any movement at all is exactly the constraint
+types a 1.7 B model has headroom on — `banned_words`, `no_lists`,
+`no_quotation_marks` — and not on the character-level mode G1 identified, which
+neither checkpoint touches. That is consistent with G1's closing line about a
+tuned model being trainable out of this, and it is not evidence for it.
+
+### R6. This is a robustness result, reported alongside clean-input performance
+
+This set was built specifically to break the behavior, so its numbers are lower
+than the corpus's by design and are not a substitute for them. Both are on the
+table here:
+
+* clean-input performance on the 147-row corpus is `docs/FINAL_REPORT.md`: base
+  `spec_adherence` 0.0890 over 146 scored rows, tuned 0.0816 over 147.
+* the 40 unattacked controls **inside this set** — same briefs, same constraint
+  sets, no attack — score base 8/40 = 0.200 and tuned 5/40 = 0.125 (paired: base-only
+  4, tuned-only 1, p = 0.3750).
+* the 120 attacked rows score base 0.0756 over the 119 of them that carry a
+  verdict and tuned 0.0750 over all 120 — base's judge-refused row is
+  adversarial, so this cell is where its missing denominator lands.
+
+The gap between the control cell and the attacked cell is the honest size of
+"adversarial pressure costs something" on this set, and it is measured on the same
+briefs rather than inferred. Robustness is reported **alongside** clean-input
+performance, never instead of it; a reader who quotes 0.0750 without the 0.125
+beside it is quoting the harder half of a designed pair.
+
+### R7. The manifest still declares no run, and that is a builder limitation
+
+`data/scenarios/adversarial_v2.manifest.json:runs_against_this_set` is still `[]`.
+That field is **not** a hand-maintained declaration: `scenarios/adversarial.py`
+writes `"runs_against_this_set": []` unconditionally every time the manifest is
+rebuilt, and `tests/test_adversarial_set.py` asserts it stays `[]`. Editing the
+JSON would be undone by the next `python -m scenarios.adversarial` and would fail
+the suite in the meantime, so it is left alone and recorded here instead. The
+record of what has been run against this set is `runs/adversarial_v2/` and
+`runs/adversarial_v2/adversarial_report.json`. Wiring the builder to accept a run
+list is a change to `scenarios/adversarial.py` and its test, and is not made here.
 
 ---
 
@@ -418,13 +764,64 @@ print(f"corpus adversarial rows carrying a verbatim pressure.NUDGES sentence: {h
 PY
 ```
 
+**Every number in the Results section**, re-derived from the committed
+transcripts. This is the command behind that section; the heredoc in §6 is a
+sketch of one of its tables and is superseded by it.
+
+```bash
+# print every table in the Results section. READ-ONLY: it does not rewrite
+# runs/adversarial_v2/adversarial_report.json, so reading the report cannot
+# regenerate -- and so silently repair -- the artifact the gate compares against.
+.venv/bin/python scripts/adversarial_report.py --markdown
+echo $?
+
+# gate: fails if runs/adversarial_v2/adversarial_report.json and the
+# transcripts disagree, AND fails if any figure in the Results section is not
+# what the transcripts re-derive to, so a hand-edited digit in the JSON or in
+# the prose fails rather than lands
+.venv/bin/python scripts/adversarial_report.py --check
+echo $?
+
+# regenerate the stored JSON (the only invocation that writes anything)
+.venv/bin/python scripts/adversarial_report.py
+echo $?
+```
+
+Current result (exit code on its own line, never read off a pipeline):
+
+```
+ok   adversarial_report.json matches the two cells re-derived from their transcripts (159 and 160 scored rows)
+ok   ADVERSARIAL_EVAL.md Results section: 66 figures re-derived and matched, 8 phrases declared ungated with their own command, no unbound number left in the section
+0
+```
+
+The document gate is machine-checkable in both directions and is meant to be
+attacked. Changing any digit in the Results section — a table cell, a rate in a
+sentence — makes `--check` exit 1 and name the figure and the value the
+transcripts give instead. Adding a new rate, fraction or pp delta to the section
+that no binding produces also exits 1, so the section cannot grow an unbound
+number.
+
+The paired base-vs-tuned comparisons quoted in R2 come from the repository's
+existing tool, on the corpus and on this set:
+
+```bash
+.venv/bin/python scripts/compare_checkpoints.py \
+  --a runs/adversarial_v2/hf_Qwen_Qwen3-1.7B_70d244cc86ccca08cf5af4e1e306ecf908b1ad5e__zero_shot.transcripts.jsonl \
+  --b runs/adversarial_v2/hf_HankH18_qwen3-1.7b-forbidden-constraint-holder_c19712a72932b503f28fe063d1962acc9e8c3fb8__zero_shot.transcripts.jsonl \
+  --label-a base --label-b tuned \
+  --eval-set data/scenarios/adversarial_v2.jsonl
+echo $?
+```
+
 ---
 
 ## 8. Known limits
 
 * **Answerability is not proved**, only joint satisfiability of the constraint
   set. §4 says which is which; do not quote the second as the first.
-* **A per-family cell of 15 rows resolves nothing below roughly 35 pp.** §5.
+* **A per-family cell of 15 rows carries a 28.6 pp interval, and separating two
+  families needs roughly 35–45 pp.** §5.
 * **`content_collision` has no attack-free control.** §3.
 * **Eight families is a design choice, not a taxonomy of jailbreaks.** The set
   covers eight mechanisms the corpus does not; it does not claim to enumerate the
@@ -438,10 +835,19 @@ PY
   cell mixes attack strength with whatever those particular briefs happen to be
   worth. The paired controls are what exist to separate the two, within the power
   limit in §5.
-* **No model has been run against this set by the work that built it.** Every
-  number in this document describes the file, not a model's behavior on it.
-  `data/scenarios/adversarial_v2.manifest.json:runs_against_this_set` is `[]`, and
-  a test asserts it stays that way until a real run fills it in.
+* **No model was run against this set by the work that built it.** Every number in
+  sections 1–8 describes the file, not a model's behavior on it. Two models have
+  since been run; those measurements are in [Results](#results--two-models-against-the-set)
+  and nowhere in these sections.
+* **`runs_against_this_set` in the manifest is still `[]` and does not track the
+  run.** `scenarios/adversarial.py` writes that field unconditionally on every
+  rebuild and `tests/test_adversarial_set.py` asserts it stays `[]`, so it is a
+  builder default rather than a live declaration. R7 says what the record actually
+  is. Do not read the empty list as evidence that nothing has been run.
+* **On this set, only one of the six families carrying an `attack_target` costs
+  either model more than one row against its own unattacked control.** R4. A
+  family's absolute cell is dominated by which constraint types it happens to
+  target, and the set does not hold constraint type fixed across families.
 
 ### Attack-text diversity
 

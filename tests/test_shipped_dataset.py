@@ -103,9 +103,34 @@ def test_sidecars_are_not_mistaken_for_training_data(path):
     pins that they are NOT in the audited set, so a future rename cannot quietly
     slip violating rows into training."""
     assert path not in SHIPPED
-    assert path.name.endswith((".rejected.jsonl", ".dpo_negatives.jsonl")), (
+    # ".dpo_pairs.jsonl" added 2026-08-22 for the DPO stretch rung. This gate is a
+    # CLOSED-WORLD CLASSIFIER: it exists so a new multi-dot file in data/train/ cannot
+    # arrive unclassified, and it correctly flagged v3.dpo_pairs.jsonl when that file
+    # first appeared. The enumeration is extended rather than the assertion weakened --
+    # an unrecognised name still fails, and the new kind carries its own contract below.
+    # A .dpo_pairs.jsonl holds (prompt, chosen, rejected) preference rows whose REJECTED
+    # side violates a constraint on purpose, exactly like the other two sidecars, which
+    # is why it must stay out of SHIPPED and out of datagen.audit's `messages` schema.
+    # Per-row verification of every pair against the pinned checkers lives in
+    # tests/test_dpo_pairs.py; this only pins the classification and the shape.
+    assert path.name.endswith(
+        (".rejected.jsonl", ".dpo_negatives.jsonl", ".dpo_pairs.jsonl")), (
         f"{path.name} is neither a training file nor a recognised sidecar -- it is "
         f"unaudited and unclassified")
+
+    if path.name.endswith(".dpo_pairs.jsonl"):
+        # Bind the new category: a preference file must actually be preference-shaped,
+        # so a bag of raw SFT rows cannot be renamed into this class to dodge the audit.
+        rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+        assert rows, f"{path.name} is empty"
+        for i, row in enumerate(rows):
+            missing = {"prompt", "chosen", "rejected"} - set(row)
+            assert not missing, (
+                f"{path.name} row {i} is missing {sorted(missing)} -- a .dpo_pairs.jsonl "
+                f"must be (prompt, chosen, rejected) preference rows, not training rows")
+            assert "messages" not in row, (
+                f"{path.name} row {i} carries a 'messages' key: this looks like SFT "
+                f"training data renamed into the preference-sidecar class")
 
 
 # ==========================================================================
