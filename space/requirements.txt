@@ -1,0 +1,24 @@
+# Runtime for the Forbidden-Constraint Holder Space.
+#
+# gradio is NOT listed here on purpose: for `sdk: gradio` Spaces the Hub installs
+# the version named by `sdk_version` in README.md, and pinning it again here is a
+# documented way to get a conflicting install.
+#
+# The floors match this repo's own requirements.txt, so the Space loads the
+# models through the same transformers/torch generation the eval was measured
+# with. Qwen3 needs transformers >= 4.51; accelerate is required by
+# eval.HFGenerator's `low_cpu_mem_usage=True`.
+#
+# CPU wheels only. The default index would install the CUDA build of torch --
+# roughly 2.5 GB of wheels for a box with no GPU, which lengthens every cold
+# start for nothing.
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+torch>=2.4
+transformers>=4.51
+accelerate>=1.0
+
+# NOT installed, deliberately:
+#   anthropic / openai / google-genai  -- judge.py imports these lazily and no
+#       judge runs in this Space. It holds no API key and makes no paid call.
+#   modal, python-dotenv, pytest       -- training/tooling only.

@@ -13,6 +13,7 @@ proving with numbers that the tuned model beats the prompted base model at it.
 | [`docs/ABLATION_G1.md`](docs/ABLATION_G1.md) | Prompt-Ceiling Ablation: 2 frontier families × 3 strategies × 147 scenarios, and the failure mode that survives the best prompt. |
 | [`docs/CURVE_PREREGISTRATION.md`](docs/CURVE_PREREGISTRATION.md) | Predictions for the upward extension of the curve, committed before that checkpoint was trained. |
 | [`docs/MVP_REPORT.md`](docs/MVP_REPORT.md) | The frozen MVP record. Pins the v1 checkpoint; still re-derives. |
+| [`docs/ADVERSARIAL_EVAL.md`](docs/ADVERSARIAL_EVAL.md) | The hardened adversarial set: what it attacks, the family taxonomy, and what its size can and cannot resolve. |
 | [`docs/PIVOT_SPEC.md`](docs/PIVOT_SPEC.md) | The Behavior Spec and the numbered requirements. |
 
 Published artifacts, both public and both pinned by commit hash in
@@ -107,7 +108,16 @@ set -a && . ./.env && set +a
 
 ## Eval harness
 
+`--model` takes a **bare Hugging Face repo id** — the form the assignment's
+Verification Requirements name — as well as the explicit `provider:model` form. A
+bare `owner/name[@revision]` resolves to the `hf` provider; anything that is neither
+provider-qualified nor shaped like a repo id is refused locally, before a model
+loads or a judge is constructed.
+
 ```bash
+# the literal one-command form from the spec
+python eval.py --model HankH18/qwen3-1.7b-forbidden-constraint-holder --eval-set data/scenarios/corpus.jsonl
+
 # base model, zero-shot
 python eval.py --model hf:Qwen/Qwen3-1.7B --eval-set data/scenarios/corpus.jsonl
 
@@ -230,6 +240,16 @@ python -m pytest archive/abstainer/tests -q    # the retired target, still repro
 
 Network-free — mock generators and mock judges throughout.
 
+**About the XPASS count.** The suite reports a number of `xpassed` tests, and they
+are not stale expectations. They all come from one deliberate pattern in
+`tests/test_constraints.py` — golden fixtures for genuinely ambiguous checker
+cases, where each `xfail` reason records a written ruling rather than a known bug
+(the Cyrillic homoglyph `е` U+0435 counts as a violation of a banned `e`; `æ` is
+not an `a`; `"coffeehouse"` does not use a banned `"coffee"`). An XPASS here means
+the checker currently agrees with the ruling. They are left visible on purpose, so
+that a change in any of those rulings shows up in the test output instead of
+passing silently.
+
 ## Repo layout
 
 | Path | What |
@@ -239,8 +259,9 @@ Network-free — mock generators and mock judges throughout.
 | `constraints/` | Registry and the deterministic checkers — the ground-truth layer |
 | `scenarios/` | Corpus generator, reachability prover, the shared prompt renderer |
 | `training/` | Modal QLoRA app |
+| `space/` | The running inference demo — a Gradio Space that runs base vs tuned live on a visitor's own prompt |
 | `scripts/` | the gates and the publishing tools — see below |
-| `data/scenarios/` | Corpus, constraint instances, few-shot exemplars, smoke set |
+| `data/scenarios/` | Corpus, constraint instances, few-shot exemplars, smoke set, and the hardened adversarial set |
 | `data/fixtures/` | Golden checker fixtures |
 | `runs/` | Ablation, smoke and MVP run artifacts |
 | `archive/abstainer/` | The retired first target — see below |

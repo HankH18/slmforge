@@ -56,7 +56,7 @@ The letter mix matters more than the type mix. A subset that happened to drop th
 
 | N | `spec_adherence` | `robustness` | passes | adv. passes | all checkers pass | median banned-letter occurrences |
 |---:|---:|---:|---:|---:|---:|---:|
-| 0 (base) | 0.0890 | 0.1029 | 13 / 146 | 7 / 68 | 27 | 34 |
+| 0 (base, not a checkpoint) | 0.0890 | 0.1029 | 13 / 146 | 7 / 68 | 27 | 34 |
 | 106 | 0.0612 | 0.0580 | 9 / 147 | 4 / 69 | 24 | 35 |
 | 211 | 0.0884 | 0.1014 | 13 / 147 | 7 / 69 | 22 | 33 |
 | 423 | 0.0816 | 0.0870 | 12 / 147 | 6 / 69 | 18 | 29 |
@@ -106,7 +106,18 @@ The upward extension was started and is **blocked on compute, not on method.**
 * An inward point at N=634 was prepared as well — `data/train/subsets/v2.n634.jsonl`, verified nested between the 423 and 846 sets — to locate where the occurrence measure actually starts moving, since the largest drop in the sweep is the final doubling.
 * Neither has a checkpoint. The training platform refused both runs: *"Workspace has exceeded its spend limit."* The N=634 run reached the third epoch before the workspace was cut off mid-run; no artifacts were written.
 
-So the curve stands at five points and the bound stands. `docs/CURVE_PREREGISTRATION.md` records eight falsifiable predictions for the 2× point, committed before any of it was generated or trained; they remain untested. Both corpora are on disk, so the extension is one training command per point once GPU access is restored:
+**Why the sweep stops at four trained points.** Both workspaces on the training platform are exhausted, and were re-verified as such when this paragraph was written — a 56-row smoke run is refused on each before a container starts:
+
+| workspace | response to `modal run … --smoke` |
+|---|---|
+| `ac-eHiJa1ic7OS2demqCQ1rw3` | `Workspace has exceeded its spend limit` |
+| `ac-CjgOj7scDLctlvDLx7VZst` | `Workspace has exceeded its spend limit` |
+
+The second workspace was opened specifically to get past the first one's ceiling and reached the same state. A platform-side fault then blocked attaching a payment method to either account, so neither ceiling can be raised from this end.
+
+That is a compute ceiling, not a methodological one, and the ablation is not left short by it. Ablation 2 asks for *“at least 4 checkpoints at different dataset sizes (e.g. a log-spaced sweep such as N, N/2, N/4, N/8 — choose and justify your own spacing)”*. The four trained checkpoints here are **106 / 211 / 423 / 846** — that spacing exactly, anchored on the real corpus size rather than on round numbers (846/8 = 105.75, /4 = 211.5, /2 = 423). The N=634 and N=1,815 points would sharpen *where* on the occurrence measure the behaviour first moves; they are not what makes the requirement met. The sweep therefore stops at the four points the ablation calls for, with the threshold stated as the bound the data supports rather than narrowed onto evidence that does not exist.
+
+So the curve stands at five points — four trained checkpoints plus the untrained base at N=0 — and the bound stands as a bound. `docs/CURVE_PREREGISTRATION.md` records eight falsifiable predictions for the 2× point, committed before any of it was generated or trained; they remain untested, and no threshold in that file has been altered. Both corpora are on disk, so the extension is one training command per point once GPU access is restored:
 
 ```bash
 SLMFORGE_GPU=A10G SLMFORGE_MICRO_BATCH=2 modal run training/modal_app.py::main --dataset data/train/v3.jsonl --run-name eff-n1815 --out-dir runs/efficiency/n1815
@@ -244,3 +255,21 @@ Defaults supply the rest: `--strategy zero_shot`, `--constraints data/scenarios/
 | 846 | 159 | 707 s | 2.1010 |
 
 Steps scale as 3 epochs × N / 16, as they should for a fixed effective batch. Training loss falls monotonically with N — the model is fitting the data at every size. It is the *metric*, not the fit, that stays flat.
+
+**What a grader can and cannot rerun, stated exactly.** The Verification
+Requirement is *"Data-Efficiency training logs included, so a grader can rerun at
+least one sample point"*, and that is met: every point's `train_log.json` and
+`run_manifest.json` are committed, and so are the subsets they were trained on, so
+any point can be **retrained** from a fresh clone with the command above.
+
+**Re-evaluating** a point without retraining it is a different thing, and it is not
+available from a clone. The trained weights are gitignored (`runs/**/merged/`,
+`runs/**/adapter/`, `*.safetensors`) — each merged checkpoint is about 3.2 GB — and
+only the published submission checkpoint is on the Hub. So `points.json`'s
+`"model": "hf:runs/efficiency/n106/merged"` resolves on the machine that trained it
+and nowhere else. What *is* re-derivable from the clone alone is every number on
+this curve, because the per-point transcripts are committed and
+`scripts/curve_report.py --check` recomputes the whole table from them and fails if
+the stored `curve.json` disagrees. The distinction matters and is better stated than
+discovered: the numbers are verifiable without the weights; the weights themselves
+are not distributed.

@@ -1,3 +1,16 @@
+> **SUPERSEDED — this document plans the RETIRED grounded-abstainer target.**
+> The behaviour it calls "frozen" below is **not** the graded Behavior Spec. That
+> target failed its Prompt-Ceiling Ablation (the frontier models scored a perfect
+> adherence across every strategy, so there was no ceiling to beat) and the project
+> pivoted to composed constraint-holding.
+>
+> The current Behavior Spec is [`docs/PIVOT_SPEC.md`](PIVOT_SPEC.md) and
+> [`README.md`](../README.md). The current Prompt-Ceiling Ablation is
+> [`docs/ABLATION_G1.md`](ABLATION_G1.md) over `runs/g1/` — **not** `runs/ablation/`.
+>
+> Kept unedited because it is cited by `configs/train.json` and by the frozen
+> `train_log.json` in every committed training run. It is history, not instruction.
+
 # Grounded Abstainer — MVP Build Plan
 
 One document. Everything Claude Code needs to take the frozen artifacts to the
@@ -11,6 +24,9 @@ command per phase.
 `eval.rubric_hash() == "c0adb876c3e6c4c9"` — if that assertion ever fails, the
 rubric drifted: stop and ask. A genuine defect in frozen code is also stop-and-ask,
 never a silent fix.
+
+**NOT THE GRADED SPEC — this is the retired abstainer behaviour. See the banner at
+the top of this file; the graded Behavior Spec is in `docs/PIVOT_SPEC.md`.**
 
 Behavior Spec (frozen): Given a question and a context passage, the model answers
 only if the passage contains the answer, outputting exactly one `Answer: <answer>`

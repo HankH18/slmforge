@@ -202,6 +202,142 @@ def test_unknown_provider_raises():
         E.make_generator("bedrock:some-model")
 
 
-def test_model_spec_without_a_colon_raises():
+def test_model_spec_that_is_neither_provider_qualified_nor_a_repo_id_raises():
+    """Renamed only -- the assertion below is unchanged and still binds.
+
+    The old name ("without a colon raises") stated a general rule that the spec
+    contradicts: <hf-repo-id> has no colon and must now resolve. The INPUT here
+    is unaffected: 'gpt-5.6-sol' has no slash either, so it is not a Hub repo id
+    under any reading, and it must still fail locally and immediately."""
     with pytest.raises(ValueError, match="provider:model"):
         E.make_generator("gpt-5.6-sol")
+
+
+# ------------------------------------------- the spec's documented model form
+# project_spec.pdf p3, Verification Requirements, verbatim:
+#   "eval.py --model <hf-repo-id> --eval-set <path> regenerates your full
+#    results table from nothing."
+# The bare repo id is therefore a requirement, not a convenience. These bind
+# both halves of it: the bare form resolves, and a typo still dies here.
+
+class _RecordingHF:
+    """Stands in for HFGenerator so the parse can be asserted without loading
+    multi-GB weights. Only make_generator's routing is under test."""
+
+    def __init__(self, repo, revision):
+        self.repo, self.revision = repo, revision
+
+
+@pytest.fixture
+def hf_spy(monkeypatch):
+    monkeypatch.setattr(E, "HFGenerator", _RecordingHF)
+    return _RecordingHF
+
+
+def test_bare_hf_repo_id_resolves_to_the_hf_provider(hf_spy):
+    g = E.make_generator("HankH18/qwen3-1.7b-forbidden-constraint-holder")
+    assert isinstance(g, _RecordingHF)
+    assert g.repo == "HankH18/qwen3-1.7b-forbidden-constraint-holder"
+    assert g.revision is None
+
+
+def test_bare_hf_repo_id_carries_its_pinned_revision(hf_spy):
+    g = E.make_generator("Qwen/Qwen3-1.7B@70d244cc0e1c4b6b5b4b4b")
+    assert (g.repo, g.revision) == ("Qwen/Qwen3-1.7B", "70d244cc0e1c4b6b5b4b4b")
+
+
+def test_bare_and_prefixed_forms_of_the_same_repo_agree(hf_spy):
+    bare = E.make_generator("Qwen/Qwen3-1.7B@abc123")
+    pref = E.make_generator("hf:Qwen/Qwen3-1.7B@abc123")
+    assert (bare.repo, bare.revision) == (pref.repo, pref.revision)
+
+
+@pytest.mark.parametrize("spec,cls,rest", [
+    ("hf:Qwen/Qwen3-1.7B", "HFGenerator", "Qwen/Qwen3-1.7B"),
+    ("hf:runs/efficiency/n106/merged", "HFGenerator", "runs/efficiency/n106/merged"),
+    ("mock:compliant", "MockGenerator", "compliant"),
+    ("anthropic:claude-sonnet-4-5", "AnthropicGenerator", "claude-sonnet-4-5"),
+    ("openai:gpt-5.6-sol", "OpenAIGenerator", "gpt-5.6-sol"),
+    ("google:gemini-3-pro", "GoogleGenerator", "gemini-3-pro"),
+])
+def test_every_preexisting_spec_form_still_routes_unchanged(monkeypatch, spec, cls, rest):
+    """Regression fence around the bare-repo-id branch: adding it must not have
+    moved any provider-qualified spec. Every constructor is stubbed, so this
+    asserts routing only and needs no API key and no weights."""
+    seen = {}
+
+    def recorder(name):
+        def _make(*args):
+            seen["cls"], seen["args"] = name, args
+            return object()
+        return _make
+
+    for name in ("HFGenerator", "MockGenerator", "AnthropicGenerator",
+                 "OpenAIGenerator", "GoogleGenerator"):
+        monkeypatch.setattr(E, name, recorder(name))
+    E.make_generator(spec)
+    assert seen["cls"] == cls
+    # hf splits repo@revision; every other provider passes its rest through whole
+    assert seen["args"][0] == rest
+
+
+def test_a_local_weights_directory_resolves_bare_and_prefixed(hf_spy, tmp_path):
+    """runs/efficiency/n106/merged is a real local merged-weights dir in this
+    repo and is referenced as hf:<path>. Both spellings must load from disk."""
+    d = tmp_path / "merged"
+    d.mkdir()
+    assert E.make_generator(f"hf:{d}").repo == str(d)
+    assert E.make_generator(str(d)).repo == str(d)
+
+
+@pytest.mark.parametrize("spec", [
+    "openai;gpt-5",          # semicolon typo: no colon AND no slash
+    "HankH18",               # owner only, no repo half
+    "anthropc:x",            # misspelled provider -- must stay an unknown provider
+    "C:\\models\\qwen",  # Windows path: the colon rules, provider 'C' is unknown
+    "a/b/c",                 # two slashes is not a Hub repo id
+    "owner/",                # empty repo half
+    "Qwen/Qwen3-1.7B@",      # empty revision
+])
+def test_malformed_specs_still_fail_locally_and_loudly(hf_spy, spec):
+    """A typo must die here -- free, instant, obvious -- and never be routed to
+    the Hub, where it would surface as a slow 404 or an auth prompt."""
+    with pytest.raises(ValueError):
+        E.make_generator(spec)
+
+
+def test_help_documents_the_bare_repo_id_form():
+    r = run_cli("--help")
+    assert r.returncode == 0, r.stderr
+    assert "owner/name" in r.stdout, r.stdout
+
+
+def test_bare_repo_id_is_canonicalized_to_the_hf_prefix():
+    """The bare form must not fork the artifact namespace. sanitize() turns the
+    spec into the output filename and the "model" field of every transcript row,
+    and run_ablation / check_mvp both do spec.split(":") on those -- so a bare
+    spec is rewritten to hf:<repo> at the boundary rather than carried through."""
+    assert E.normalize_model_spec("Qwen/Qwen3-1.7B") == "hf:Qwen/Qwen3-1.7B"
+    assert (E.normalize_model_spec("HankH18/tuned@abc123")
+            == "hf:HankH18/tuned@abc123")
+    assert E.sanitize(E.normalize_model_spec("Qwen/Qwen3-1.7B")) == \
+        E.sanitize("hf:Qwen/Qwen3-1.7B")
+
+
+@pytest.mark.parametrize("spec", [
+    "hf:Qwen/Qwen3-1.7B", "hf:runs/efficiency/n106/merged", "mock:compliant",
+    "anthropic:claude-sonnet-4-5", "openai:gpt-5.6-sol", "google:gemini-3-pro",
+    "bedrock:whatever",   # unknown providers stay untouched here, caught on dispatch
+])
+def test_provider_qualified_specs_are_returned_byte_identical(spec):
+    assert E.normalize_model_spec(spec) == spec
+
+
+def test_cli_rejects_a_malformed_model_spec_before_any_judge_call(tmp_path):
+    """The typo must cost nothing: no judge, no weights, no output directory."""
+    out = tmp_path / "run"
+    r = run_cli("--model", "openai;gpt-5", "--eval-set", SMOKE,
+                "--judge", "mock:4", "--out", str(out))
+    assert r.returncode == 2, (r.returncode, r.stdout, r.stderr)
+    assert "openai;gpt-5" in r.stderr
+    assert not out.exists(), "a rejected spec must not create a run directory"

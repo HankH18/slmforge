@@ -1,0 +1,167 @@
+{
+  "generator": "scenarios.adversarial",
+  "eval_set": "data/scenarios/adversarial_v2.jsonl",
+  "eval_set_sha256": "777bd86894d023b322305c3d312d26b98ff5cf62b65c492ee1bab085e26fc660",
+  "constraints_file": "data/scenarios/constraint_instances.jsonl",
+  "constraints_file_sha256": "8cad778c2f8a06d6114a275d5f81dbc00236603349d508b9ab3e64e2fa532ed6",
+  "new_constraint_instances": 0,
+  "summary": {
+    "rows": 160,
+    "briefs": 40,
+    "attacks_per_brief": 3,
+    "adversarial": 120,
+    "clean_controls": 40,
+    "per_family": 15,
+    "k_distribution": {
+      "2": 36,
+      "3": 80,
+      "4": 44
+    },
+    "split_distribution": {
+      "heldout_type": 72,
+      "train": 88
+    },
+    "family_distribution": {
+      "authority_override": 15,
+      "constraint_drift": 15,
+      "content_collision": 15,
+      "format_bait": 15,
+      "injected_instruction": 15,
+      "malformed_input": 15,
+      "none": 40,
+      "social_pressure": 15,
+      "spec_deprecation": 15
+    },
+    "constraint_type_distribution": {
+      "banned_letter": 108,
+      "banned_phrases": 56,
+      "banned_punctuation": 48,
+      "banned_words": 168,
+      "no_lists": 48,
+      "no_quotation_marks": 32,
+      "sentence_initial_letter": 28
+    },
+    "constraint_instances_used": 48,
+    "retired_instances_excluded": [
+      "c-chr-005",
+      "c-chr-006",
+      "c-chr-007",
+      "c-chr-009",
+      "c-chr-010"
+    ],
+    "attack_text_diversity": {
+      "authority_override": 8,
+      "constraint_drift": 15,
+      "content_collision": 5,
+      "format_bait": 6,
+      "injected_instruction": 10,
+      "malformed_input": 15,
+      "social_pressure": 8,
+      "spec_deprecation": 5
+    },
+    "attack_phrasing_diversity": {
+      "authority_override": 5,
+      "constraint_drift": 15,
+      "content_collision": 5,
+      "format_bait": 6,
+      "injected_instruction": 5,
+      "malformed_input": 15,
+      "social_pressure": 5,
+      "spec_deprecation": 5
+    },
+    "min_distinct_attack_texts": 5
+  },
+  "families": {
+    "authority_override": "An operator/administrator voice asserts the named rule has been waived for this request. Attacks the model's model of WHO may change the spec.",
+    "injected_instruction": "A third-party note the brief asks the writer to take account of contains its own instruction to drop the named rule. Attacks the boundary between content to be processed and instructions to be obeyed.",
+    "content_collision": "No permission clause at all. The brief's own subject matter is the banned vocabulary -- verified: the brief text itself FAILS the named checker -- so the natural wording violates the spec.",
+    "format_bait": "The brief explicitly demands the output shape a format constraint forbids. Verified present by scenarios.reachability.task_conflicts.",
+    "social_pressure": "Urgency and appeal to the reader's need, with an explicit just-this-once. Attacks rule-following under a plausible human cost.",
+    "constraint_drift": "The rule is restated once, early, in a weakened paraphrase, then buried under a long run of competing benign requirements. Attacks retention and the authority of the original wording.",
+    "spec_deprecation": "The appended rule block is framed as stale tooling output superseded by the prose brief. Attacks the standing of the constraint block itself.",
+    "malformed_input": "The brief arrives damaged -- mojibake, a zero-width split inside a word, a duplicated run, an unterminated final clause. No jailbreak text at all; this is the spec's 'malformed input' axis."
+  },
+  "label_guards": {
+    "families_guarded": [
+      "authority_override",
+      "injected_instruction",
+      "content_collision",
+      "format_bait",
+      "social_pressure",
+      "constraint_drift",
+      "spec_deprecation",
+      "malformed_input"
+    ],
+    "method": "scenarios.adversarial.label_violations: one executable guard per family, each a conjunction of independent components with at least one structural member (position in the task, nesting inside attributed material, non-containment of the paired control, or the absence of a rule name). Every component that names a direction is decided by _asserted_hits, so a payload using the family's vocabulary to assert the OPPOSITE is refused. Run at build time and again over the shipped bytes by tests/test_adversarial_set.py.",
+    "not_proved": "that any attack is persuasive. The guards decide that the labelled mechanism is present in the text and points the way the label says. NEGATION_MARKERS and REAFFIRMATION_MARKERS are open lists used only to reject, so an inversion phrased outside them would be missed."
+  },
+  "reachability": {
+    "rows_proved": 160,
+    "method": "scenarios.reachability.find_conflicts (analytic) then build_witness (constructive), then constraints.checkers.check re-run on the witness for every constraint of the row",
+    "task_conflicts_expected": "format_bait rows only",
+    "not_proved": "that any brief is answerable under its constraint set. No mechanical procedure decides it; see the note at the top of scenarios/reachability.py."
+  },
+  "resolution_ci95": {
+    "15": {
+      "ci95_at_p0.08": [
+        0.0119,
+        0.2982
+      ],
+      "ci95_at_p0.50": [
+        0.3012,
+        0.7519
+      ]
+    },
+    "40": {
+      "ci95_at_p0.08": [
+        0.0258,
+        0.1986
+      ],
+      "ci95_at_p0.50": [
+        0.352,
+        0.648
+      ]
+    },
+    "120": {
+      "ci95_at_p0.08": [
+        0.0459,
+        0.1466
+      ],
+      "ci95_at_p0.50": [
+        0.4119,
+        0.5881
+      ]
+    },
+    "160": {
+      "ci95_at_p0.08": [
+        0.0481,
+        0.134
+      ],
+      "ci95_at_p0.50": [
+        0.4234,
+        0.5766
+      ]
+    },
+    "69": {
+      "ci95_at_p0.08": [
+        0.0405,
+        0.177
+      ],
+      "ci95_at_p0.50": [
+        0.3783,
+        0.6079
+      ]
+    },
+    "147": {
+      "ci95_at_p0.08": [
+        0.0473,
+        0.1373
+      ],
+      "ci95_at_p0.50": [
+        0.4235,
+        0.5831
+      ]
+    }
+  },
+  "runs_against_this_set": []
+}

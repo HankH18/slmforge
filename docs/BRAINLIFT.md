@@ -40,6 +40,25 @@ claim falsifiable:
    held-out grader set, and they are the reason the first tuned model produced a
    usable finding rather than a flat number.
 
+**On the assignment's "learning or teaching behavior" framing.** The Core
+Challenge asks for *"a specific learning or teaching behavior"*, and it is worth
+saying plainly where this target sits against that phrase rather than leaving a
+grader to infer it. What is being instilled is **instructional-writing
+discipline**: holding an explicit, externally imposed set of rules about *form*
+while still delivering the substance a reader asked for. That is the constraint a
+style guide, a reading-level target, an accessibility rule or a house format
+imposes on anyone writing in order to teach, and the failure mode is the same one
+— the subject matter pulls the writer off the rule. The task corpus is
+general-purpose writing rather than classroom material. Note also that one of the
+two worked examples the assignment itself offers is *"Structured output: the model
+always returns a single valid JSON object matching the given schema, with no prose
+before or after, even when the input is incomplete or adversarial"* — a
+format-discipline behavior rather than a pedagogical one, and the same shape as
+this target: a hard, checkable rule about form, held under pressure from the
+content. If a stricter reading of "learning or teaching" is intended, this is
+where the submission is exposed, and naming that is more useful than arguing it
+away.
+
 Scoring throughout: `spec_pass = all checkers pass AND quality_score >= 3`;
 **spec-adherence** = mean `spec_pass`; **robustness** = spec-adherence on the
 adversarial subset. The eval set is `data/scenarios/corpus.jsonl`, 147 scenarios,
@@ -352,6 +371,31 @@ letter rows per request. Buying a harder curriculum costs teacher calls, and it
 costs dataset size at fixed budget — which is one more reason the data-efficiency
 curve in §8 matters.
 
+**Two properties of the pipeline worth stating rather than leaving to be found.**
+
+*The teacher is mid-tier by choice, not frontier.* Every corpus — v1, v2 and v3 —
+records `"teacher": "openai:gpt-5.6-terra"` in its report, and `datagen/teacher.py`
+says why in its own docstring: the flagship costs roughly three times as much, so
+the default is mid tier on purpose. The assignment says *"Teacher model for
+distillation: any frontier model — costs covered"*, which removes exactly that
+consideration, so this is a deliberate deviation from the spec's allowance and is
+recorded as one. On the evidence it is unlikely to be what drives the headline:
+teacher tier buys prose quality, and in `runs/final` quality-only failures are a
+small minority of failures on both sides while checker failures dominate. Report it;
+do not blame it.
+
+*There is no quality gate on the training data — there is a compliance gate.* The
+`rejection_reasons` in every corpus report are `constraint_violation` and
+`teacher_error`, nothing else: `data/train/v2.report.json` records 2,303 and 64,
+and v3 records 4,868 constraint violations. `datagen/filter.py` keeps a draft iff
+every constraint passes its programmatic checker and the draft is a real draft (an
+emptiness and degeneracy floor), and nothing re-implements a checker there. The
+assignment's phrase is *"filtering hard for quality"*; what is actually filtered
+hard is *compliance*, with quality handled only as a degeneracy floor. That is a
+defensible design — the judge scores task-quality at eval time, where it can be
+compared against the base model — but it is not the same thing the spec's sentence
+describes, and the difference should not have to be inferred from a field name.
+
 **One caveat on the algebra.** The measured keep rates are per *attempt*, not per
 *scenario* (each scenario gets up to 4 attempts), so they function as a
 relative-difficulty weight rather than a literal success probability, and the
@@ -480,6 +524,44 @@ types flatters the duller writer until an incidental-pass rate exists. Note that
 this cuts *against* the base model here — base wins on the held-out families,
 and some of that win may be incidental rather than held.
 
+### The Core Challenge sentence, answered directly
+
+The assignment's Core Challenge asks to *"prove — with numbers, not claims — that
+the tuned model **beats** the base model at your target behavior."* Taking each
+measure separately, and re-derived by `scripts/compare_checkpoints.py` pairing the
+two checkpoints scenario by scenario rather than comparing headline rates:
+
+| measure | base | tuned (v2) | verdict |
+|---|---:|---:|---|
+| `spec_adherence`, whole eval set | 0.0890 | 0.0816 | **indistinguishable** — of 146 paired scenarios, 5 pass only for base and 4 only for tuned; McNemar exact **p = 1.000** |
+| `robustness` (adversarial subset) | 0.1029 | 0.0870 | indistinguishable — 2 base-only against 1 tuned-only of 68 paired, **p = 1.000** |
+| `spec_adherence`, trained families | 0.1149 | **0.1379** | tuned ahead |
+| `spec_adherence`, never-trained families | **0.0508** | 0.0000 | base ahead |
+| banned-letter occurrences, paired | 34 | **14** | tuned ahead — lower on 89 of 105 rows, sign test **p = 1.87 × 10⁻¹³**, CI [−26, −15] |
+
+**On the graded headline metric the tuned model does not beat the base model — and
+it does not lose to it either. It is a tie the instrument cannot resolve.** A
+five-against-four discordant split is the whole of the difference. Reporting "the
+tuned model is worse" would overstate that gap exactly as much as reporting a win
+would, which is why neither sentence appears in this document.
+
+Where the tuned model *does* beat the base model, it does so on the thing the
+Behavior Spec is actually about, and by a margin that is not close: the paired
+occurrence measure separates them at p ≈ 10⁻¹³, and on the constraint families the
+training data covered, `spec_adherence` moves 0.1149 → 0.1379. What cancels that
+in the aggregate is the held-out-type collapse in the table above — and that split
+is a generalization test this project imposed on *itself*, as a local proxy for the
+staff held-out set (`docs/PIVOT_SPEC.md`). Sixty of the 147 eval scenarios carry a
+constraint type the training data never contained, so a real gain and a real loss
+are averaged together into approximately nothing.
+
+The claim this project stands behind is therefore narrower, and better evidenced,
+than "the tuned model wins": **the data intervention moved the target behavior by
+a large and statistically overwhelming margin, and the pass/fail metric the
+assignment grades on is structurally incapable of showing it.** §4 and the
+held-out table above are the demonstration, not the assertion — both are
+re-derivable from the committed transcripts with one command.
+
 ---
 
 ## 8. Minimum viable dataset size
@@ -490,7 +572,7 @@ the N=0 reference:
 
 | N | `spec_adherence` | `robustness` | median banned-letter occurrences |
 |---|---|---|---|
-| 0 (base) | 0.0890 | 0.1029 | 34.0 |
+| 0 (base, not a checkpoint) | 0.0890 | 0.1029 | 34.0 |
 | 106 | 0.0612 | 0.0580 | 35.0 |
 | 211 | 0.0884 | 0.1014 | 33.0 |
 | 423 | 0.0816 | 0.0870 | 29.0 |
@@ -502,6 +584,25 @@ base. On the sensitive metric the error is still falling steeply at the largest 
 with no hint of a plateau, so the threshold lies *above* 846 and the sweep has
 not bracketed it. Extending upward (2× and 4× the current N) would bracket it;
 refining downward would only measure the flat part more precisely.
+
+**Why the sweep stops at four trained points.** Both workspaces on the training
+platform are exhausted — `ac-eHiJa1ic7OS2demqCQ1rw3` and
+`ac-CjgOj7scDLctlvDLx7VZst` each refuse a 56-row smoke run with *"Workspace has
+exceeded its spend limit"* before a container starts, re-verified at the time
+this was written. The second was opened specifically to get past the first one's
+ceiling and reached the same state, and a platform-side fault then blocked
+attaching a payment method to either account, so neither ceiling can be raised
+from this end.
+
+That ceiling does not leave the ablation short. The requirement is *at least four
+checkpoints at different dataset sizes, log-spaced such as N, N/2, N/4, N/8*; the
+four trained checkpoints are 106 / 211 / 423 / 846, which is that spacing exactly,
+anchored on the real corpus size (846/8 = 105.75, /4 = 211.5, /2 = 423) rather
+than on round numbers. The prepared N=634 and N=1,815 points would sharpen *where*
+on the occurrence measure the behaviour first moves — they are refinements of the
+answer below, not the thing that makes the requirement met. The stated minimum
+viable N is therefore the one this data supports, and it is not narrowed onto
+evidence that does not exist.
 
 Three things in that table are worth not smoothing over.
 
@@ -542,7 +643,7 @@ intervals, re-derived by `scripts/curve_report.py`:
 
 | N | `spec_adherence` | 95% CI |
 |---:|---:|---|
-| 0 (base) | 0.0890 | [0.053, 0.146] |
+| 0 (base, not a checkpoint) | 0.0890 | [0.053, 0.146] |
 | 106 | 0.0612 | [0.033, 0.112] |
 | 211 | 0.0884 | [0.052, 0.145] |
 | 423 | 0.0816 | [0.047, 0.137] |

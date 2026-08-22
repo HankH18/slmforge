@@ -1395,3 +1395,69 @@ def test_a_missing_run_directory_is_a_failure(tmp_path):
     r = run_gate(pkg)
     assert r.returncode != 0
     assert "no MVP run artifacts committed" in out(r)
+
+
+# --------------------------------------------- the published dataset pin
+#
+# REGRESSION. The model-pin loop in check_report only catches a wrong sha for
+# the MODEL repo id. The published dataset lives under a different repo id, so a
+# stale dataset pin was invisible: docs/FINAL_REPORT.md named the data-only
+# commit while configs/models.json named the later card commit, and BOTH
+# submission packages gated green with the two artifacts contradicting
+# each other about which published commit the numbers were trained on.
+
+DATASET_REPO = "hankholcomb/fch-sft"
+DATASET_SHA = "da7e42a265a2d7d1d1dd975e0a9fab85fb99d135"
+DATASET_PIN = f"{DATASET_REPO}@{DATASET_SHA}"
+STALE_DATASET_SHA = "54a2e7427e80eb371e3505e0067c08021127b543"
+
+
+def _pin_dataset(pkg, pin=DATASET_PIN):
+    """Add a published-dataset pin to the package's models.json."""
+    cfg = json.loads(pkg.models_path.read_text())
+    cfg["dataset"] = pin
+    pkg.models_path.write_text(json.dumps(cfg, indent=2))
+
+
+def test_a_dataset_pin_matching_models_json_is_accepted(tmp_path):
+    pkg = MvpPackage(tmp_path / "repo")
+    _pin_dataset(pkg)
+    pkg.write_report(extra_lines=[f"| training data | `{DATASET_PIN}` |"])
+    r = run_gate(pkg)
+    assert r.returncode == 0, out(r)
+    assert f"dataset pinned in the report and matching models.json: {DATASET_PIN}" \
+        in r.stdout
+
+
+def test_a_stale_dataset_pin_in_the_report_is_refused(tmp_path):
+    """THE ONE THAT MATTERS. The report names the right dataset repo at the
+    WRONG commit. Before this gate existed the package passed."""
+    pkg = MvpPackage(tmp_path / "repo")
+    _pin_dataset(pkg)
+    pkg.write_report(
+        extra_lines=[f"| training data | `{DATASET_REPO}@{STALE_DATASET_SHA}` |"])
+    r = run_gate(pkg)
+    assert r.returncode != 0, out(r)
+    text = out(r)
+    assert STALE_DATASET_SHA in text, text
+    assert DATASET_PIN in text, text
+
+
+def test_a_report_that_never_names_the_dataset_is_unaffected(tmp_path):
+    """The gate is conditional ON PURPOSE. docs/MVP_REPORT.md names no dataset,
+    and this gate exists to stop a report CONTRADICTING models.json -- not to
+    invent a new requirement for a report that never made the claim."""
+    pkg = MvpPackage(tmp_path / "repo")
+    _pin_dataset(pkg)
+    r = run_gate(pkg)
+    assert r.returncode == 0, out(r)
+    assert "dataset pinned in the report" not in r.stdout
+
+
+def test_the_dataset_gate_is_silent_when_models_json_pins_no_dataset(tmp_path):
+    """No dataset key at all: nothing to contradict, nothing to say."""
+    pkg = MvpPackage(tmp_path / "repo")
+    pkg.write_report(extra_lines=[f"| training data | `{DATASET_PIN}` |"])
+    r = run_gate(pkg)
+    assert r.returncode == 0, out(r)
+    assert "dataset pinned in the report" not in r.stdout

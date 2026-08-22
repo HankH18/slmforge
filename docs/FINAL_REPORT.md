@@ -16,7 +16,7 @@ the two documents pin different checkpoints on purpose, and
 |---|---|
 | Tuned model | `HankH18/qwen3-1.7b-forbidden-constraint-holder@c19712a72932b503f28fe063d1962acc9e8c3fb8` |
 | Base model | `hf:Qwen/Qwen3-1.7B@70d244cc86ccca08cf5af4e1e306ecf908b1ad5e` |
-| Training data | `HankH18/forbidden-constraint-holder-sft@54a2e7427e80eb371e3505e0067c08021127b543` |
+| Training data | `HankH18/forbidden-constraint-holder-sft@da7e42a265a2d7d1d1dd975e0a9fab85fb99d135` |
 | eval-code commit | `656ebd344febff326bafc4573557af4690765416` |
 | Eval set | `data/scenarios/corpus.jsonl` |
 | Judge | `claude-sonnet-4-6`, rubric hash `12a0dcaaf29080cb` |
@@ -149,7 +149,28 @@ in [`BRAINLIFT.md`](BRAINLIFT.md) and [`EFFICIENCY_CURVE.md`](EFFICIENCY_CURVE.m
 Those numbers are re-derived by `scripts/curve_report.py` and
 `scripts/compare_checkpoints.py`, which read the same committed transcripts.
 
+**The assignment supplies no reliability bar.** Ablation 1 asks for a prompting
+ceiling *"below your reliability bar"* and Ablation 2 for the smallest N that
+*"reliably"* holds the behaviour, but no threshold for the word "reliably" appears
+anywhere in the four pages of the spec. The bar applied here was therefore chosen
+by this project rather than given, and it is stated together with the escalation
+ladder that justified it in `docs/ABLATION_G1.md`; `runs/g1/gate_report.json`
+records the exact values under `thresholds`. A reader who prefers a different bar
+can re-derive every number in this report from the committed transcripts with the
+command in §3 and apply their own.
+
 ## 5. The staff held-out eval set
+
+**This half of the results table cannot exist before grading, and saying so is
+better than leaving a blank.** The spec defines the staff set as *"a scenario set
+you never saw"*, so by construction it is not in this repo and no number can be
+reported against it here. What *is* deliverable in advance is the harness's
+readiness to consume one the moment it arrives, and that readiness is the
+deliverable this section describes: a one-command scoring path, a validator that
+costs nothing and refuses a bad file before a token is generated, and an adapter
+that maps a foreign constraint library onto the pinned registry — or refuses,
+rather than quietly scoring a subset, when it cannot do so without changing
+meaning.
 
 The harness takes any scenario file:
 

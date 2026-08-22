@@ -16,13 +16,13 @@ The Grounded Abstainer target failed its Prompt-Ceiling Ablation (frontier score
    - T-4: deliver the full G1 ablation table, gate verdict, and raw transcripts to Hank and wait for his go before starting T-5. If the escalation ladder (R6) exhausts without a ceiling appearing, stop and report — do not soften thresholds, do not proceed.
 4. On a failed attempt: revert to the ticket's starting state before retrying. Do not iterate on top of your own failure.
 5. On discovered reality (a plan assumption is wrong): stop, report what broke and the smallest re-plan, and wait — do not push through a stale plan.
-6. Order is the point of this pivot: T-4 (the prompt-ceiling gate) runs BEFORE any data-pipeline or training work. Last night's failure mode was building downstream of an unproven ceiling; do not recreate it.
+6. Order is the point of this pivot: T-4 (the prompt-ceiling gate) runs BEFORE any data-pipeline or training work. The failure mode this ordering exists to prevent is building downstream of an unproven ceiling.
 7. Data beats config: if eval numbers disappoint at any stage, the fix is a data change, never a hyperparameter change (assignment rule; Spec §Constraints).
 8. Keep every reported number regenerable: pinned model hash, pinned eval-code hash, one-command eval.py, raw judge transcripts saved as JSONL for every eval you run.
 
 ## Reporting style
 - Direct and terse. Lead with the number or the blocker, not narrative.
-- All time estimates in agentic-execution terms (runs/sessions), not human hours.
+- Size work by the number of runs or sessions it takes, not by wall-clock hours.
 - When you need a decision from Hank, present it as short concrete options, not open-ended prose questions.
 
 ## First actions this session

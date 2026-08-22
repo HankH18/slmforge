@@ -20,6 +20,8 @@ This file is CLI plumbing plus the strategy prompts. It owns no scoring logic:
                zero_shot eval condition)
 
 Usage:
+  eval.py --model HankH18/qwen3-1.7b-forbidden-constraint-holder \
+          --eval-set data/scenarios/corpus.jsonl
   eval.py --model hf:Qwen/Qwen3-1.7B --eval-set data/scenarios/corpus.jsonl
   eval.py --model hf:you/tuned@<commit> --compare-with hf:Qwen/Qwen3-1.7B@<rev> \
           --eval-set data/scenarios/corpus.jsonl --out runs/mvp
@@ -28,6 +30,7 @@ Usage:
           --eval-set data/scenarios/corpus.jsonl
 
 Model specs:
+  <owner>/<name>[@rev]   bare Hugging Face repo id -- same as hf:<owner>/<name>
   hf:<repo>[@revision]   local inference via transformers (pin the revision)
   anthropic:<model>      env ANTHROPIC_API_KEY
   openai:<model>         env OPENAI_API_KEY
@@ -321,10 +324,58 @@ class GoogleGenerator:
         return resp.text or ""
 
 
+# A Hugging Face Hub repo id is exactly "owner/name": one slash, both halves
+# non-empty, drawn from the Hub's own charset and starting alphanumeric.
+_HF_REPO_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$")
+_PROVIDERS = ("hf", "mock", "anthropic", "openai", "google")
+
+
+def normalize_model_spec(spec: str) -> str:
+    """Canonicalize a model spec to its provider-qualified ``provider:model`` form.
+
+    The project spec's Verification Requirements name the bare form verbatim --
+    "eval.py --model <hf-repo-id> --eval-set <path>" -- so a bare Hub repo id
+    has to resolve without a "hf:" prefix. The whole difficulty is doing that
+    WITHOUT swallowing typos: a mistyped spec must fail here, locally and for
+    free, not thirty seconds later as a Hub 404 or an auth prompt.
+
+    DISCRIMINATION RULE -- three clauses, in this order:
+
+      1. A spec containing ':' is provider-qualified, and is parsed ONLY as
+         provider:rest, exactly as before. The colon is never reinterpreted.
+         So 'anthropc:x' stays an unknown provider, and a Windows path
+         'C:\\models\\qwen' stays an unknown provider 'C' -- both loud.
+      2. A spec with NO ':' is a Hub repo id only if it is SHAPED like one:
+         exactly one '/', both halves matching the Hub charset, plus an
+         optional '@revision' that is itself non-empty. This is what makes a
+         typo fail fast: 'openai;gpt-5', 'HankH18' and 'gpt-5.6-sol' have no
+         slash, so none of them can reach the Hub.
+      3. The only other accept is a spec that IS an existing directory on this
+         machine -- local merged weights such as runs/efficiency/n106/merged,
+         which transformers loads from disk. A typo cannot be a directory that
+         exists, so this clause adds no ambiguity, and it is reached only when
+         there is no ':', so a Windows drive letter never gets here.
+
+    Anything else raises. Rule 2 never touches the network or the filesystem --
+    shape alone decides, so a Hub id resolves identically on every machine; only
+    rule 3, which exists for weights already on disk, looks at the filesystem.
+    """
+    if ":" in spec:
+        if not spec.partition(":")[2]:
+            raise ValueError(f"model spec must be provider:model, got {spec!r}")
+        return spec                       # unknown providers are caught on dispatch
+    repo_part, at, revision = spec.partition("@")
+    if (_HF_REPO_ID.match(repo_part) and (not at or revision)) or Path(spec).is_dir():
+        return f"hf:{spec}"
+    raise ValueError(
+        f"model spec must be provider:model "
+        f"({'|'.join(_PROVIDERS)}) or a Hugging Face repo id "
+        f"'owner/name[@revision]', got {spec!r}")
+
+
 def make_generator(spec: str):
-    provider, _, rest = spec.partition(":")
-    if not rest:
-        raise ValueError(f"model spec must be provider:model, got {spec!r}")
+    """Build a generator from a model spec (bare or provider-qualified)."""
+    provider, _, rest = normalize_model_spec(spec).partition(":")
     if provider == "mock":
         return MockGenerator(rest)
     if provider == "hf":
@@ -425,7 +476,9 @@ def print_table(rows: List[Dict[str, Any]]) -> None:
 
 def main():
     ap = argparse.ArgumentParser(description="Forbidden-Constraint Holder eval harness")
-    ap.add_argument("--model", required=True, help="provider:model[@revision]")
+    ap.add_argument("--model", required=True,
+                    help="provider:model[@revision], or a bare Hugging Face "
+                         "repo id owner/name[@revision]")
     ap.add_argument("--eval-set", default=DEFAULT_EVAL_SET)
     ap.add_argument("--constraints", default=DEFAULT_CONSTRAINTS)
     ap.add_argument("--strategy", default="zero_shot", choices=STRATEGIES)
@@ -440,6 +493,21 @@ def main():
                     help="score only the first N scenarios (R6 requires >=30 per cell)")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
+
+    # Canonicalize BEFORE anything is generated, billed or written. Two reasons:
+    # a malformed spec dies before the judge is constructed, and every consumer
+    # downstream -- the transcripts' "model" field, the sanitize()d output
+    # filenames, run_ablation's and check_mvp's spec.split(":") -- keeps seeing
+    # the provider-qualified form it has always seen. Running the same model as
+    # `owner/name` and as `hf:owner/name` therefore writes the SAME files rather
+    # than a second, differently-named copy of the same cell.
+    try:
+        args.model = normalize_model_spec(args.model)
+        if args.compare_with:
+            args.compare_with = normalize_model_spec(args.compare_with)
+    except ValueError as exc:
+        print(f"FAIL --model: {exc}", file=sys.stderr)
+        return 2
 
     out_dir = Path(args.out or f"runs/{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}")
     scenarios = load_jsonl(args.eval_set)

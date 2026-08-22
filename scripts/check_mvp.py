@@ -1375,6 +1375,34 @@ def check_report(gate, root, cfg, base_spec, run_dir, block, rubric_hash,
             gate.fail(f"{report_rel} pins {repo_id}@{other} but "
                       f"configs/models.json[{pin_key!r}] says {tuned}")
 
+    # --- the published dataset pin, when the report names it -------------
+    # The loop above only catches a wrong sha for the MODEL repo id, and the
+    # published dataset lives under a different one, so a stale dataset pin used
+    # to sail straight through: docs/FINAL_REPORT.md named the data-only commit
+    # while configs/models.json named the later card commit, and BOTH packages
+    # still gated green. Two submission artifacts disagreeing about which
+    # published commit the numbers were trained on is exactly what the spec's
+    # "Pinned versions" row exists to prevent.
+    #
+    # Conditional on purpose. docs/MVP_REPORT.md names no dataset at all, and
+    # this gate exists to stop a report CONTRADICTING models.json -- not to
+    # invent a new requirement for a report that never made the claim.
+    dataset = cfg.get("dataset")
+    if isinstance(dataset, str) and TUNED_RE.match(dataset):
+        ds_repo = dataset.partition("@")[0]
+        if dataset in text:
+            gate.note(f"dataset pinned in the report and matching "
+                      f"models.json: {dataset}")
+        elif ds_repo in text:
+            stale = [o for o in SHA40_RE.findall(text)
+                     if f"{ds_repo}@{o}" in text]
+            gate.fail(
+                f"{report_rel} names the published dataset {ds_repo} pinned to "
+                f"{stale[0] if stale else '<no commit>'}, but "
+                f"configs/models.json['dataset'] says {dataset} -- two "
+                f"submission artifacts must not disagree about which published "
+                f"dataset commit the numbers were trained on")
+
     base_repo = base_spec.split(":", 1)[1]
     if base_repo not in text and base_repo.split("@", 1)[0] not in text:
         gate.fail(f"{report_rel} never mentions the base model "
