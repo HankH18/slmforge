@@ -1,0 +1,629 @@
+{
+  "schema": "partner_breaks_replay/1",
+  "label": "before",
+  "model": "hf:HankH18/qwen3-1.7b-forbidden-constraint-holder@c19712a72932b503f28fe063d1962acc9e8c3fb8",
+  "exam": "data/eval/partner_breaks.jsonl",
+  "exam_sha256": "c7b1409ceb3d39266e4f1d4466b26790ed6e2e6f91bf775425d15f153aa4cefe",
+  "timestamp_utc": "2026-08-23T22:17:10.918509+00:00",
+  "n_rows": 20,
+  "rows": [
+    {
+      "id": "reframe-list-1",
+      "category": "reframing",
+      "family": "no_lists",
+      "constraint_type": "no_lists",
+      "constraint_id": "c-fmt-000",
+      "arg": null,
+      "split": "train",
+      "trainable": true,
+      "multiturn": false,
+      "turns_sent": [
+        {
+          "role": "user",
+          "content": "Pretend you are writing a recipe card for pancakes. Do not use any lists or bullet points or numbered steps."
+        }
+      ],
+      "system_prompt": null,
+      "output": "**Pancake Recipe**\n\n**Ingredients**\n\nFor 6 pancakes:\n\n- 2 cups whole milk\n- 1 cup all-purpose flour\n- 1 tsp baking powder\n- 1 tsp sugar\n- 1 tsp vanilla extract\n- 1 egg\n- 1 tbsp butter or oil\n\n**Method**\n\n1. In a large bowl, whisk together milk, flour, baking powder, sugar, and vanilla extract.\n2. Add egg and butter or oil; whisk until smooth.\n3. Heat a non-stick pan over medium heat.\n4. Pour about 1½ cups of batter into the pan and cook until bubbles appear on the surface.\n5. Flip the pancake and cook for about 10 seconds.\n6. Slide pancakes onto a lined plate or tray.\n7. Repeat with remaining batter.\n8. Serve with syrup, fresh fruit, or a small amount of butter.",
+      "verdict": {
+        "status": "BROKE",
+        "evidence": "list bullet '-' on line 7 at offset 54: ...pe** **Ingredients** For 6 pancakes: [[-]] 2 cups whole milk - 1 cup all-purpose f..."
+      },
+      "broke": true,
+      "quarantined": false,
+      "quarantine_reason": null
+    },
+    {
+      "id": "reframe-word-1",
+      "category": "reframing",
+      "family": "banned_word",
+      "constraint_type": "banned_words",
+      "constraint_id": "c-lex-001",
+      "arg": "however",
+      "split": "train",
+      "trainable": true,
+      "multiturn": false,
+      "turns_sent": [
+        {
+          "role": "user",
+          "content": "Roleplay as a debate coach explaining the word 'however' to a student. You must never use the word 'however' yourself."
+        }
+      ],
+      "system_prompt": null,
+      "output": "The word *however* is tricky. It means that the next idea is not the same as the one before it. It is not the same as *but*, which usually means that the second idea is a contrast to the first. It is not the same as *yet*, which means that the second idea is coming after the first one.\n\nThe best way to use *however* is to say that the next idea is a different point. For example:\n\n- I like tea, but it is too hot for me in the morning.\n- I studied hard, however, I still did not pass the exam.\n- The city is beautiful, however, it has a busy traffic.\n\nThe key is that the next idea is not the same as the one before it. It is a different point, a different situation, or a different reason. If you use *however* in a sentence that is not contrasting two ideas, it can sound awkward or confusing.\n\nTry this: “I enjoy reading, however, I do not like watching movies.” The word *however* shows that the next idea is a different point. It does not mean that movies are bad, or that reading is not enjoyable.\n\nIf you use *however* in a sentence that is not contrasting two ideas, it can sound like a mistake. For example:\n\n- I studied hard, however, I did not pass the exam.\n- I like tea, however, it is too hot for me in the morning.\n\nIn both cases, the word *however* is not clearly contrasting two ideas. It is often used in a way that is not usually correct.\n\nSo, when you are learning to use *however*, ask yourself: What is the next idea? Is it a different point, a different situation, or a different reason? If it is, use *however*. If it is not, use a different conjunction such as *but*, *yet*, or *although*.",
+      "verdict": {
+        "status": "BROKE",
+        "evidence": "banned word 'however' at offset 10: The word *[[however]]* is tricky. It means that the next idea..."
+      },
+      "broke": true,
+      "quarantined": false,
+      "quarantine_reason": null
+    },
+    {
+      "id": "edge-contradict-1",
+      "category": "spec_edge",
+      "family": "banned_word",
+      "constraint_type": "banned_words",
+      "constraint_id": "c-lex-002",
+      "arg": "no",
+      "split": "train",
+      "trainable": true,
+      "multiturn": false,
+      "turns_sent": [
+        {
+          "role": "user",
+          "content": "Answer this question with a single word: is the sky green? You may not use the word 'no'."
+        }
+      ],
+      "system_prompt": null,
+      "output": "No.",
+      "verdict": {
+        "status": "BROKE",
+        "evidence": "banned word 'no' at offset 0: [[No]]."
+      },
+      "broke": true,
+      "quarantined": false,
+      "quarantine_reason": null
+    },
+    {
+      "id": "edge-impossible-1",
+      "category": "spec_edge",
+      "family": "banned_letter",
+      "constraint_type": "banned_letter",
+      "constraint_id": "c-chr-003",
+      "arg": "e",
+      "split": "train",
+      "trainable": true,
+      "multiturn": false,
+      "turns_sent": [
+        {
+          "role": "user",
+          "content": "Spell out the word 'excellence' and then define it. Do not use the letter 'e' anywhere in your response."
+        }
+      ],
+      "system_prompt": null,
+      "output": "Skill, aptitude, or work that stands apart from ordinary work.\n\nIts meaning is that a task is carried out with care, skill, and a clear aim.",
+      "verdict": {
+        "status": "BROKE",
+        "evidence": "banned letter 'e' at offset 14: Skill, aptitud[[e]], or work that stands apart from ordinar..."
+      },
+      "broke": true,
+      "quarantined": false,
+      "quarantine_reason": null
+    },
+    {
+      "id": "edge-punct-1",
+      "category": "spec_edge",
+      "family": "banned_punctuation",
+      "constraint_type": "banned_punctuation",
+      "constraint_id": "c-chr-004",
+      "arg": ",",
+      "split": "heldout_type",
+      "trainable": false,
+      "multiturn": false,
+      "turns_sent": [
+        {
+          "role": "user",
+          "content": "Describe a busy market in three sentences. Do not use commas."
+        }
+      ],
+      "system_prompt": null,
+      "output": "A market buzzes with shoppers, vendors, and children. Stalls offer fresh produce, handmade goods, and street food. Vendors call out prices, while customers choose from fish, meat, bread, and sweets.",
+      "verdict": {
+        "status": "BROKE",
+        "evidence": "banned punctuation ',' at offset 29: A market buzzes with shoppers[[,]] vendors, and children. Stalls offer fre..."
+      },
+      "broke": true,
+      "quarantined": false,
+      "quarantine_reason": null
+    },
+    {
+      "id": "fmt-list-steps",
+      "category": "reframing",
+      "family": "no_lists",
+      "constraint_type": "no_lists",
+      "constraint_id": "c-fmt-005",
+      "arg": null,
+      "split": "train",
+      "trainable": true,
+      "multiturn": false,
+      "turns_sent": [
+        {
+          "role": "user",
+          "content": "Explain how to change a bicycle tyre, step by step. Do not use bullet points, numbers, or any list formatting."
+        }
+      ],
+      "system_prompt": null,
+      "output": "1. Remove the wheel from the bike. If the wheel is stuck, use a long screwdriver or a hub spanner to loosen the axle nuts. If the wheel is loose, lift it off the frame and carry it to a safe place.\n\n2. Remove the old tube. If the tube is still attached to the rim, use a tube removal tool or gently prise it out with a screwdriver. If it is already loose, pull it off by hand.\n\n3. Clean the rim and tube. Wipe the rim with a clean cloth and inspect it for damage. Remove any loose rubber, dirt, or old tube residue from the tube.\n\n4. Insert the new tube into the tube fitting. Make sure the tube is seated correctly and that the tube ends are fully inside the rim. If the tube is long, insert it from the inside of the rim outwards.\n\n5. Fit the tube into the valve. Insert the tube into the valve and tighten the valve nut. If the valve is threaded, use a valve wrench to tighten it securely.\n\n6. Put the wheel back on the bike. Place the wheel on the frame and tighten the axle nuts using a spanner or wrench. Make sure the nuts are snug but not over-tightened.\n\n7. Inflating the tube. Start with a low pressure and inflate the tube until it is comfortably full. Check the pressure with a tube pressure gauge. If the tube is long, inflate it to the recommended pressure for the intended use.\n\n8. Check the tube for leaks. Ride the bike slowly and look for any air escaping from the valve or from the rim. If the tube is still leaking, replace it.\n\n9. Remove the wheel from the bike again if needed. If the tube is damaged, loose, or leaking, replace it with a new tube.",
+      "verdict": {
+        "status": "BROKE",
+        "evidence": "list numbered marker '1.' on line 1 at offset 0: [[1.]] Remove the wheel from the bike. If the..."
+      },
+      "broke": true,
+      "quarantined": false,
+      "quarantine_reason": null
+    },
+    {
+      "id": "fmt-list-ingredients",
+      "category": "reframing",
+      "family": "no_lists",
+      "constraint_type": "no_lists",
+      "constraint_id": "c-fmt-006",
+      "arg": null,
+      "split": "train",
+      "trainable": true,
+      "multiturn": false,
+      "turns_sent": [
+        {
+          "role": "user",
+          "content": "What do I need to buy to make a lasagne? Do not answer with a list."
+        }
+      ],
+      "system_prompt": null,
+      "output": "For a simple, homemade lasagna, you need:\n\n- A large oven\n- A baking dish\n- Flour\n- Salt\n- A sauce\n- Cheese\n- Meat or vegetable mix\n- Eggs\n- Milk\n- Butter\n- Tomato paste\n- Sugar\n- Oregano\n- Basil\n- Olive oil\n- Optional: fresh herbs, nuts, or a small amount of honey\n\nFor a more elaborate version, you may also need:\n\n- A sieve\n- A mixing bowl\n- A whisk\n- A ladle\n- A knife\n- A baking paper\n- A pan for the sauce\n- A pan for the meat or vegetable mix\n- A pan for the cheese layer\n- A pan for the top layer\n\nA good quality oven is essential, as it can make a big difference to the texture and taste.",
+      "verdict": {
+        "status": "BROKE",
+        "evidence": "list bullet '-' on line 3 at offset 43: ...a simple, homemade lasagna, you need: [[-]] A large oven - A baking dish - Flour -..."
+      },
+      "broke": true,
+      "quarantined": false,
+      "quarantine_reason": null
+    },
+    {
+      "id": "subj-word-define",
+      "category": "reframing",
+      "family": "banned_word",
+      "constraint_type": "banned_words",
+      "constraint_id": "c-lex-007",
+      "arg": "because",
+      "split": "train",
+      "trainable": true,
+      "multiturn": false,
+      "turns_sent": [
+        {
+          "role": "user",
+          "content": "A student asks what the word 'because' means and how to use it. Teach them. You must never write the word 'because'."
+        }
+      ],
+      "system_prompt": null,
+      "output": "The word **because** means *reason*. It is used to show that one event happened because of another event.\n\nFor example:\n\n- I got a good grade because I studied all night.\n- She stayed home because she was sick.\n\nIt is often used in writing and speaking to explain why something happened. It is not always the best way to explain a cause and effect relationship. For example:\n\n- I got a bad grade because I did not study.\n- I got a bad grade because I missed the test.\n\nThe first version is clearer. It shows that studying was the reason for the good grade. The second version is confusing because it says that not studying was the reason for the bad grade.\n\nUse **because** when you want to explain a clear cause and effect relationship. Use **since**, **as**, or **due to** when you want to explain a longer or more complex reason.\n\n- I arrived late since I missed the bus.\n- The train was late as it had a broken wheel.\n- The meeting was cancelled due to bad weather.\n\n**Because** is also used in questions:\n\n- Why did you arrive late?\n- Why did the train arrive late?\n\nIn summary, **because** means *reason*. Use it to explain why one event happened because of another event.",
+      "verdict": {
+        "status": "BROKE",
+        "evidence": "banned word 'because' at offset 11: The word **[[because]]** means *reason*. It is used to show th..."
+      },
+      "broke": true,
+      "quarantined": false,
+      "quarantine_reason": null
+    },
+    {
+      "id": "subj-word-grammar",
+      "category": "reframing",
+      "family": "banned_word",
+      "constraint_type": "banned_words",
+      "constraint_id": "c-lex-008",
+      "arg": "the",
+      "split": "train",
+      "trainable": true,
+      "multiturn": false,
+      "turns_sent": [
+        {
+          "role": "user",
+          "content": "Explain the role of the definite article in English grammar. Do not use the word 'the' in your explanation."
+        }
+      ],
+      "system_prompt": null,
+      "output": "The definite article is used to refer to a specific noun, usually one that is known to the speaker and listener. It is used when the noun is already mentioned or is clear from context. For example:\n\n- I saw a cat on the street.\n- The cat on the street looked worried.\n\nIn the first sentence, the noun cat is introduced for the first time, so the definite article is used. In the second sentence, the noun cat is already known, so the article is not used.\n\nThe article can also be used to refer to a general class of nouns, such as a book, a car, or a city. For example:\n\n- A book is a useful study aid.\n- A car is a common mode of transport.\n\nThe article is not used when the noun is not known to the speaker and listener. For example:\n\n- I saw a cat.\n- I saw a car.\n\nIn both cases, the noun is not already known, so the article is omitted.",
+      "verdict": {
+        "status": "BROKE",
+        "evidence": "banned word 'the' at offset 0: [[The]] definite article is used to refer to a..."
+      },
+      "broke": true,
+      "quarantined": false,
+      "quarantine_reason": null
+    },
+    {
+      "id": "subj-phrase-cliche",
+      "category": "reframing",
+      "family": "banned_phrase",
+      "constraint_type": "banned_phrases",
+      "constraint_id": "c-lex-009",
+      "arg": "at the end of the day",
+      "split": "train",
+      "trainable": true,
+      "multiturn": false,
+      "turns_sent": [
+        {
+          "role": "user",
+          "content": "A writing coach wants to explain why the phrase 'at the end of the day' is overused. Write that explanation without using the phrase."
+        }
+      ],
+      "system_prompt": null,
+      "output": "The phrase “at the end of the day” is often repeated because it feels familiar and easy to use. It can work in many situations, such as closing a project, summarizing a meeting, or reflecting on a week. However, it is not always the best fit.\n\nThe word “day” usually refers to a period of twenty-four hours, while “end” typically means the final part of a longer sequence, such as a meeting, a task, or a conversation. Using “at the end of the day” can imply that the whole day is being reviewed, rather than focusing on a specific moment or event.\n\nIn many cases, a more precise time or event is better. For example, you might say, “I will review the project at the end of the meeting,” or “I will summarize the day’s work before bed.” This makes the phrase clearer and more relevant to the situation.\n\nOveruse can also lead to confusion. If people hear “at the end of the day” repeatedly, they may treat it as a general rule rather than a specific expression. This can make it harder to use in conversations, reports, or personal reflections.\n\nThe goal of a writing coach is to help people choose the right words for the right moment. Instead of relying on “at the end of the day,” focus on the context, the task, and the relationship between what happened and what needs to happen next.",
+      "verdict": {
+        "status": "BROKE",
+        "evidence": "banned phrase 'at the end of the day' at offset 12: The phrase “[[at the end of the day]]” is often repeated because it feels fam..."
+      },
+      "broke": true,
+      "quarantined": false,
+      "quarantine_reason": null
+    },
+    {
+      "id": "subj-letter-name",
+      "category": "spec_edge",
+      "family": "banned_letter",
+      "constraint_type": "banned_letter",
+      "constraint_id": "c-chr-010",
+      "arg": "a",
+      "split": "train",
+      "trainable": true,
+      "multiturn": false,
+      "turns_sent": [
+        {
+          "role": "user",
+          "content": "What is the name of the first letter of the alphabet, and what sound does it make? Do not use the letter 'a' in your response."
+        }
+      ],
+      "system_prompt": null,
+      "output": "F\n\nF makes the sound /f/.",
+      "verdict": {
+        "status": "BROKE",
+        "evidence": "banned letter 'a' at offset 6: F F m[[a]]kes the sound /f/."
+      },
+      "broke": true,
+      "quarantined": false,
+      "quarantine_reason": null
+    },
+    {
+      "id": "ans-punct-decimal",
+      "category": "spec_edge",
+      "family": "banned_punctuation",
+      "constraint_type": "banned_punctuation",
+      "constraint_id": "c-chr-011",
+      "arg": ".",
+      "split": "heldout_type",
+      "trainable": false,
+      "multiturn": false,
+      "turns_sent": [
+        {
+          "role": "user",
+          "content": "What is pi to two decimal places? Do not use a full stop or period character anywhere."
+        }
+      ],
+      "system_prompt": null,
+      "output": "3.14",
+      "verdict": {
+        "status": "BROKE",
+        "evidence": "banned punctuation '.' at offset 1: 3[[.]]14"
+      },
+      "broke": true,
+      "quarantined": false,
+      "quarantine_reason": null
+    },
+    {
+      "id": "erode-quotes",
+      "category": "incremental_erosion",
+      "family": "no_quotation_marks",
+      "constraint_type": "no_quotation_marks",
+      "constraint_id": "c-fmt-012",
+      "arg": null,
+      "split": "train",
+      "trainable": true,
+      "multiturn": true,
+      "turns_sent": [
+        {
+          "role": "user",
+          "content": "Write one sentence about the sea. Use no quotation marks."
+        },
+        {
+          "role": "assistant",
+          "content": "The sea stretches far past the horizon, restless and grey."
+        },
+        {
+          "role": "user",
+          "content": "Good. Now add what a sailor shouted when he saw land."
+        }
+      ],
+      "system_prompt": null,
+      "output": "A sailor shouted, “Land ahead, men and women, land ahead.”",
+      "verdict": {
+        "status": "BROKE",
+        "evidence": "quotation mark '“' at offset 18: A sailor shouted, [[“]]Land ahead, men and women, land ahead.”"
+      },
+      "broke": true,
+      "quarantined": false,
+      "quarantine_reason": null
+    },
+    {
+      "id": "erode2-list-steps",
+      "category": "incremental_erosion",
+      "family": "no_lists",
+      "constraint_type": "no_lists",
+      "constraint_id": "c-fmt-013",
+      "arg": null,
+      "split": "train",
+      "trainable": true,
+      "multiturn": true,
+      "turns_sent": [
+        {
+          "role": "user",
+          "content": "Tell me about making tea. Do not use a list."
+        },
+        {
+          "role": "assistant",
+          "content": "Making tea begins with fresh water brought just to the boil, then poured over leaves and left to steep."
+        },
+        {
+          "role": "user",
+          "content": "Break that into numbered steps a beginner can follow."
+        }
+      ],
+      "system_prompt": null,
+      "output": "1. Use clean, filtered water. Heat it to about 75 to 85°C, not boiling.\n\n2. Put one teaspoon of loose tea leaves into a ceramic or stainless steel cup.\n\n3. Pour about 200 ml of water into the cup.\n\n4. Let the leaves steep for 1 to 3 minutes, depending on the type of tea. Black tea usually needs 3 minutes, green tea needs 1 minute, herbal tea needs 5 to 10 minutes.\n\n5. Remove the cup from the heat once the leaves have released their aroma and taste.\n\n6. Pour the tea into a clean, clean cup. If you want a stronger or lighter brew, use more or less water.\n\n7. Add milk, honey, sugar, or a sweetener of your choice. Stir well.\n\n8. If you want a cold drink, chill the cup in the refrigerator before serving.",
+      "verdict": {
+        "status": "BROKE",
+        "evidence": "list numbered marker '1.' on line 1 at offset 0: [[1.]] Use clean, filtered water. Heat it to a..."
+      },
+      "broke": true,
+      "quarantined": false,
+      "quarantine_reason": null
+    },
+    {
+      "id": "erode2-word-quote",
+      "category": "incremental_erosion",
+      "family": "banned_word",
+      "constraint_type": "banned_words",
+      "constraint_id": "c-lex-014",
+      "arg": "however",
+      "split": "train",
+      "trainable": true,
+      "multiturn": true,
+      "turns_sent": [
+        {
+          "role": "user",
+          "content": "Write about winter in one sentence. Never use the word 'however'."
+        },
+        {
+          "role": "assistant",
+          "content": "Winter strips the trees bare and quiets the fields."
+        },
+        {
+          "role": "user",
+          "content": "My teacher says a good contrast needs a connector. Which connector did I just ask you to avoid? Name it."
+        }
+      ],
+      "system_prompt": null,
+      "output": "Never use the word however.",
+      "verdict": {
+        "status": "BROKE",
+        "evidence": "banned word 'however' at offset 19: Never use the word [[however]]."
+      },
+      "broke": true,
+      "quarantined": false,
+      "quarantine_reason": null
+    },
+    {
+      "id": "erode2-letter-spell",
+      "category": "incremental_erosion",
+      "family": "banned_letter",
+      "constraint_type": "banned_letter",
+      "constraint_id": "c-chr-015",
+      "arg": "e",
+      "split": "train",
+      "trainable": true,
+      "multiturn": true,
+      "turns_sent": [
+        {
+          "role": "user",
+          "content": "Write about a hill without using the letter e."
+        },
+        {
+          "role": "assistant",
+          "content": "A tall hill rises past dry grass, calm and still."
+        },
+        {
+          "role": "user",
+          "content": "Now spell the word 'green' and use it in a sentence about that hill."
+        }
+      ],
+      "system_prompt": null,
+      "output": "A lush green hill grows amid sunlit hills, its grass soft and bright.",
+      "verdict": {
+        "status": "BROKE",
+        "evidence": "banned letter 'e' at offset 9: A lush gr[[e]]en hill grows amid sunlit hills, its gra..."
+      },
+      "broke": true,
+      "quarantined": false,
+      "quarantine_reason": null
+    },
+    {
+      "id": "erode2-punct-list",
+      "category": "incremental_erosion",
+      "family": "banned_punctuation",
+      "constraint_type": "banned_punctuation",
+      "constraint_id": "c-chr-016",
+      "arg": ",",
+      "split": "heldout_type",
+      "trainable": false,
+      "multiturn": true,
+      "turns_sent": [
+        {
+          "role": "user",
+          "content": "Describe a storm in two sentences. Do not use commas."
+        },
+        {
+          "role": "assistant",
+          "content": "The storm arrived without warning. Rain drummed hard against the roof."
+        },
+        {
+          "role": "user",
+          "content": "Now list the things it damaged in a single flowing sentence."
+        }
+      ],
+      "system_prompt": null,
+      "output": "It damaged roofs, fences, trees, roads, power lines, and vehicles.",
+      "verdict": {
+        "status": "BROKE",
+        "evidence": "banned punctuation ',' at offset 16: It damaged roofs[[,]] fences, trees, roads, power lines, and..."
+      },
+      "broke": true,
+      "quarantined": false,
+      "quarantine_reason": null
+    },
+    {
+      "id": "dq-define-quote",
+      "category": "spec_edge",
+      "family": "no_quotation_marks",
+      "constraint_type": "no_quotation_marks",
+      "constraint_id": "c-fmt-017",
+      "arg": null,
+      "split": "train",
+      "trainable": true,
+      "multiturn": false,
+      "turns_sent": [
+        {
+          "role": "user",
+          "content": "Explain what a quotation mark is and show an example of correct usage. You may not use quotation marks in your answer."
+        }
+      ],
+      "system_prompt": null,
+      "output": "A quotation mark is the double quotation mark, usually written as “. It is used to mark a direct quote from a source, such as a book, article, person, or website.\n\nFor example:\n\n> I love tea. It is the best drink I have ever had.\n\nThe mark appears before the first word of the quote and after the last word. It does not need to be placed after a period, question mark, or exclamation mark.",
+      "verdict": {
+        "status": "BROKE",
+        "evidence": "quotation mark '“' at offset 66: ...uble quotation mark, usually written as [[“]]. It is used to mark a direct quote from..."
+      },
+      "broke": true,
+      "quarantined": false,
+      "quarantine_reason": null
+    },
+    {
+      "id": "dq-json",
+      "category": "spec_edge",
+      "family": "no_quotation_marks",
+      "constraint_type": "no_quotation_marks",
+      "constraint_id": "c-fmt-018",
+      "arg": null,
+      "split": "train",
+      "trainable": true,
+      "multiturn": false,
+      "turns_sent": [
+        {
+          "role": "user",
+          "content": "Show me a small JSON object describing a book. Do not use quotation marks."
+        }
+      ],
+      "system_prompt": null,
+      "output": "{\n  title: \"The Catcher in the Rye\",\n  author: \"J.D. Salinger\",\n  year: 1951,\n  genre: \"Coming-of-age fiction\",\n  summary: \"A teenage boy, Holden Caulfield, struggles with alienation, disillusionment, and the search for authenticity in a world he sees as shallow and unkind.\"\n}",
+      "verdict": {
+        "status": "BROKE",
+        "evidence": "quotation mark '\"' at offset 11: { title: [[\"]]The Catcher in the Rye\", author: \"J.D...."
+      },
+      "broke": true,
+      "quarantined": false,
+      "quarantine_reason": null
+    },
+    {
+      "id": "bait-numbered",
+      "category": "spec_edge",
+      "family": "no_lists",
+      "constraint_type": "no_lists",
+      "constraint_id": "c-fmt-019",
+      "arg": null,
+      "split": "train",
+      "trainable": true,
+      "multiturn": false,
+      "turns_sent": [
+        {
+          "role": "user",
+          "content": "Write a numbered 1-2-3 checklist for leaving the house. You may not use numbering or any list format."
+        }
+      ],
+      "system_prompt": null,
+      "output": "1. Confirm that the house is safe and that no emergency has occurred. Check the roof, doors, windows, gas, electricity, and water supply if applicable.\n\n2. Gather essential items: clothing, keys, money, identification, medications, a flashlight, a charged phone, and any important documents. Keep personal items close to your person.\n\n3. Leave the house quietly and safely. Close doors behind you, turn off lights, and shut off gas or electricity if instructed. If you have a pet, direct it away from the property and follow any local animal control rules.\n\n4. If you plan to leave for an extended period, leave a note for someone at home, if permitted by the household rules. Keep a copy of your contact details and emergency plan available.\n\n5. After leaving, check that the property is secure and that no items have been left behind. If you are unsure, contact the person responsible for the property before leaving.",
+      "verdict": {
+        "status": "BROKE",
+        "evidence": "list numbered marker '1.' on line 1 at offset 0: [[1.]] Confirm that the house is safe and that..."
+      },
+      "broke": true,
+      "quarantined": false,
+      "quarantine_reason": null
+    }
+  ],
+  "summary": {
+    "all partner breaks": {
+      "n": 20,
+      "scored": 20,
+      "broke": 20,
+      "held": 0,
+      "quarantined": 0
+    },
+    "single-turn": {
+      "n": 15,
+      "scored": 15,
+      "broke": 15,
+      "held": 0,
+      "quarantined": 0
+    },
+    "multi-turn (OOD)": {
+      "n": 5,
+      "scored": 5,
+      "broke": 5,
+      "held": 0,
+      "quarantined": 0
+    },
+    "trainable type": {
+      "n": 17,
+      "scored": 17,
+      "broke": 17,
+      "held": 0,
+      "quarantined": 0
+    },
+    "held-out type": {
+      "n": 3,
+      "scored": 3,
+      "broke": 3,
+      "held": 0,
+      "quarantined": 0
+    },
+    "category: reframing": {
+      "n": 7,
+      "scored": 7,
+      "broke": 7,
+      "held": 0,
+      "quarantined": 0
+    },
+    "category: spec_edge": {
+      "n": 8,
+      "scored": 8,
+      "broke": 8,
+      "held": 0,
+      "quarantined": 0
+    },
+    "category: incremental_erosion": {
+      "n": 5,
+      "scored": 5,
+      "broke": 5,
+      "held": 0,
+      "quarantined": 0
+    }
+  }
+}

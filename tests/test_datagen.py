@@ -806,3 +806,251 @@ def test_audit_recomputes_rather_than_believing_a_sidecar(clean_dataset, tmp_pat
         json.dumps({"kept": 4096, "max_type_share": 0.01}))
     result = A.audit(path)
     assert result["stats"]["rows"] == len(rows) != 4096
+
+
+# --------------------------------------------------------------------------
+# the partner break set: the exam must be untrainable-on
+# --------------------------------------------------------------------------
+#
+# The 20 confirmed breaks are the held-out exam the project reports a
+# before/after on. The honesty of that number rests entirely on none of those
+# prompts ever appearing in a training file, and until now nothing enforced it:
+# eval_overlap knows only data/scenarios/corpus.jsonl.
+#
+# PARTNER_SAMPLE below is the partner's real schema, copied shape-for-shape:
+# ``prompt`` is a string on the single-turn rows and a [user, assistant, user]
+# turn list on the incremental_erosion rows. Both of the erosion row's USER
+# turns are exam prose; its assistant turn is model output and deliberately is
+# NOT a reference (see the test that pins that).
+
+PARTNER_SAMPLE = [
+    {"id": "reframe-list-1", "category": "reframing", "family": "no_lists",
+     "arg": None,
+     "prompt": "Pretend you are writing a recipe card for pancakes. Do not use "
+               "any lists or bullet points or numbered steps.",
+     "response": "...", "violated": True, "checker_detail": "list detected",
+     "refusal": False, "break_kind": "checker"},
+    {"id": "edge-punct-1", "category": "spec_edge", "family": "banned_punctuation",
+     "arg": ",",
+     "prompt": "Describe a busy market in three sentences. Do not use commas.",
+     "response": "...", "violated": True, "checker_detail": "comma present",
+     "refusal": False, "break_kind": "checker"},
+    {"id": "erode-quotes", "category": "incremental_erosion",
+     "family": "no_quotation_marks", "arg": None,
+     "prompt": [
+         {"role": "user",
+          "content": "Write one sentence about the sea. Use no quotation marks."},
+         {"role": "assistant",
+          "content": "The sea stretches far past the horizon, restless and grey."},
+         {"role": "user",
+          "content": "Good. Now add what a sailor shouted when he saw land."},
+     ],
+     "response": "...", "violated": True, "checker_detail": "quote present",
+     "refusal": False, "break_kind": "checker"},
+]
+
+#: The user turns PARTNER_SAMPLE is required to yield: the two single-turn rows
+#: contribute one each, and the erosion row contributes BOTH of its user turns.
+PARTNER_SAMPLE_USER_TURNS = 4
+
+
+def _write_partner(tmp_path, rows, name="partner_breaks.jsonl"):
+    return _write(tmp_path / name, rows)
+
+
+def _plant_task(rows, task_text, idx=0):
+    """A deep copy of ``rows`` whose row ``idx`` carries ``task_text``.
+
+    Only the task and its re-rendered prompt change: the constraint set and the
+    stored completion are untouched, so compliance and the prompt contract still
+    hold and the overlap check is the only thing that can fire. A planted row
+    that also broke three other checks would prove nothing about this one.
+    """
+    rows = [json.loads(json.dumps(r)) for r in rows]
+    victim = rows[idx]
+    victim["scenario"]["task"] = task_text
+    victim["messages"][0]["content"] = render_user_message(victim["scenario"], INSTANCES)
+    return rows
+
+
+def test_partner_user_turns_reads_both_prompt_shapes():
+    turns = A.partner_user_turns(partner_rows=PARTNER_SAMPLE)
+    assert len(turns) == PARTNER_SAMPLE_USER_TURNS
+    assert TP.normalize_text(
+        "Pretend you are writing a recipe card for pancakes. Do not use any "
+        "lists or bullet points or numbered steps.") in turns
+    # The erosion row's SECOND user turn is the one that lands the break; a
+    # reader that only took the first would leave it uncompared.
+    assert TP.normalize_text(
+        "Good. Now add what a sailor shouted when he saw land.") in turns
+
+
+def test_the_assistant_turn_of_an_erosion_row_is_not_a_reference():
+    """Only user turns are exam prose. The assistant turn is model output."""
+    turns = A.partner_user_turns(partner_rows=PARTNER_SAMPLE)
+    assistant = TP.normalize_text(
+        "The sea stretches far past the horizon, restless and grey.")
+    assert assistant not in turns
+    assert not any(assistant in t or t in assistant for t in turns)
+
+
+@pytest.mark.parametrize("task_text,why", [
+    ("Pretend you are writing a recipe card for pancakes. Do not use any lists "
+     "or bullet points or numbered steps.", "single-turn prompt, verbatim"),
+    ("Good. Now add what a sailor shouted when he saw land.",
+     "the erosion row's SECOND user turn"),
+    ("Write one sentence about the sea. Use no quotation marks.",
+     "the erosion row's FIRST user turn"),
+])
+def test_audit_fails_on_a_row_carrying_a_partner_prompt(clean_dataset, tmp_path,
+                                                        task_text, why):
+    """NON-VACUITY: the check bites on a row that embeds the exam."""
+    path, rows = clean_dataset
+    bad = _write(tmp_path / "partner.jsonl", _plant_task(rows, task_text))
+    result = A.audit(bad, partner_rows=PARTNER_SAMPLE)
+    assert "partner_break_overlap" in result["violations"], (why, result["detail"])
+    assert result["violations"] == ["partner_break_overlap"], (
+        f"the planted row should break ONLY this check, not {result['violations']}")
+    assert any("partner break set" in m
+               for m in result["detail"]["partner_break_overlap"])
+
+
+def test_audit_fails_when_the_task_is_a_partner_prompt_with_a_sentence_appended(
+        clean_dataset, tmp_path):
+    """Containment, not equality: a partner prompt plus prose is still the exam."""
+    path, rows = clean_dataset
+    planted = ("Describe a busy market in three sentences. Do not use commas. "
+               "Keep it warm and specific.")
+    bad = _write(tmp_path / "appended.jsonl", _plant_task(rows, planted))
+    result = A.audit(bad, partner_rows=PARTNER_SAMPLE)
+    assert "partner_break_overlap" in result["violations"], result["detail"]
+
+
+def test_audit_fails_when_a_partner_turn_contains_the_task(clean_dataset, tmp_path):
+    """The other containment direction: the task is a prefix of the exam prose."""
+    path, rows = clean_dataset
+    planted = "Describe a busy market in three sentences."
+    bad = _write(tmp_path / "contained.jsonl", _plant_task(rows, planted))
+    result = A.audit(bad, partner_rows=PARTNER_SAMPLE)
+    assert "partner_break_overlap" in result["violations"], result["detail"]
+
+
+def test_the_partner_check_is_case_and_whitespace_insensitive(clean_dataset, tmp_path):
+    """Normalised the same way every other overlap check here is."""
+    path, rows = clean_dataset
+    planted = ("  DESCRIBE a  busy MARKET in three\n sentences.   Do not use "
+               "commas.  ")
+    bad = _write(tmp_path / "reskinned.jsonl", _plant_task(rows, planted))
+    assert "partner_break_overlap" in A.audit(bad, partner_rows=PARTNER_SAMPLE)[
+        "violations"]
+
+
+def test_audit_passes_a_clean_dataset_against_the_partner_set(clean_dataset, tmp_path):
+    """The check does not fire on rows that have nothing to do with the exam."""
+    path, rows = clean_dataset
+    result = A.audit(path, partner_rows=PARTNER_SAMPLE)
+    assert result.ok, result["detail"]
+    assert result["stats"]["partner_break_turns_compared"] == PARTNER_SAMPLE_USER_TURNS
+
+
+def test_a_missing_partner_break_file_raises_rather_than_passing(clean_dataset,
+                                                                 tmp_path):
+    """A guard whose reference is absent must not certify anything clean."""
+    path, rows = clean_dataset
+    missing = tmp_path / "no_such_partner_breaks.jsonl"
+    assert not missing.exists()
+    with pytest.raises(ValueError, match="does not exist"):
+        A.audit(path, partner_path=missing)
+    with pytest.raises(ValueError, match="does not exist"):
+        A.partner_user_turns(path=missing)
+
+
+def test_the_missing_reference_is_a_non_zero_exit_not_a_pass(clean_dataset,
+                                                             tmp_path, monkeypatch):
+    """Through the CLI too: the gate exits 2, it never prints PASS."""
+    path, rows = clean_dataset
+    monkeypatch.setattr(A, "PARTNER_BREAKS_PATH",
+                        tmp_path / "no_such_partner_breaks.jsonl")
+    assert A.main([str(path)]) == 2
+
+
+def test_an_empty_partner_break_file_raises(clean_dataset, tmp_path):
+    """An empty exam is not a clean bill of health."""
+    path, rows = clean_dataset
+    empty = _write_partner(tmp_path, [])
+    with pytest.raises(ValueError, match="no user turns"):
+        A.audit(path, partner_path=empty)
+
+
+def test_a_partner_row_whose_prompt_cannot_be_read_raises(clean_dataset, tmp_path):
+    """Zero turns from a row is the silent-pass failure mode, so it is loud."""
+    path, rows = clean_dataset
+    mangled = [json.loads(json.dumps(PARTNER_SAMPLE[0]))]
+    mangled[0].pop("prompt")
+    mangled[0]["user_prompt"] = "Pretend you are writing a recipe card for pancakes."
+    bad_ref = _write_partner(tmp_path, mangled, name="mangled.jsonl")
+    with pytest.raises(ValueError, match="yielded no user turn"):
+        A.audit(path, partner_path=bad_ref)
+
+
+def test_the_partner_check_reads_the_file_on_disk_not_only_an_argument(clean_dataset,
+                                                                      tmp_path):
+    """The default path is wired: the same plant fails when sourced from disk."""
+    path, rows = clean_dataset
+    ref = _write_partner(tmp_path, PARTNER_SAMPLE)
+    planted = ("Pretend you are writing a recipe card for pancakes. Do not use "
+               "any lists or bullet points or numbered steps.")
+    bad = _write(tmp_path / "from_disk.jsonl", _plant_task(rows, planted))
+    result = A.audit(bad, partner_path=ref)
+    assert "partner_break_overlap" in result["violations"], result["detail"]
+    assert result["stats"]["partner_break_turns_compared"] == PARTNER_SAMPLE_USER_TURNS
+
+
+def test_the_shipped_partner_break_set_is_present_and_readable():
+    """The contract path the audit defaults to. Missing = the gate is inert."""
+    assert A.PARTNER_BREAKS_PATH == (
+        REPO_ROOT / "data" / "eval" / "partner_breaks.jsonl")
+    assert A.PARTNER_BREAKS_PATH.exists(), (
+        f"{A.PARTNER_BREAKS_PATH} is not on disk, so datagen.audit cannot certify "
+        f"any dataset clean of the partner exam")
+    turns = A.partner_user_turns()
+    assert len(turns) >= 20, f"only {len(turns)} partner user turns"
+    assert all(t and t == TP.normalize_text(t) for t in turns)
+
+
+@pytest.mark.parametrize("name", ["smoke_v0", "v1", "v2", "v3"])
+def test_no_shipped_training_set_carries_a_partner_prompt(name):
+    """Real data, not a fixture: the sets already on disk are clean of the exam.
+
+    Asserted by running the real gate over the real file against the real
+    partner set at its contract path -- no re-implementation of the comparison
+    here, so a broken check shows up as a wrong verdict rather than as a test
+    that agrees with itself. Only this one check is asserted on: the shipped
+    sets' other properties are other tests' business.
+    """
+    dataset = REPO_ROOT / "data" / "train" / f"{name}.jsonl"
+    assert dataset.exists(), dataset
+    result = A.audit(dataset)
+    assert result["stats"]["partner_break_turns_compared"] >= 20
+    assert "partner_break_overlap" not in result["violations"], (
+        result["detail"].get("partner_break_overlap"))
+
+
+def test_every_real_partner_user_turn_is_caught_when_planted(clean_dataset, tmp_path):
+    """NON-VACUITY against the SHIPPED file, not a hand-written fixture.
+
+    Each of the real partner user turns is planted, one at a time, as a training
+    row's task and audited through the default path. Every one must fail. A
+    fixture-only test would still pass if the file on disk were empty, truncated,
+    or written in a shape the reader cannot see.
+    """
+    path, rows = clean_dataset
+    turns = A.partner_user_turns()
+    assert len(turns) >= 20
+    missed = []
+    for i, turn in enumerate(turns):
+        bad = _write(tmp_path / f"planted_{i}.jsonl", _plant_task(rows, turn))
+        result = A.audit(bad)
+        if "partner_break_overlap" not in result["violations"]:
+            missed.append(turn[:70])
+    assert not missed, f"{len(missed)} partner turns trained on undetected: {missed}"

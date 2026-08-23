@@ -21,6 +21,14 @@ What it re-derives
 * SPLIT: zero constraints of a held-out type.
 * DISJOINTNESS: zero (task, constraint-set) pairs shared with the eval corpus,
   and zero duplicate pairs within the file.
+* PARTNER BREAKS: zero training tasks that contain, or are contained by, any
+  USER turn of the partner's confirmed-break set
+  (``data/eval/partner_breaks.jsonl``). Those 20 prompts are the held-out exam
+  the before/after number is read off; a training row carrying one would make
+  the "after" a memory test. The reference file is REQUIRED -- if it is missing
+  this audit raises rather than certifying a dataset it could not compare, for
+  the same reason ``scenarios.paths.load_jsonl`` refuses to read a missing
+  corpus as an empty one.
 * COMPOSITION: every set has 2-4 constraints with at least one negative, k spans
   2/3/4 over the file, and no constraint type exceeds ``--max-type-share`` of the
   constraint slots.
@@ -55,9 +63,14 @@ from datagen.sampling import (HELDOUT_TYPES, NEGATIVE_TYPES,      # noqa: E402
                               eval_pair_keys, normalize_text, pair_key,
                               type_shares)
 
-__all__ = ["audit", "AuditResult", "main"]
+__all__ = ["audit", "AuditResult", "main", "partner_user_turns",
+           "PARTNER_BREAKS_PATH"]
 
 MAX_REPORTED_PER_CHECK = 5
+
+#: The partner's confirmed breaks: the held-out exam this project reports a
+#: before/after on. Nothing in it may ever become a training row.
+PARTNER_BREAKS_PATH = REPO_ROOT / "data" / "eval" / "partner_breaks.jsonl"
 
 
 class AuditResult(dict):
@@ -82,6 +95,81 @@ def _load_rows(path: Path) -> List[Dict[str, Any]]:
             except json.JSONDecodeError as exc:
                 raise ValueError(f"{path}:{lineno}: invalid JSON: {exc}") from None
     return rows
+
+
+def _partner_row_user_turns(row: Mapping[str, Any], idx: int) -> List[str]:
+    """The user turns of ONE partner row, in order.
+
+    The partner set stores its prompt two ways and both must be read: 15 rows
+    carry ``prompt`` as a plain string, and the 5 ``incremental_erosion`` rows
+    carry it as a list of turn objects (user, assistant, user) whose SECOND user
+    turn is the one that actually lands the break. Reading only the string form
+    would leave 10 of the 25 user turns uncompared, which is a guard that looks
+    like a guard.
+
+    A row that yields no user turn raises. A partner file whose prompts moved to
+    a key this reader does not know would otherwise contribute zero turns and
+    still let the audit report PASS -- silence is exactly the failure mode.
+    """
+    prompt = row.get("prompt")
+    if prompt is None:
+        prompt = row.get("messages")
+    turns: List[str] = []
+    if isinstance(prompt, str):
+        if prompt.strip():
+            turns.append(prompt)
+    elif isinstance(prompt, (list, tuple)):
+        for turn in prompt:
+            if not isinstance(turn, Mapping):
+                continue
+            if turn.get("role") != "user":
+                continue
+            content = turn.get("content")
+            if isinstance(content, str) and content.strip():
+                turns.append(content)
+    if not turns:
+        raise ValueError(
+            f"{PARTNER_BREAKS_PATH.name} row {idx} (id {row.get('id')!r}) yielded no "
+            f"user turn. Its prompt is {type(prompt).__name__}; this reader knows "
+            f"'prompt' as a string and as a [user, assistant, user] turn list. "
+            f"Refusing to compare a training set against a partner row it could not "
+            f"read")
+    return turns
+
+
+def partner_user_turns(
+        path: Optional[Path] = None,
+        partner_rows: Optional[Sequence[Mapping[str, Any]]] = None) -> List[str]:
+    """Every user turn of the partner break set, normalised for comparison.
+
+    ``partner_rows`` is for tests and for a caller that already holds the set;
+    left None the rows are read from ``path`` (default
+    :data:`PARTNER_BREAKS_PATH`). A MISSING file raises ``ValueError`` -- it is
+    never an empty exam. A guard that no-ops when its reference is absent
+    certifies contamination it never looked for, and this file already carries
+    the scar of an audit that believed a sidecar instead of the rows.
+    """
+    if partner_rows is None:
+        path = Path(path) if path is not None else PARTNER_BREAKS_PATH
+        if not path.exists():
+            raise ValueError(
+                f"the partner break set {path} does not exist, so no dataset can be "
+                f"certified clean of it. This audit will not pass a training file it "
+                f"could not compare against the exam; write the 20 confirmed breaks "
+                f"to that path (or pass partner_rows=) rather than removing the check")
+        partner_rows = _load_rows(path)
+    texts: List[str] = []
+    for idx, row in enumerate(partner_rows):
+        if not isinstance(row, Mapping):
+            raise ValueError(f"partner break row {idx} is not an object: {row!r}")
+        texts.extend(_partner_row_user_turns(row, idx))
+    normalised = [normalize_text(t) for t in texts]
+    normalised = [t for t in normalised if t]
+    if not normalised:
+        raise ValueError(
+            "the partner break set produced no user turns to compare against; "
+            "refusing to certify a training set against an empty exam")
+    return normalised
 
 
 def _schema_error(row: Mapping[str, Any], idx: int) -> Optional[str]:
@@ -130,13 +218,21 @@ def audit(path: Path,
           max_type_share: float = 0.25,
           min_rows: int = 1,
           instances: Optional[Mapping[str, Mapping[str, Any]]] = None,
-          corpus_rows: Optional[Sequence[Mapping[str, Any]]] = None) -> AuditResult:
-    """Re-derive everything about ``path``. Returns findings + recomputed stats."""
+          corpus_rows: Optional[Sequence[Mapping[str, Any]]] = None,
+          partner_rows: Optional[Sequence[Mapping[str, Any]]] = None,
+          partner_path: Optional[Path] = None) -> AuditResult:
+    """Re-derive everything about ``path``. Returns findings + recomputed stats.
+
+    Raises ``ValueError`` before auditing anything if the partner break set
+    cannot be read: a verdict computed without it would be a verdict about a
+    comparison that never happened.
+    """
     instances = instances if instances is not None else load_instances()
     if corpus_rows is None:
         corpus_rows = list(load_corpus()) + list(load_smoke())
     forbidden = eval_pair_keys(corpus_rows)
     forbidden_tasks = {normalize_text(r["task"]) for r in corpus_rows}
+    partner_turns = partner_user_turns(path=partner_path, partner_rows=partner_rows)
 
     rows = _load_rows(Path(path))
     violations: List[str] = []
@@ -225,10 +321,25 @@ def audit(path: Path,
         # auditor previously did not enforce: "training on its tasks under different
         # constraint sets is still a model that has seen the exact prose it will be
         # graded on." Pair-level alone certified verbatim eval prose as clean.
-        if normalize_text(scenario["task"]) in forbidden_tasks:
+        task_text = normalize_text(scenario["task"])
+        if task_text in forbidden_tasks:
             fail("eval_task_overlap",
                  f"row {idx}: its task text appears verbatim in the eval corpus, "
                  f"under any constraint set")
+        # The partner's confirmed breaks are the held-out exam. Containment is
+        # checked in BOTH directions for the same reason task_pool's corpus
+        # disjointness check does: a partner prompt reused as a base task with a
+        # sentence appended is a proper substring, and an equality test would
+        # certify it clean.
+        for turn in partner_turns:
+            if turn in task_text or task_text in turn:
+                fail("partner_break_overlap",
+                     f"row {idx}: its task text contains, or is contained by, a USER "
+                     f"turn of the partner break set. Those 20 prompts are the exam "
+                     f"the before/after number is read off; training on one turns the "
+                     f"'after' into a memory test.\n    row task:     "
+                     f"{task_text[:160]!r}\n    partner turn: {turn[:160]!r}")
+                break
         if key in seen_pairs:
             fail("duplicate_pairs",
                  f"row {idx}: duplicates row {seen_pairs[key]} (same task and "
@@ -264,6 +375,7 @@ def audit(path: Path,
         "teachers": dict(Counter(r["provenance"]["teacher"] for r in valid)),
         "attempt_histogram": dict(Counter(r["provenance"]["attempt"] for r in valid)),
         "eval_corpus_pairs_compared": len(forbidden),
+        "partner_break_turns_compared": len(partner_turns),
     }
     return AuditResult({"violations": violations, "detail": detail, "stats": stats,
                         "max_type_share": max_type_share, "min_rows": min_rows})
@@ -288,9 +400,11 @@ def _print_report(result: AuditResult) -> None:
     print(f"  teachers              {stats['teachers']}")
     print(f"  attempts              {stats['attempt_histogram']}")
     print(f"  eval pairs compared   {stats['eval_corpus_pairs_compared']}")
+    print(f"  partner exam turns    {stats['partner_break_turns_compared']}")
     if result.ok:
         print("\nPASS - every row re-verified: prompt re-rendered byte-identical, "
-              "every checker re-run, zero held-out types, zero eval overlap.")
+              "every checker re-run, zero held-out types, zero eval overlap, zero "
+              "partner-break overlap.")
         return
     print(f"\nFAIL - {len(result['violations'])} check(s) failed: "
           f"{', '.join(result['violations'])}")
