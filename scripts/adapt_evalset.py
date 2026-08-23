@@ -49,6 +49,20 @@ from constraints import registry  # noqa: E402
 #: Keys a constraint instance may carry. Anything else is dropped and recorded.
 KEPT_KEYS = ("id", "type", "params", "family", "split")
 
+#: Adapted ids are minted in a reserved high block so they CANNOT collide with
+#: this repo's own instance ids, which are three-digit and start at 001.
+#:
+#: This matters more than it looks. An adapted id that collides with a local one
+#: still resolves if the harness is run without `--constraints` -- against the
+#: WRONG constraint -- and the run then scores a different exam, prints a
+#: normal-looking table and exits 0. Minting out of reach turns that silent
+#: mis-scoring into a loud "unknown constraint id" before a token is generated.
+#: `constraints.registry.ID_RE` does not pin the digit count, so this stays a
+#: valid id; the registry is the ground-truth layer and is left untouched.
+#: `tests/test_adapt_evalset.py` asserts the disjointness against the shipped
+#: library rather than trusting this comment.
+FOREIGN_ID_BASE = 9000
+
 
 class AdaptError(Exception):
     """A set that cannot be adapted without changing what it measures."""
@@ -98,7 +112,7 @@ def adapt_constraints(rows: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
         # Already the full leading segment, e.g. "c-lex-" -- not the bare "lex".
         prefix = registry.ID_PREFIX_BY_FAMILY[family]
         seq[prefix] += 1
-        new_id = f"{prefix}{seq[prefix]:03d}"
+        new_id = f"{prefix}{FOREIGN_ID_BASE + seq[prefix]:04d}"
 
         # Two source constraints that differ ONLY in a key we are about to drop
         # would become the same constraint. That is a silent merge, and it

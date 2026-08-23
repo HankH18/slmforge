@@ -24,6 +24,7 @@ Published artifacts, both public and both pinned by commit hash in
 |---|---|
 | Model | [`HankH18/qwen3-1.7b-forbidden-constraint-holder`](https://huggingface.co/HankH18/qwen3-1.7b-forbidden-constraint-holder) — merged fp16 at the repo root, LoRA adapter under `adapter/` |
 | Dataset | [`HankH18/forbidden-constraint-holder-sft`](https://huggingface.co/datasets/HankH18/forbidden-constraint-holder-sft) — the training rows, **plus every rejected teacher attempt** and the generation ledger |
+| Demo | [`HankH18/forbidden-constraint-holder`](https://huggingface.co/spaces/HankH18/forbidden-constraint-holder) — a public Gradio Space running base vs tuned on a visitor's own prompt, scored by the pinned checkers. Runs on `cpu-basic`, so a generation takes minutes, not seconds |
 
 `configs/models.json` carries two model pins on purpose: `tuned` is the current
 published checkpoint, `tuned_mvp` is the one `docs/MVP_REPORT.md` documents. Both
@@ -146,9 +147,12 @@ python eval.py --model hf:HankH18/qwen3-1.7b-forbidden-constraint-holder@c19712a
                --constraints <path-to-their-constraints.jsonl> --out <your-run-dir>
 ```
 
-Note the `hf:` provider prefix. The project doc writes the repro line as
-`eval.py --model <hf-repo-id>`; this harness requires `provider:model`, and the
-commands above are the ones that actually run.
+Note the `hf:` provider prefix on the commands above: they pin an exact
+revision, which is what makes the numbers reproducible. The bare form the
+project doc names — `eval.py --model <hf-repo-id>` — runs too. A bare
+`owner/name[@revision]` resolves to the `hf` provider (`normalize_model_spec`,
+`eval.py:333`); anything that is neither provider-qualified nor shaped like a
+repo id is refused locally, before a model loads or a judge is constructed.
 
 `google:gemini-3.1-pro` is rate-limited to **25 requests/minute** — pass
 `--workers 2` for it or the run 429s partway through.
@@ -260,7 +264,7 @@ passing silently.
 | `constraints/` | Registry and the deterministic checkers — the ground-truth layer |
 | `scenarios/` | Corpus generator, reachability prover, the shared prompt renderer |
 | `training/` | Modal QLoRA app |
-| `space/` | The running inference demo — a Gradio Space that runs base vs tuned live on a visitor's own prompt |
+| `space/` | Source for the Gradio inference demo — the app that runs base vs tuned on a visitor's own prompt and prints the pinned checkers' verdicts — plus its deploy runbook and pre-deploy checks. **Deployed** at [the Space above](https://huggingface.co/spaces/HankH18/forbidden-constraint-holder); `space/verify_deploy.py` reads the Hub back and exits 0 only when every file matches this build byte for byte |
 | `scripts/` | the gates and the publishing tools — see below |
 | `data/scenarios/` | Corpus, constraint instances, few-shot exemplars, smoke set, and the hardened adversarial set |
 | `data/fixtures/` | Golden checker fixtures |

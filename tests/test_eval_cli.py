@@ -341,3 +341,57 @@ def test_cli_rejects_a_malformed_model_spec_before_any_judge_call(tmp_path):
     assert r.returncode == 2, (r.returncode, r.stdout, r.stderr)
     assert "openai;gpt-5" in r.stderr
     assert not out.exists(), "a rejected spec must not create a run directory"
+
+
+# ------------------------------------------- which constraint library scored it
+#
+# A scenario names its constraints by ID. The ids resolve against whichever
+# library is passed, so two libraries can resolve the SAME id to DIFFERENT
+# constraints -- and the run then scores a different exam, prints a
+# normal-looking table and exits 0. The staff held-out set is exactly the run
+# where that is both invisible and graded.
+
+def test_results_record_which_constraint_library_scored_the_run(tmp_path):
+    """A results file that does not name its library cannot be checked later:
+    a right answer and a wrong one are byte-indistinguishable without it."""
+    r = run_cli("--model", "mock:compliant", "--eval-set", SMOKE,
+                "--judge", "mock:4", "--out", str(tmp_path / "run"))
+    assert r.returncode == 0, r.stderr
+    data = json.loads((tmp_path / "run" / "mock_compliant__zero_shot.results.json")
+                      .read_text())
+    assert data["constraints"].endswith("constraint_instances.jsonl")
+    assert len(data["constraints_sha256"]) == 64
+    assert data["constraints_sha256"] == E.sha256_of(data["constraints"])
+
+
+def test_a_foreign_eval_set_must_name_its_constraint_library(tmp_path):
+    """THE ONE THAT MATTERS. Silently scoring somebody else's scenarios against
+    OUR constraints is the failure this refusal exists to prevent, and it is the
+    one the spec calls the primary check against overfitting the eval."""
+    foreign = tmp_path / "staff_set.jsonl"
+    foreign.write_text((REPO_ROOT / SMOKE).read_text())
+    r = run_cli("--model", "mock:compliant", "--eval-set", str(foreign),
+                "--judge", "mock:4", "--out", str(tmp_path / "run"))
+    assert r.returncode == 2, r.stdout
+    assert "does not ship with this repo" in r.stderr
+    assert "--constraints" in r.stderr
+    assert not (tmp_path / "run").exists(), "refused before writing anything"
+
+
+def test_the_same_foreign_set_runs_once_its_library_is_named(tmp_path):
+    """The refusal must be a missing-flag refusal, not a ban on foreign sets."""
+    foreign = tmp_path / "staff_set.jsonl"
+    foreign.write_text((REPO_ROOT / SMOKE).read_text())
+    r = run_cli("--model", "mock:compliant", "--eval-set", str(foreign),
+                "--constraints", "data/scenarios/constraint_instances.jsonl",
+                "--judge", "mock:4", "--out", str(tmp_path / "run"))
+    assert r.returncode == 0, r.stderr
+    assert (tmp_path / "run" / "mock_compliant__zero_shot.results.json").exists()
+
+
+def test_the_repos_own_sets_still_need_no_constraints_flag():
+    """The one-command form in the spec's Verification Requirements stays one
+    command for this repo's own eval sets."""
+    assert E.is_own_eval_set(str(REPO_ROOT / SMOKE))
+    assert E.is_own_eval_set("data/scenarios/corpus.jsonl")
+    assert not E.is_own_eval_set("/tmp/somebody_elses_set.jsonl")

@@ -591,3 +591,48 @@ def _main() -> int:
 
 if __name__ == "__main__":
     sys.exit(_main())
+
+
+# --------------------------------------------------- the deploy verifier's
+# one allowed asymmetry
+#
+# verify_deploy.py compares the Hub against the local build in BOTH directions.
+# That strictness is the point -- a file on the Hub the build did not produce is
+# code nobody can account for. But the Hub writes .gitattributes itself at repo
+# creation (measured: a freshly created, never-uploaded Space already reports it),
+# so without an exclusion the verifier fails on every real deploy. It did: the
+# first true deploy of this Space returned exit 1 with .gitattributes as the sole
+# problem. These tests pin the exclusion to exactly that file and no wider.
+
+def _verify_deploy():
+    import importlib
+    return importlib.import_module("verify_deploy")
+
+
+def test_hub_generated_gitattributes_is_not_reported_as_a_stray_file():
+    vd = _verify_deploy()
+    built = {"app.py": "aaa"}
+    deployed = {"app.py": "aaa", ".gitattributes": "whatever"}
+    assert vd.compare_manifest(built, deployed) == []
+
+
+def test_the_exclusion_does_not_hide_any_other_stray_file():
+    """THE ONE THAT MATTERS. If this ever passes for a second filename, the
+    verifier has stopped being able to see unaccounted-for code on the Hub."""
+    vd = _verify_deploy()
+    built = {"app.py": "aaa"}
+    for stray in ("evil.py", "app.pyc.bak", "pins/extra.json", "README.md"):
+        problems = vd.compare_manifest(built, {"app.py": "aaa", stray: "x"})
+        assert any("EXTRA on the Hub" in p and stray in p for p in problems), stray
+
+
+def test_the_exclusion_never_masks_a_missing_or_altered_file():
+    vd = _verify_deploy()
+    # .gitattributes is excluded from EXTRA only -- a build that genuinely ships
+    # one must still have it match, and every other direction is untouched.
+    assert any("MISSING on the Hub" in p
+               for p in vd.compare_manifest({"app.py": "aaa"}, {".gitattributes": "x"}))
+    assert any("DIFFERENT bytes" in p
+               for p in vd.compare_manifest({"app.py": "aaa"}, {"app.py": "bbb"}))
+    assert any("DIFFERENT bytes" in p for p in vd.compare_manifest(
+        {".gitattributes": "aaa"}, {".gitattributes": "bbb"}))

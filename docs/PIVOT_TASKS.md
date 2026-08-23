@@ -1,3 +1,27 @@
+> **SUPERSEDED — the numeric targets in the tickets below were never the ones shipped.**
+> This task graph was written before T-5 … T-7 ran. Its acceptance criteria still
+> quote the planned corpus size, the planned sweep, and an eval set that was never
+> created; the shipped artifacts overrule all three:
+>
+> * T-5 demands "≥4,096 clean examples". The largest shipped corpus is
+>   `data/train/v3.jsonl` at **1,815 rows** (`wc -l`).
+> * T-7 names "N = 64 / 256 / 1024 / 4096". The shipped curve is declared in
+>   `runs/efficiency/points.json` and its points are **N = 0 (base), 106, 211,
+>   423, 846** over `v2` subsets — a different set, on a different corpus.
+> * T-6 and T-7 verify against `data/scenarios/eval.jsonl`, which **does not
+>   exist**. The graded eval set is `data/scenarios/corpus.jsonl` with
+>   `data/scenarios/constraint_instances.jsonl`, as `points.json` declares.
+>
+> The current Behavior Spec and requirement numbering is
+> [`docs/PIVOT_SPEC.md`](PIVOT_SPEC.md); the shipped results live in
+> [`docs/FINAL_REPORT.md`](FINAL_REPORT.md) and
+> [`docs/EFFICIENCY_CURVE.md`](EFFICIENCY_CURVE.md), whose numbers are machine-gated.
+> Where this file and any of those disagree, this file is wrong.
+>
+> Kept unedited below because it is cited by `configs/g1.json` ("PINNED by …
+> `docs/PIVOT_TASKS.md` T-4") and by `docs/cc-pivot-kickoff.md`. It is history,
+> not instruction.
+
 # Forbidden-Constraint Holder Pivot — Task Graph
 
 > **Path convention (corrected 2026-08-20).** The tickets as originally written targeted a

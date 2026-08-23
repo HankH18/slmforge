@@ -566,6 +566,77 @@ re-derivable from the committed transcripts with one command.
 
 ## 8. Minimum viable dataset size
 
+### The statement (quotable, one sentence)
+
+> **Minimum viable dataset size — v2 corpus, Qwen3-1.7B + LoRA SFT, evaluated
+> zero-shot on the 147-scenario eval set `data/scenarios/corpus.jsonl`: on the
+> binary spec-adherence measure the honest answer is a *lower bound* and not a
+> point, because no checkpoint in this sweep holds the behavior at all — every
+> trained N (106, 211, 423, 846) scores at or below the untrained base model's
+> 0.0890, and even at N=846 the banned-letter checker still fails 104 of its 105
+> instances — so the minimum viable N is **greater than 846** and these four
+> points did not bracket it; whereas on the continuous banned-letter-occurrence
+> measure, which is the instrument this project uses because the binary one
+> cannot resolve anything at this sample size, the smallest N at which the
+> intervention has an effect the data can resolve falls in the half-open
+> interval **423 < N ≤ 846**, since 423 → 846 is the first doubling in the sweep
+> whose bootstrap 95% CI on the paired difference of medians excludes zero
+> (median occurrences 29 → 14, lower on 92 of 105 paired scenarios, sign test
+> p = 4.45 × 10⁻¹⁷, CI [−19, −13]), while every earlier doubling's CI contains
+> zero.**
+
+**The two numbers are not a contradiction; they answer two different
+questions.** *Where does the behavior first move?* — inside the last doubling,
+423 < N ≤ 846. *Where does it start being reliably held?* — nowhere in this
+sweep; above 846. `docs/EFFICIENCY_CURVE.md` states both, one in each half of
+its §5, and a reader who quotes only one sentence from it gets only half the
+result. The bracket is the answer to "smallest N that changes anything"; the
+bound is the answer to the spec's actual wording, "smallest N that holds the
+behavior reliably". N=846 is emphatically not a point estimate of the latter: at
+N=846 one response in 105 is clean of its banned letter and `spec_adherence` is
+0.0816 with a 95% interval of [0.047, 0.137], which is not "reliably".
+
+**The reliability instrument is the paired occurrence measure, and it is a
+detector, not the criterion.** `spec_adherence` is what the assignment grades
+and it stays the reported criterion — the bound above is stated on it — but it
+cannot be used to *locate* N: on 147 scenarios its 95% Wilson interval is about
+9 points wide while the entire observed range across an 8× sweep is 2.8 points,
+so every point's interval contains every other point's estimate (the table
+further down shows this). The occurrence measure is paired scenario-by-scenario
+on the identical 147 prompts, so it removes between-scenario variance instead of
+averaging it in, and it separates the same two checkpoints the binary metric
+calls a tie: base → N=846 is median 34 → 14, lower on 89 of 105,
+p = 1.87 × 10⁻¹³, CI [−26, −15], while McNemar on `spec_pass` over those same
+rows gives p = 1.000. A metric that reports "no difference" where a paired test
+reports p ≈ 10⁻¹³ is not the instrument you locate a threshold with.
+
+**Every doubling, so the bracket is checkable rather than asserted.** Paired
+sign test and bootstrap CI on the difference of median banned-letter
+occurrences, from `scripts/compare_checkpoints.py` over the committed
+transcripts:
+
+| doubling | median | lower on | sign-test p | 95% CI on Δ median | resolves? |
+|---|---|---|---|---|---|
+| base → 106 | 34 → 35 | 49 of 105 | 1.00 | [−6, 11] | no |
+| 106 → 211 | 35 → 33 | 51 of 105 | 0.685 | [−11, 5] | no |
+| 211 → 423 | 33 → 29 | 65 of 105 | 0.0138 | [−9, 1] | no — CI spans 0 |
+| **423 → 846** | **29 → 14** | **92 of 105** | **4.45 × 10⁻¹⁷** | **[−19, −13]** | **yes** |
+
+Length-normalised, the same three non-resolving doublings run 67.7 → 71.8 →
+72.9 → 65.0 occurrences per 1,000 characters and the resolving one runs
+65.0 → 36.5, so the bracket is not an artifact of the model writing shorter
+answers.
+
+**Where each number came from.** The `spec_adherence` and occurrence columns and
+the 104-of-105 banned-letter figure were re-derived from the committed
+transcripts by `python scripts/curve_report.py --check --markdown`, which passed
+(`ok  curve.json matches the 5 curve points re-derived from their transcripts`)
+before any of the above was written. The paired statistics were re-run here, one
+`scripts/compare_checkpoints.py` invocation per row of that table, against
+`runs/mvp/`, `runs/efficiency/n106|n211|n423/` and `runs/mvp_v2/`. The artifacts
+and the prose in `docs/EFFICIENCY_CURVE.md` agree on every figure quoted above;
+had they not, the artifacts would win and this section would say so.
+
 Four checkpoints at N = 106 / 211 / 423 / 846 — the spec's own log spacing on
 the v2 corpus — each evaluated on the identical eval set, with the base model as
 the N=0 reference:
@@ -689,7 +760,61 @@ point on a chart:
    what the minimum is defined on.
 2. **The composition at that N**, from the subset manifest — specifically whether
    the hard letters are still represented at the intended share. A minimum viable
-   size is only meaningful alongside a minimum viable *mix*.
+   size is only meaningful alongside a minimum viable *mix*. Here it is, at the
+   two endpoints of the bracket above. N=423 is read from
+   `data/train/subsets/v2.subsets.json`; N=846 has no manifest entry because it
+   *is* the manifest's source file, so it is recomputed from `data/train/v2.jsonl`
+   against `data/scenarios/constraint_instances.jsonl` (it reproduces
+   `data/train/v2.report.json`'s `type_counts` and `banned_letter_distribution`
+   exactly, and the recomputation reproduces the manifest's 106/211/423/634
+   entries exactly too, so the manifest is not being taken on trust).
+
+   Constraint types, as a share of constraint instances (a row carries k = 2–4 of
+   them, so the instances outnumber the rows: 1,421 across 423 rows, 2,844 across
+   846):
+
+   | constraint type | N=423 | N=846 |
+   |---|---:|---:|
+   | `no_lists` | 291 (20.48%) | 585 (20.57%) |
+   | `no_quotation_marks` | 283 (19.92%) | 581 (20.43%) |
+   | `banned_phrases` | 293 (20.62%) | 576 (20.25%) |
+   | `banned_words` | 288 (20.27%) | 573 (20.15%) |
+   | `banned_letter` | 266 (18.72%) | 529 (18.60%) |
+
+   No type moves by more than 0.6 points between the two, and `banned_letter` —
+   the only type that carries the behavior under test — is present on 266 of 423
+   rows (62.9%) and 529 of 846 rows (62.5%). The k mix is likewise preserved:
+   70/131/222 rows at k = 2/3/4 for N=423, 131/278/437 for N=846.
+
+   Which letters, as a share of the rows carrying a `banned_letter` constraint,
+   against the share the sampler was aiming at (`LETTER_REQUEST_WEIGHTS` in
+   `datagen/sampling.py` weights requests so that the *kept* distribution lands
+   on English letter frequency; "intended" below is that frequency table
+   renormalised over the ten letters in the library):
+
+   | banned letter | N=423 | N=846 | intended |
+   |---|---:|---:|---:|
+   | e | 76 (28.6%) | 159 (30.1%) | 21.6% |
+   | a | 48 (18.0%) | 107 (20.2%) | 13.9% |
+   | o | 29 (10.9%) | 59 (11.2%) | 12.8% |
+   | i | 29 (10.9%) | 57 (10.8%) | 11.9% |
+   | s | 22 (8.3%) | 40 (7.6%) | 10.7% |
+   | r | 22 (8.3%) | 47 (8.9%) | 10.2% |
+   | l | 14 (5.3%) | 22 (4.2%) | 6.8% |
+   | u | 11 (4.1%) | 18 (3.4%) | 4.8% |
+   | m | 10 (3.8%) | 13 (2.5%) | 4.1% |
+   | p | 5 (1.9%) | 7 (1.3%) | 3.2% |
+
+   **The answer to the question the promise asked: yes, and if anything the
+   subset is harder than intended, not easier.** `e` and `a` — the two lowest
+   keep rates in the whole run, 0.1366 and 0.1348 per `data/train/v2.report.json`
+   — are 46.6% of the banned-letter rows at N=423 and 50.3% at N=846, against an
+   intended 35.5%; the easy tail (`l`, `m`, `p`) is under its intended share at
+   both sizes. That is the §4 failure mode inverted, and it matters for the
+   bracket: had the nested subsets thinned the hard letters, N=423 would have
+   posted a flattering occurrence count and pushed the minimum downward for a
+   reason that had nothing to do with size. It did not, so the 423 → 846 movement
+   is attributable to N and not to mix.
 3. **What it cost, measured rather than projected.** v2 spent 3,142 teacher
    calls for 846 kept rows; v1 spent 1,764 for 881. That is 3.71 calls per kept
    row against 2.00 — the harder curriculum cost **1.86x** as much per example,

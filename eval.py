@@ -41,6 +41,7 @@ NOTE: this reads os.environ directly and loads no dotenv. Export first:
   set -a && . ./.env && set +a
 """
 import argparse
+import hashlib
 import json
 import os
 import random
@@ -437,12 +438,35 @@ def run_eval(model_spec: str, scenarios: Sequence[Mapping[str, Any]],
     return rows, aggregate(rows, scenarios, constraint_lookup)
 
 
+def is_own_eval_set(path: str) -> bool:
+    """True for a scenario file that ships inside this repo.
+
+    Such a file's constraint ids ARE the ids in DEFAULT_CONSTRAINTS, by
+    construction -- the same generator wrote both. For anything else the
+    relationship is an assumption, and this function is what stops the harness
+    making it silently.
+    """
+    try:
+        return (REPO_ROOT / "data").resolve() in Path(path).resolve().parents
+    except OSError:
+        return False
+
+
 def sanitize(spec: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "_", spec)
 
 
+def sha256_of(path: str) -> str:
+    """Content digest of a file this run depended on."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def write_outputs(out_dir: Path, model_spec: str, strategy: str, rows, metrics,
-                  judge_model: str, eval_set: str) -> None:
+                  judge_model: str, eval_set: str, constraints: str) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = f"{sanitize(model_spec)}__{strategy}"
     with open(out_dir / f"{stem}.transcripts.jsonl", "w") as f:
@@ -454,6 +478,13 @@ def write_outputs(out_dir: Path, model_spec: str, strategy: str, rows, metrics,
         "judge_rubric_hash": judge_mod.rubric_hash(),
         "judge_model": judge_model,
         "eval_set": eval_set,
+        # WHICH constraint library scored this run. A scenario names its
+        # constraints by id; the ids resolve against whatever library was
+        # passed. Two different libraries can both resolve the same id to
+        # different constraints, so a results file that does not name its
+        # library cannot be checked -- it looks identical either way.
+        "constraints": constraints,
+        "constraints_sha256": sha256_of(constraints),
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "metrics": metrics,
     }
@@ -480,7 +511,10 @@ def main():
                     help="provider:model[@revision], or a bare Hugging Face "
                          "repo id owner/name[@revision]")
     ap.add_argument("--eval-set", default=DEFAULT_EVAL_SET)
-    ap.add_argument("--constraints", default=DEFAULT_CONSTRAINTS)
+    ap.add_argument("--constraints", default=None,
+                    help="constraint library the scenario ids resolve against "
+                         "(defaults to this repo's own library, and is REQUIRED "
+                         "explicitly for a scenario file from anywhere else)")
     ap.add_argument("--strategy", default="zero_shot", choices=STRATEGIES)
     ap.add_argument("--exemplars", help="JSONL of few-shot exemplars (required for few_shot)")
     ap.add_argument("--compare-with", help="second model spec for base-vs-tuned mode")
@@ -508,6 +542,23 @@ def main():
     except ValueError as exc:
         print(f"FAIL --model: {exc}", file=sys.stderr)
         return 2
+
+    # A scenario names its constraints by ID; the ids resolve against whichever
+    # library is passed. Two libraries can resolve the SAME id to DIFFERENT
+    # constraints, in which case the run scores a different exam, prints a
+    # normal-looking table and exits 0. The staff held-out set is precisely the
+    # run where that mistake is both invisible and graded, so guessing is not
+    # allowed: a scenario file from outside this repo must name its library.
+    if args.constraints is None:
+        if not is_own_eval_set(args.eval_set):
+            print(f"FAIL --eval-set {args.eval_set}: this scenario file does not ship "
+                  f"with this repo, so its constraint ids cannot be assumed to mean "
+                  f"what {DEFAULT_CONSTRAINTS} says they mean. Pass --constraints "
+                  f"<their-constraints.jsonl> explicitly. Resolving foreign ids "
+                  f"against the wrong library scores a different exam and still "
+                  f"exits 0.", file=sys.stderr)
+            return 2
+        args.constraints = DEFAULT_CONSTRAINTS
 
     out_dir = Path(args.out or f"runs/{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}")
     scenarios = load_jsonl(args.eval_set)
@@ -540,7 +591,7 @@ def main():
         records, metrics = run_eval(spec, scenarios, constraint_lookup, args.strategy,
                                     exemplars, judge_fn, args.workers)
         write_outputs(out_dir, spec, args.strategy, records, metrics, judge_model,
-                      args.eval_set)
+                      args.eval_set, args.constraints)
         rows_out.append({"model": spec, "strategy": args.strategy, "metrics": metrics})
 
     print(f"spec forbidden-constraint-holder-1.0  judge rubric {judge_mod.rubric_hash()}  "

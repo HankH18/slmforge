@@ -55,12 +55,26 @@ def digest_tree(root: Path) -> Dict[str, str]:
     return out
 
 
+#: Files the Hub creates ITSELF when a repo is made, which no local build can
+#: ever produce. Excluded from the EXTRA check only -- never from MISSING, never
+#: from DIFFERENT, and the set is a literal allow-list of exact paths rather than
+#: a pattern, so it cannot quietly grow to cover a real stray file.
+#:
+#: Measured, not assumed: `space_info` reported 2 files on a freshly created,
+#: never-uploaded Space -- .gitattributes and README.md. .gitattributes is the
+#: LFS-tracking file the Hub writes at creation time. Without this exclusion
+#: verify_deploy.py fails on every real deploy that has ever happened, which is
+#: precisely why its success path had never run.
+HUB_GENERATED = frozenset({".gitattributes"})
+
+
 def compare_manifest(built: Dict[str, str], deployed: Dict[str, str]) -> List[str]:
     """Every difference, as human-readable lines. Empty list means identical.
 
     Both directions are reported. A file present on the Hub but not in the build
     is just as much a problem as a missing one -- it means the Space is running
-    code that no local artefact accounts for.
+    code that no local artefact accounts for. The ONE exception is HUB_GENERATED:
+    a file the Hub authored at repo-creation time is not unaccounted-for code.
     """
     problems: List[str] = []
     for rel, want in sorted(built.items()):
@@ -71,7 +85,7 @@ def compare_manifest(built: Dict[str, str], deployed: Dict[str, str]) -> List[st
             problems.append(f"DIFFERENT bytes: {rel}\n"
                             f"    built    {want}\n"
                             f"    deployed {got}")
-    for rel in sorted(set(deployed) - set(built)):
+    for rel in sorted(set(deployed) - set(built) - HUB_GENERATED):
         problems.append(f"EXTRA on the Hub (not in the build): {rel}")
     return problems
 

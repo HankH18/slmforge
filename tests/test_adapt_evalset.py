@@ -193,3 +193,25 @@ def test_cli_output_passes_preflight(tmp_path, corpus, instances):
         cwd=REPO_ROOT, capture_output=True, text=True)
     assert pre.returncode == 0, pre.stdout + pre.stderr
     assert "PREFLIGHT PASS" in pre.stdout
+
+
+def test_adapted_ids_cannot_collide_with_the_shipped_library(mod, instances):
+    """THE ONE THAT MATTERS for a graded staff-set run.
+
+    An adapted id that collides with one of ours still RESOLVES when the harness
+    is run without `--constraints` -- against the wrong constraint -- so the run
+    scores a different exam and exits 0. Minting into a reserved block turns
+    that silent mis-scoring into a loud "unknown constraint id" before a token
+    is generated. This asserts the disjointness rather than trusting the
+    constant: the id scheme is only safe while this holds against the library
+    actually shipped on disk.
+    """
+    adapted = mod.adapt_constraints(_foreign(instances))["constraints"]
+    shipped_ids = {c["id"] for c in instances}
+    adapted_ids = {c["id"] for c in adapted}
+    collisions = shipped_ids & adapted_ids
+    assert not collisions, f"adapted ids reachable in the local library: {sorted(collisions)}"
+    # and they are still valid ids -- the registry is the ground-truth layer and
+    # was deliberately not widened to make room for this.
+    for cid in adapted_ids:
+        assert registry.ID_RE.match(cid), cid

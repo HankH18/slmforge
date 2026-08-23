@@ -6,9 +6,9 @@ pinned base and tuned models live and prints the pinned checkers' verdicts.
 Every command below has been run from this machine. Four of them ran only as far
 as argument parsing, and are marked where they appear:
 
-* the three marked **NOT RUN** — creating the Space, uploading to it, and
-  reading a live Space back — were run offline, so their flags are known to be
-  accepted and nothing was pushed;
+* the three formerly marked NOT RUN — creating the Space, uploading to it, and
+  reading a live Space back — **have now all been run for real** (2026-08-23).
+  What each actually returned is recorded at its step;
 * step 6's `scripts/demo.py` call, which parses and then wants ~3.4 GB of
   weights per model.
 
@@ -155,7 +155,7 @@ refuses to start rather than substituting its own checkers.
 
 ---
 
-## 3. Create the Space — **NOT RUN**
+## 3. Create the Space — **RUN 2026-08-23**
 
 ```bash
 set -a && . ./.env && set +a
@@ -171,7 +171,7 @@ visibility on the settings page rather than assuming.
 
 ---
 
-## 4. Upload — **NOT RUN**
+## 4. Upload — **RUN 2026-08-23**
 
 ```bash
 set -a && . ./.env && set +a
@@ -188,7 +188,7 @@ commits is exactly the drift `pins/PINS_MANIFEST.txt` exists to make visible.
 
 ---
 
-## 5. Read it back — **NOT RUN against a live Space**
+## 5. Read it back — **RUN against the live Space, 2026-08-23**
 
 Do not conclude anything from step 4's output. Ask the Hub what is there:
 
@@ -210,8 +210,20 @@ all its files, so the file diff alone is not evidence that the demo is up.
 Verified about this script: `--help` exits `0`; its Hub path was exercised
 against a non-existent Space and reported
 `FAIL: cannot read space ...: RepositoryNotFoundError: 404`, exit `1`; and its
-manifest comparison was unit-tested in both directions. Its **success** path has
-never run, because nothing has been pushed.
+manifest comparison was unit-tested in both directions.
+
+**Its success path has now run.** Against the live Space it printed `stage :
+RUNNING`, `hardware : cpu-basic`, `files : 29 built, 30 on the Hub`, and
+`OK: the Space is public, running gradio, stage RUNNING, and every file matches
+the local build byte for byte` — exit `0`.
+
+The first real deploy also found a bug in this script, which is exactly what its
+success path had never been able to reveal: the Hub writes `.gitattributes`
+itself at repo-creation time, so the both-directions comparison reported it as a
+stray file and exited `1` on a perfectly correct deploy. `verify_deploy.py` now
+carries `HUB_GENERATED`, an exact-path allow-list excluded from the EXTRA check
+only — never from MISSING, never from DIFFERENT. Three tests in
+`space/test_space_app.py` pin it to that one filename and fail if it is widened.
 
 ---
 
