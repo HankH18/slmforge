@@ -1,0 +1,86 @@
+{
+  "requested": 180,
+  "kept": 180,
+  "accept_rate": 1.0,
+  "gave_up": 0,
+  "rejections": 0,
+  "rejection_reasons": {},
+  "evasive_drafts": 0,
+  "evasion_rules": {},
+  "attack_shapes": {
+    "format_compulsion": 60,
+    "subject_compulsion": 60,
+    "erosion_recap": 60
+  },
+  "rejected_constraint_types": {},
+  "dpo_negatives": 0,
+  "attempt_histogram": {
+    "1": 180
+  },
+  "k_distribution": {
+    "3": 180
+  },
+  "pressure_distribution": {
+    "adversarial": 180
+  },
+  "banned_letter_distribution": {
+    "kept": {
+      "a": 22,
+      "e": 18,
+      "i": 12,
+      "o": 16,
+      "s": 19
+    },
+    "rejected": {
+      "a": 0,
+      "e": 0,
+      "i": 0,
+      "o": 0,
+      "s": 0
+    },
+    "keep_rate": {
+      "a": 1.0,
+      "e": 1.0,
+      "i": 1.0,
+      "o": 1.0,
+      "s": 1.0
+    }
+  },
+  "type_counts": {
+    "no_quotation_marks": 75,
+    "banned_words": 172,
+    "banned_letter": 87,
+    "no_lists": 88,
+    "banned_phrases": 118
+  },
+  "type_shares": {
+    "banned_letter": 0.1611,
+    "banned_phrases": 0.2185,
+    "banned_words": 0.3185,
+    "no_lists": 0.163,
+    "no_quotation_marks": 0.1389
+  },
+  "max_type_share": 0.3185,
+  "distractor_examples": 0,
+  "unique_tasks": 180,
+  "teacher": "anthropic:claude-opus-5",
+  "teacher_resolved_by": "--teacher",
+  "attempts": 1,
+  "seed": 20260824,
+  "letter_mix": "uniform",
+  "sampler": "attack",
+  "drafts_file": "data/train/v4_attacks.draft.jsonl",
+  "min_kept": 180,
+  "cache": {
+    "hits": 0,
+    "misses": 0
+  },
+  "generated_utc": "2026-08-24T00:54:51.520572+00:00",
+  "attack_pool": "A",
+  "attack_pool_role": "train",
+  "attack_shapes_requested": [
+    "format_compulsion",
+    "subject_compulsion",
+    "erosion_recap"
+  ]
+}

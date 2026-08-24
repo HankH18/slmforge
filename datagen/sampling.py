@@ -56,6 +56,18 @@ nudge naming a constraint type it actually has. Distractor pressure is reported
 separately (``distractor`` in the sample meta) and comes from the lexicon match
 between task and banned-words instance. The two are reported apart precisely so
 neither is overstated.
+
+THE SECOND SAMPLER: ATTACKS
+    :func:`build_attack_samples` draws from :mod:`datagen.attacks` instead of
+    from :data:`datagen.task_pool.TASKS`, and it exists because every nudge in
+    :data:`datagen.task_pool.NUDGES` -- all ten -- is ONE attack family: a
+    sentence granting permission to relax a rule. FORMAT COMPULSION and SUBJECT
+    COMPULSION ask no permission at all; the brief simply cannot be satisfied in
+    the shape it demands, or its subject IS the banned token. The two samplers
+    return the same :class:`Sample` type and are interchangeable at
+    :func:`datagen.generate.generate`, so the pipeline, the checkers, the
+    pre-write verifier and the auditor treat an attack row exactly like any
+    other row -- which is the point: nothing about an attack row is exempt.
 """
 from __future__ import annotations
 
@@ -67,14 +79,18 @@ from scenarios.instances import INSTANCE_META
 from scenarios.lexicons import GENERIC
 
 from datagen import DatagenError
-from datagen.task_pool import TASKS, Task, compatible_nudges, normalize_text
+from datagen import attacks
+from datagen.task_pool import (TASKS, Task, assert_texts_disjoint_from_corpus,
+                               compatible_nudges, normalize_text)
 
 __all__ = ["TRAIN_TYPES", "HELDOUT_TYPES", "NEGATIVE_TYPES", "Sample",
            "assert_train_split_only", "assert_has_negative", "proportional_plan",
            "eval_k_weights", "eval_adversarial_weights", "build_scenarios",
            "pair_key", "eval_pair_keys", "type_shares",
            "ENGLISH_LETTER_FREQUENCY", "V1_LETTER_OUTCOMES", "LETTER_KEEP_RATES",
-           "LETTER_REQUEST_WEIGHTS", "LETTER_MIXES", "letter_of"]
+           "LETTER_REQUEST_WEIGHTS", "LETTER_MIXES", "letter_of",
+           "SAMPLERS", "DEFAULT_ATTACK_POOL", "attack_task_id",
+           "build_attack_samples", "attack_shape_counts"]
 
 #: Types a training example may use, in registry order.
 TRAIN_TYPES: Tuple[str, ...] = tuple(registry.types_by_split("train"))
@@ -204,6 +220,18 @@ LETTER_MIXES: Tuple[str, ...] = ("uniform", "hard")
 _WEIGHTED_TYPE = "banned_letter"
 
 
+#: The samplers :mod:`datagen.generate` can be pointed at. ``default`` is the
+#: fresh-task pool of :mod:`datagen.task_pool`; ``attack`` is
+#: :mod:`datagen.attacks`. The tuple is the CLI's ``--sampler`` choices, so a
+#: sampler cannot be offered on the command line without existing here.
+SAMPLERS: Tuple[str, ...] = ("default", "attack")
+
+#: The only attack pool a TRAINING set may draw from. Pool B is the never-trained
+#: held-out attack eval; :func:`build_attack_samples` re-reads
+#: :data:`datagen.attacks.POOL_ROLE` rather than trusting this literal.
+DEFAULT_ATTACK_POOL = "A"
+
+
 class Sample(NamedTuple):
     """One sampled training scenario plus the authoring metadata behind it.
 
@@ -211,6 +239,12 @@ class Sample(NamedTuple):
     fed to the shared renderer, the checkers and the training-time verifier
     without special-casing. Everything else lives out here and lands in the
     row's ``provenance``.
+
+    ``attack`` is ``None`` for a row from the default sampler and the attack's
+    own identity -- shape, pool, pool role, brief, phrasing, target -- for a row
+    from :func:`build_attack_samples`. It is a trailing default so that every
+    caller written before the attack sampler existed constructs the same tuple
+    it always did.
     """
     scenario: Dict[str, Any]
     task_id: str
@@ -218,6 +252,7 @@ class Sample(NamedTuple):
     nudge_id: Optional[str]
     types: Tuple[str, ...]
     distractor: bool
+    attack: Optional[Dict[str, Any]] = None
 
 
 # --------------------------------------------------------------------- guards
@@ -584,4 +619,182 @@ def build_scenarios(n: int,
         raise DatagenError(
             f"constraint type share exceeds the {max_type_share:.0%} cap: {over}. "
             f"A dataset dominated by one type teaches that type, not the behaviour.")
+    return samples
+
+
+# --------------------------------------------------------------- attack sampler
+def attack_task_id(row: "attacks.AttackScenario") -> str:
+    """A stable id for the TASK TEXT of an attack row.
+
+    Not the scenario id, and not the target constraint: what identifies a task
+    here is the brief the model is asked to write, and that text is a function of
+    the phrasing template plus either the brief (format compulsion, erosion) or
+    the topic span (subject compulsion). Two format-compulsion rows built from
+    the same phrasing and brief against different target instances carry the
+    SAME task text, and ``unique_tasks`` in the run report must say so rather
+    than counting them as two.
+    """
+    if row.brief_key:
+        tail = row.brief_key
+    elif row.topic_span:
+        tail = normalize_text(row.topic_span).replace(" ", "-")
+    else:  # pragma: no cover - _finalise gives every row one or the other
+        raise DatagenError(
+            f"attack row {row.scenario['scenario_id']} carries neither a brief nor "
+            f"a topic span, so its task text cannot be identified")
+    return f"atk-{row.pool.lower()}-{row.phrasing_key}-{tail}"
+
+
+def attack_shape_counts(samples: Sequence[Sample]) -> Dict[str, int]:
+    """``shape -> rows``, counted from the samples themselves."""
+    counts: Dict[str, int] = {}
+    for sample in samples:
+        shape = (sample.attack or {}).get("shape")
+        if shape:
+            counts[shape] = counts.get(shape, 0) + 1
+    return {shape: counts[shape] for shape in sorted(counts)}
+
+
+def _attack_sample(row: "attacks.AttackScenario") -> Sample:
+    """One :class:`Sample` from one proved attack scenario.
+
+    ``nudge_id`` is None and ``distractor`` is False ON PURPOSE, and neither is
+    an oversight. A nudge id would name an entry of
+    :data:`datagen.task_pool.NUDGES`, and an attack row carries none of them --
+    its pressure is structural, not a permission sentence. ``distractor`` means
+    one specific thing in this codebase (a topic-tagged banned-words instance on
+    a task of the same topic) and reusing the flag for a different mechanism
+    would corrupt a number the reports already publish. The mechanism that IS
+    present is named exactly, in ``attack``.
+    """
+    return Sample(
+        scenario=dict(row.scenario),
+        task_id=attack_task_id(row),
+        lexicon=GENERIC,
+        nudge_id=None,
+        types=tuple(row.types),
+        distractor=False,
+        attack={"shape": row.shape, "pool": row.pool, "pool_role": row.pool_role,
+                "brief": row.brief_key, "phrasing": row.phrasing_key,
+                "target_id": row.target_id, "target_type": row.target_type,
+                "topic_span": row.topic_span})
+
+
+def build_attack_samples(n: int,
+                         instances: Mapping[str, Mapping[str, Any]],
+                         corpus_rows: Sequence[Mapping[str, Any]],
+                         seed: int = 20260820,
+                         pool: str = DEFAULT_ATTACK_POOL,
+                         shapes: Sequence[str] = attacks.ATTACK_SHAPES,
+                         log=None) -> List[Sample]:
+    """``n`` attack scenarios from :mod:`datagen.attacks`, as :class:`Sample`\\ s.
+
+    Every guarantee :mod:`datagen.attacks` makes -- constructive satisfiability
+    proved by a witness, no held-out constraint type, one shape per row decided
+    from the row's own text -- is made there and is not re-litigated here. What
+    this function adds is the four things a TRAINING sampler owes the pipeline:
+
+    1. the pool is a TRAINING pool. ``POOL_ROLE`` is read live from
+       :mod:`datagen.attacks`; pool B is the held-out attack eval, and a training
+       set drawn from it would leave the "generalises to unseen attack phrasings"
+       claim measuring memorised sentences.
+    2. the shapes are INTERLEAVED, so a block smaller than the buildable total
+       spans all three rather than exhausting the largest one. (Pool A can build
+       595 subject-compulsion rows against 140 format and 84 erosion, so a naive
+       truncation at 480 would be 81% one shape.)
+    3. no (task, constraint-set) pair is emitted twice, and none appears in the
+       eval corpus -- the same ``pair_key`` identity the default sampler uses.
+    4. no attack task text overlaps an eval corpus task, checked by the SAME
+       containment comparison :data:`datagen.task_pool.TASKS` is held to.
+
+    ``log`` is an optional callable; when given it receives the shape histogram,
+    the quarantine count and the number of duplicate pairs skipped. A quarantined
+    candidate is data, not an error: it means no companion set for that target
+    could be proved satisfiable, and shipping it anyway would fake a ceiling.
+    """
+    if n <= 0:
+        raise DatagenError(f"asked for {n} attack scenarios; there is no such thing "
+                           f"as an empty attack block worth writing")
+    role = attacks.POOL_ROLE.get(pool)
+    if role is None:
+        raise DatagenError(
+            f"unknown attack pool {pool!r}; known pools are "
+            f"{', '.join(sorted(attacks.POOL_ROLE))}")
+    if role != "train":
+        raise DatagenError(
+            f"attack pool {pool!r} has role {role!r}, not 'train'. Pool B is the "
+            f"never-trained held-out attack eval: training on it makes the "
+            f"'generalises to attack phrasings it never saw' claim unfalsifiable, "
+            f"because the eval would then be measuring memorised sentences.")
+    unknown = [s for s in shapes if s not in attacks.ATTACK_SHAPES]
+    if unknown:
+        raise DatagenError(f"unknown attack shape(s) {unknown}; known shapes are "
+                           f"{', '.join(attacks.ATTACK_SHAPES)}")
+    if not shapes:
+        raise DatagenError("no attack shapes requested")
+
+    # The pipeline's constraint lookup and the attack builder must agree about
+    # what a constraint id means, so the builder is given THIS library rather
+    # than loading its own.
+    library = attacks.instance_library(instances)
+    rows, quarantined = attacks.build_attacks(pool=pool, seed=seed, shapes=shapes,
+                                              lib=library)
+
+    ordered = [s for s in attacks.ATTACK_SHAPES if s in shapes]
+    by_shape: Dict[str, List[Any]] = {s: [] for s in ordered}
+    for row in rows:
+        by_shape[row.shape].append(row)
+
+    forbidden = eval_pair_keys(corpus_rows)
+    seen: set = set()
+    picked: List[Any] = []
+    cursors = {s: 0 for s in ordered}
+    duplicates = 0
+
+    while len(picked) < n:
+        progressed = False
+        for shape in ordered:
+            if len(picked) >= n:
+                break
+            available = by_shape[shape]
+            while cursors[shape] < len(available):
+                row = available[cursors[shape]]
+                cursors[shape] += 1
+                cids = list(row.scenario["constraints"])
+                assert_train_split_only(cids, instances)
+                assert_has_negative(cids, instances)
+                key = pair_key(row.scenario["task"], cids)
+                if key in forbidden:
+                    raise DatagenError(
+                        f"attack row {row.scenario['scenario_id']} has a "
+                        f"(task, constraint-set) pair that appears in the EVAL "
+                        f"corpus. Training on it is contamination of the graded "
+                        f"number.")
+                if key in seen:
+                    duplicates += 1
+                    continue
+                seen.add(key)
+                picked.append(row)
+                progressed = True
+                break
+        if not progressed:
+            break
+
+    if len(picked) < n:
+        built = {shape: len(by_shape[shape]) for shape in ordered}
+        raise DatagenError(
+            f"asked for {n} attack scenarios but only {len(picked)} distinct ones "
+            f"could be built from pool {pool} (per shape: {built}, "
+            f"{len(quarantined)} quarantined, {duplicates} duplicate pairs). "
+            f"Refusing to return a short block silently: a block that is smaller "
+            f"than requested changes the corpus composition the report describes.")
+
+    assert_texts_disjoint_from_corpus(
+        [(row.scenario["scenario_id"], row.scenario["task"]) for row in picked],
+        corpus_rows, label="attack task")
+
+    samples = [_attack_sample(row) for row in picked]
+    if log is not None:
+        log(f"attack pool {pool} ({role}): {attack_shape_counts(samples)}, "
+            f"{len(quarantined)} quarantined, {duplicates} duplicate pairs skipped")
     return samples

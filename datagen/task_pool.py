@@ -57,7 +57,8 @@ from scenarios.lexicons import GENERIC, LEXICONS
 from datagen import DatagenError
 
 __all__ = ["Task", "TASKS", "Nudge", "NUDGES", "task_by_id", "normalize_text",
-           "assert_disjoint_from_corpus", "compatible_nudges"]
+           "assert_disjoint_from_corpus", "assert_texts_disjoint_from_corpus",
+           "compatible_nudges"]
 
 
 class Task(NamedTuple):
@@ -486,6 +487,36 @@ def _corpus_texts(corpus_rows: Optional[Sequence[Dict[str, Any]]] = None) -> Lis
     return texts
 
 
+def assert_texts_disjoint_from_corpus(
+        texts: Sequence[Tuple[str, str]],
+        corpus_rows: Optional[Sequence[Dict[str, Any]]] = None,
+        label: str = "training task") -> int:
+    """Prove that none of ``(name, text)`` shares text with the eval corpus.
+
+    The body of :func:`assert_disjoint_from_corpus`, lifted so that task text
+    which does NOT come from :data:`TASKS` -- the attack briefs of
+    :mod:`datagen.attacks`, reached through
+    :func:`datagen.sampling.build_attack_samples` -- is held to the identical
+    standard by the identical comparison. A second, hand-rolled containment test
+    living next to this one is how two checks drift into disagreeing.
+    """
+    corpus = _corpus_texts(corpus_rows)
+    for name, text in texts:
+        mine = normalize_text(text)
+        for other in corpus:
+            if mine == other:
+                raise DatagenError(
+                    f"{label} {name} has the same text as an eval corpus "
+                    f"scenario -- that is contamination of the graded number")
+            if mine in other or other in mine:
+                raise DatagenError(
+                    f"{label} {name} contains, or is contained by, an eval "
+                    f"corpus task. Corpus tasks are a base task plus an appended "
+                    f"pressure sentence, so this is a reused base text.\n"
+                    f"  training: {mine[:160]!r}\n  corpus:   {other[:160]!r}")
+    return len(corpus)
+
+
 def assert_disjoint_from_corpus(
         corpus_rows: Optional[Sequence[Dict[str, Any]]] = None) -> int:
     """Prove no training task shares text with the eval corpus. Returns the
@@ -495,18 +526,5 @@ def assert_disjoint_from_corpus(
     a pressure sentence appended, so a reused base text would be a proper
     substring of the corpus row and an equality test would miss it entirely.
     """
-    corpus = _corpus_texts(corpus_rows)
-    for task in TASKS:
-        mine = normalize_text(task.text)
-        for other in corpus:
-            if mine == other:
-                raise DatagenError(
-                    f"training task {task.id} has the same text as an eval corpus "
-                    f"scenario -- that is contamination of the graded number")
-            if mine in other or other in mine:
-                raise DatagenError(
-                    f"training task {task.id} contains, or is contained by, an eval "
-                    f"corpus task. Corpus tasks are a base task plus an appended "
-                    f"pressure sentence, so this is a reused base text.\n"
-                    f"  training: {mine[:160]!r}\n  corpus:   {other[:160]!r}")
-    return len(corpus)
+    return assert_texts_disjoint_from_corpus(
+        [(task.id, task.text) for task in TASKS], corpus_rows)

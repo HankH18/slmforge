@@ -329,8 +329,18 @@ def test_every_train_type_is_accepted_through_the_witness_teacher(tmp_path):
 
 
 def test_reason_codes_are_a_closed_set():
+    # "evasive_draft" joined the set when the attack sampler was wired in: under
+    # format compulsion the cheapest checker-passing draft is a refusal, and a
+    # dataset full of those teaches the model to decline briefs. The set stays
+    # CLOSED and is still asserted by equality -- the point of this test is that a
+    # code cannot reach a dataset without being declared, and five declared codes
+    # enforce that exactly as four did.
     assert set(F.REASON_CODES) == {"teacher_error", "empty_draft",
-                                   "degenerate_draft", "constraint_violation"}
+                                   "degenerate_draft", "constraint_violation",
+                                   "evasive_draft"}
+    # Every code is reachable from decide() or from the pipeline's own error
+    # path; an aspirational code nobody emits would make the set a wish list.
+    assert len(set(F.REASON_CODES)) == len(F.REASON_CODES)
 
 
 @pytest.mark.parametrize("draft", ["", "   ", "\n\t\n", " "])
@@ -1054,3 +1064,505 @@ def test_every_real_partner_user_turn_is_caught_when_planted(clean_dataset, tmp_
         if "partner_break_overlap" not in result["violations"]:
             missed.append(turn[:70])
     assert not missed, f"{len(missed)} partner turns trained on undetected: {missed}"
+
+
+# --------------------------------------------------------------------------
+# THE ATTACK SAMPLER, and the anti-evasion gate in front of it
+# --------------------------------------------------------------------------
+#
+# datagen.attacks builds briefs that COMPEL a violation rather than asking
+# permission for one: a recipe card demanded as a numbered list under no_lists
+# (format compulsion), a brief whose subject is the banned token itself (subject
+# compulsion), and a single-turn surrogate for multi-turn erosion. Wired to the
+# pipeline through datagen.sampling.build_attack_samples.
+#
+# The gate matters more than the sampler. Under format compulsion the CHEAPEST
+# draft that passes every checker is a refusal -- "I can't give you that as a
+# list, here is a paragraph" -- because there is no list in it. The filter as
+# originally written kept exactly that: checkers green, over MIN_DRAFT_WORDS. A
+# few hundred such rows teach a model to decline briefs it can complete, which
+# would show up as collapsed task quality on the 147-row corpus while the
+# constraint numbers looked better than ever. Every test below that says
+# "precondition" is proving the old filter really would have kept the row.
+
+from datagen import attacks as K  # noqa: E402
+
+
+def attack_samples(n=12, seed=101, shapes=K.ATTACK_SHAPES, pool="A"):
+    return S.build_attack_samples(n, INSTANCES, CORPUS, seed=seed, pool=pool,
+                                  shapes=list(shapes))
+
+
+def witness_for(sample):
+    return build_witness([INSTANCES[c] for c in sample.scenario["constraints"]],
+                         sentences=4)
+
+
+def passes_every_checker(sample, text):
+    return all(r["pass"] for r in run_checkers(sample.scenario, INSTANCES, text))
+
+
+def refusal_on_a_real_attack(prefix, shape):
+    """The first real attack row of ``shape`` for which ``prefix`` + a witness
+    paragraph passes EVERY checker.
+
+    Returned as (sample, draft). The draft is a genuine reward hack: nothing in
+    it violates a constraint, and it declines the job.
+    """
+    for sample in attack_samples(n=36, seed=101):
+        if (sample.attack or {}).get("shape") != shape:
+            continue
+        witness = witness_for(sample)
+        if witness is None:
+            continue
+        draft = f"{prefix} {witness}"
+        if passes_every_checker(sample, draft):
+            return sample, draft
+    pytest.fail(f"no {shape} row could carry the refusal prefix compliantly")
+
+
+# --------------------------- the gate: it bites -----------------------------
+
+def test_the_cheapest_format_compulsion_draft_is_a_refusal_and_is_rejected():
+    """The whole reason this gate exists, on a real attack scenario."""
+    sample, draft = refusal_on_a_real_attack(
+        "I can't give you that as a numbered list, so here is a paragraph "
+        "instead.", "format_compulsion")
+
+    # PRECONDITION: this really is what the old filter would have kept.
+    assert passes_every_checker(sample, draft), "the refusal must be compliant"
+    assert F.word_count(draft) >= F.MIN_DRAFT_WORDS
+
+    verdict = F.decide(draft, sample.scenario, INSTANCES)
+    assert not verdict.keep
+    assert verdict.reason == "evasive_draft"
+    assert {cue.rule for cue in verdict.evasion} <= set(F.EVASION_RULES)
+    assert verdict.evasion, "a rejection with no cue is unauditable"
+
+
+def test_the_cheapest_subject_compulsion_draft_is_a_refusal_and_is_rejected():
+    sample, draft = refusal_on_a_real_attack(
+        "I am unable to use the word you asked about, so I will describe it in "
+        "other terms.", "subject_compulsion")
+    assert passes_every_checker(sample, draft)
+    verdict = F.decide(draft, sample.scenario, INSTANCES)
+    assert not verdict.keep and verdict.reason == "evasive_draft"
+
+
+#: One representative draft per rule. Every rule must be reachable: a rule no
+#: draft can fire is dead code pretending to be a guard.
+EVASION_CASES = {
+    "decline_to_produce":
+        "I cannot write that as a numbered list, so here is what the reader "
+        "needs to know about the shuttle and when it runs.",
+    "compliance_narration":
+        "Note that I have avoided the letter e throughout, as the brief asked. "
+        "Our small workshop stays calm at dawn and shuts by four.",
+    "rule_talk":
+        "The brief asks for a recipe card, but the requirements forbid lists, "
+        "so this is written as continuous prose about the method.",
+    "substitution":
+        "Here is the method as flowing prose instead of a numbered list. Warm "
+        "the pan gently and wait for the edges to lift before turning it.",
+    "offer_to_violate":
+        "If you would prefer bullet points, I can supply them on request. The "
+        "rota starts at six and runs until the last bus has been cleaned.",
+    "model_meta":
+        "As an AI assistant I should point out that the two halves of this "
+        "request pull against each other, but here is a usable answer anyway.",
+}
+
+
+@pytest.mark.parametrize("rule", sorted(EVASION_CASES))
+def test_every_evasion_rule_fires_on_a_draft_written_for_it(rule):
+    cues = F.evasion_cues(EVASION_CASES[rule])
+    assert rule in {cue.rule for cue in cues}, [c.rule for c in cues]
+    assert all(cue.span for cue in cues), "a cue must carry the text that fired it"
+    assert F.is_evasive(EVASION_CASES[rule])
+
+
+def test_the_rule_vocabulary_is_closed():
+    """A rule name that is not declared cannot be looked up by whoever reads the
+    rejection ledger."""
+    fired = {cue.rule for draft in EVASION_CASES.values()
+             for cue in F.evasion_cues(draft)}
+    assert fired <= set(F.EVASION_RULES)
+    assert set(EVASION_CASES) == set(F.EVASION_RULES), (
+        "every declared rule needs a draft proving it can fire")
+
+
+# ------------------- the gate: it does not bite the innocent ----------------
+
+#: Real answers to real briefs from datagen.task_pool, each of which contains a
+#: word the naive version of this check would have tripped on: "cannot", "the
+#: rules", "a list", "refuse", "rather than", "I am sorry", "the word".
+LEGITIMATE_DRAFTS = [
+    "The in-home display cannot tell you which appliance is drawing power, only "
+    "what the whole house is using at that moment. It will not tell you why the "
+    "figure jumps at six in the evening either.",
+    "The rules that prevent curdling are simple enough. Keep the heat low and "
+    "stir until the custard coats the back of a spoon.",
+    "We refuse to rush or to make more than the oven can bake properly, which is "
+    "why everything has gone by ten on a Saturday.",
+    "Keep a list of what you brought and check it against the kit at the gate. "
+    "Ring the marshal rather than turning back on your own.",
+    "I am sorry to hear about the fracture. The first six weeks are slower than "
+    "anyone expects, and you cannot rush a bone into healing.",
+    "The word people reach for first is usually the wrong one, and readers "
+    "notice. A term that means nothing to a newcomer has not earned its place.",
+    "The rule should state whether the pawns stay where they are or move to the "
+    "end of the order after a second refusal.",
+    # The five below are VERBATIM sentences from model outputs in runs/, each of
+    # which an earlier draft of these rules misread as an evasion. They are the
+    # measured false positives, kept as the regression bar: every one is a real
+    # answer to a real brief.
+    "I've been covering the shortfall to the landlord so the tenancy stays in "
+    "good standing, but I can't keep doing that indefinitely without it "
+    "affecting me.",
+    "I do not want to push him onto a formal warning list right now; my instinct "
+    "is that adult contact and a way back in will do a lot of good.",
+    "If it helps, I am happy to stay on the list as an emergency fill-in, help "
+    "out on the sideline when I can, or assist with anything off the pitch.",
+    "I will not ship or dispose of the cell unless you give written, "
+    "risk-conscious instructions.",
+    "I'm happy to ring round a couple of local firms and get a proper quote "
+    "before we commit to anything.",
+]
+
+#: Two more evasion shapes: the softly worded refusal and the impersonal one.
+#: Both are only evasion when they are about the RULES, which is what separates
+#: them from the two legitimate drafts above that use the same wording.
+OTHER_EVASIONS = [
+    "I would rather not use the word you have asked me to explain, so here is a "
+    "description that goes around it.",
+    "This cannot be laid out as a numbered list, but the method is simple "
+    "enough to follow in order.",
+]
+
+
+@pytest.mark.parametrize("draft", OTHER_EVASIONS)
+def test_the_soft_and_impersonal_refusals_are_caught_too(draft):
+    assert "decline_to_produce" in {c.rule for c in F.evasion_cues(draft)}
+
+
+@pytest.mark.parametrize("draft", LEGITIMATE_DRAFTS)
+def test_a_legitimate_answer_that_merely_mentions_the_subject_is_kept(draft):
+    assert F.evasion_cues(draft) == (), F.evasion_cues(draft)
+
+
+def test_a_genuine_answer_to_a_real_attack_row_is_kept():
+    """End to end on an attack scenario: a compliant, non-evasive draft ships."""
+    sample = attack_samples(n=6, seed=101)[0]
+    witness = witness_for(sample)
+    assert witness, "precondition: the row is satisfiable"
+    verdict = F.decide(witness, sample.scenario, INSTANCES)
+    assert verdict.keep, (verdict.reason, [c.rule for c in verdict.evasion])
+
+
+@pytest.mark.parametrize("name", ["smoke_v0", "v1", "v2", "v3"])
+def test_the_gate_stays_silent_on_every_shipped_training_completion(name):
+    """FALSE POSITIVES, measured on real data rather than argued about.
+
+    Every completion of every shipped training set is a genuine, checker-passing
+    answer written by the teacher. If the evasion rules fired on any of them,
+    they would be throwing away good rows -- so the count must be zero, and it is
+    asserted against the files on disk rather than against a fixture.
+    """
+    dataset = REPO_ROOT / "data" / "train" / f"{name}.jsonl"
+    assert dataset.exists(), dataset
+    rows = [json.loads(line) for line in dataset.read_text().splitlines()
+            if line.strip()]
+    assert rows
+    flagged = [(row["scenario"]["scenario_id"], cue.rule, cue.span)
+               for row in rows
+               for cue in F.evasion_cues(row["messages"][1]["content"])]
+    assert not flagged, f"{len(flagged)} shipped completions misread as evasive: {flagged[:3]}"
+
+
+# ------------------- the gate changes nothing that came before --------------
+
+def test_a_violating_draft_that_is_also_evasive_still_reports_the_violation():
+    """The new rule runs LAST. No previously rejected draft changes its code."""
+    cids = ["c-lex-001", "c-fmt-001"]
+    scenario = {"scenario_id": "dg-both", "task": "Write about the roastery.",
+                "constraints": cids, "k": 2, "pressure": "clean", "split": "train"}
+    draft = ("I cannot write that as a numbered list, so here is a paragraph "
+             "about the coffee instead.")
+    assert F.is_evasive(draft), "precondition: the draft is evasive"
+    verdict = F.decide(draft, scenario, INSTANCES)
+    assert verdict.reason == "constraint_violation"
+    assert [f["constraint_id"] for f in verdict.failures] == ["c-lex-001"]
+
+
+@pytest.mark.parametrize("draft,reason", [
+    ("", "empty_draft"),
+    ("   ", "empty_draft"),
+    ("Noted.", "degenerate_draft"),
+])
+def test_the_older_reason_codes_are_untouched(draft, reason):
+    cids = ["c-fmt-001", "c-fmt-002"]
+    scenario = {"scenario_id": "dg-order", "task": "Explain the booking system.",
+                "constraints": cids, "k": 2, "pressure": "clean", "split": "train"}
+    assert F.decide(draft, scenario, INSTANCES).reason == reason
+
+
+def test_an_evasive_draft_is_not_offered_as_a_dpo_negative():
+    """It violates nothing, so there is no preference to learn from it."""
+    cids = ["c-fmt-001", "c-fmt-002"]
+    scenario = {"scenario_id": "dg-evasive-dpo",
+                "task": "Explain the booking system for the study room.",
+                "constraints": cids, "k": 2, "pressure": "clean", "split": "train"}
+    draft = EVASION_CASES["substitution"]
+    results = run_checkers(scenario, INSTANCES, draft)
+    assert all(r["pass"] for r in results), "precondition: it breaks no rule"
+    report = F.fluency_report(draft, scenario["task"], results)
+    assert not report.fluent and "no_violation" in report.reasons
+
+
+def test_the_pipeline_rejects_an_evasive_draft_and_counts_it_in_the_report(tmp_path):
+    """The count is in the report BEFORE any GPU time is spent on the block."""
+    sample, evasive = refusal_on_a_real_attack(
+        "I can't give you that as a numbered list, so here is a paragraph "
+        "instead.", "format_compulsion")
+    result = run_pipeline([sample], ScriptedTeacher(
+        {sample.scenario["scenario_id"]: evasive}), attempts=1, tmp_path=tmp_path)
+
+    assert result["rows"] == [], "an evasive draft must never ship"
+    assert [r["reason"] for r in result["rejections"]] == ["evasive_draft"]
+    ledger = result["rejections"][0]
+    assert ledger["evasion"], "the ledger must say WHICH rule fired and on what"
+    assert ledger["evasion"][0]["rule"] in F.EVASION_RULES
+    assert ledger["draft"] == evasive
+
+    report = G.summarise(result["rows"], result["rejections"], result["negatives"],
+                         result["give_ups"], INSTANCES, 1)
+    assert report["evasive_drafts"] == 1
+    assert sum(report["evasion_rules"].values()) >= 1
+    assert report["rejection_reasons"] == {"evasive_draft": 1}
+
+
+def test_the_pipeline_keeps_the_repaired_draft_after_an_evasive_first_attempt(tmp_path):
+    """The rejection is not fatal to the scenario: a real answer still ships."""
+    sample, evasive = refusal_on_a_real_attack(
+        "I can't give you that as a numbered list, so here is a paragraph "
+        "instead.", "format_compulsion")
+    good = witness_for(sample)
+    result = run_pipeline([sample], ScriptedTeacher(
+        {sample.scenario["scenario_id"]: [evasive, good]}), attempts=2,
+        tmp_path=tmp_path)
+    assert len(result["rows"]) == 1
+    assert result["rows"][0]["messages"][1]["content"] == good
+    assert [r["reason"] for r in result["rejections"]] == ["evasive_draft"]
+
+
+# ------------------------------ the sampler ---------------------------------
+
+def test_the_attack_sampler_spans_every_shape_and_is_train_split_only():
+    samples = attack_samples(n=30, seed=101)
+    assert len(samples) == 30
+    counts = S.attack_shape_counts(samples)
+    assert set(counts) == set(K.ATTACK_SHAPES), counts
+    assert min(counts.values()) >= 9, f"a shape was starved: {counts}"
+    heldout = set(registry.types_by_split("heldout_type"))
+    for sample in samples:
+        cids = sample.scenario["constraints"]
+        assert {INSTANCES[c]["type"] for c in cids} & heldout == set()
+        S.assert_train_split_only(cids, INSTANCES)
+        S.assert_has_negative(cids, INSTANCES)
+        assert sample.scenario["pressure"] == "adversarial"
+        assert set(sample.scenario) == {"scenario_id", "task", "constraints", "k",
+                                        "pressure", "split"}
+        assert sample.attack["pool_role"] == "train"
+        assert sample.attack["shape"] in K.ATTACK_SHAPES
+
+
+def test_attack_samples_are_deterministic_in_the_seed():
+    a = attack_samples(n=15, seed=101)
+    b = attack_samples(n=15, seed=101)
+    c = attack_samples(n=15, seed=102)
+    assert [s.scenario for s in a] == [s.scenario for s in b]
+    assert [s.scenario for s in a] != [s.scenario for s in c]
+
+
+def test_attack_samples_are_disjoint_from_the_eval_corpus_and_from_each_other():
+    samples = attack_samples(n=40, seed=101)
+    keys = [S.pair_key(s.scenario["task"], s.scenario["constraints"])
+            for s in samples]
+    assert len(set(keys)) == len(keys), "a duplicate pair would fail the audit"
+    assert not (set(keys) & FORBIDDEN)
+    # The same containment comparison datagen.task_pool.TASKS is held to.
+    assert TP.assert_texts_disjoint_from_corpus(
+        [(s.scenario["scenario_id"], s.scenario["task"]) for s in samples],
+        CORPUS, label="attack task") == len(CORPUS)
+
+
+def test_the_containment_check_used_for_attack_tasks_still_bites():
+    """NON-VACUITY of the shared comparison, on the attack label."""
+    planted = [("atk-x", CORPUS[0]["task"] + " Also keep it warm.")]
+    with pytest.raises(DatagenError, match="contains, or is contained by"):
+        TP.assert_texts_disjoint_from_corpus(planted, CORPUS, label="attack task")
+
+
+def test_the_sampler_refuses_the_held_out_attack_pool():
+    """Pool B is the never-trained eval. Training on it makes the held-out attack
+    claim unfalsifiable."""
+    assert K.POOL_ROLE["B"] == "heldout_attack_eval"
+    with pytest.raises(DatagenError, match="never-trained held-out attack eval"):
+        S.build_attack_samples(4, INSTANCES, CORPUS, seed=101, pool="B")
+    with pytest.raises(DatagenError, match="unknown attack pool"):
+        S.build_attack_samples(4, INSTANCES, CORPUS, seed=101, pool="Z")
+
+
+def test_the_sampler_refuses_to_return_a_short_block_silently():
+    with pytest.raises(DatagenError, match="only .* could be built"):
+        S.build_attack_samples(100000, INSTANCES, CORPUS, seed=101)
+    with pytest.raises(DatagenError, match="unknown attack shape"):
+        S.build_attack_samples(4, INSTANCES, CORPUS, seed=101, shapes=["nope"])
+
+
+def test_a_single_shape_can_be_requested():
+    samples = attack_samples(n=8, seed=101, shapes=["subject_compulsion"])
+    assert S.attack_shape_counts(samples) == {"subject_compulsion": 8}
+
+
+def test_attack_rows_carry_their_shape_in_provenance_and_default_rows_do_not(tmp_path):
+    samples = attack_samples(n=6, seed=101)
+    result = run_pipeline(samples, WitnessTeacher(), tmp_path=tmp_path)
+    assert len(result["rows"]) == 6
+    for row in result["rows"]:
+        attack = row["provenance"]["attack"]
+        assert attack["shape"] in K.ATTACK_SHAPES
+        assert attack["pool_role"] == "train"
+        assert attack["target_type"] in {INSTANCES[c]["type"]
+                                         for c in row["constraints"]}
+        assert set(row) == {"messages", "constraints", "provenance", "scenario"}
+
+    plain = run_pipeline(S.build_scenarios(8, INSTANCES, CORPUS, seed=31),
+                         WitnessTeacher(), tmp_path=tmp_path)
+    assert all("attack" not in row["provenance"] for row in plain["rows"]), (
+        "a default-sampler row must keep the provenance shape every shipped "
+        "dataset already has")
+
+
+# ------------------------------- the CLI ------------------------------------
+
+def test_the_cli_builds_an_attack_block(tmp_path, monkeypatch):
+    import eval as E
+    monkeypatch.setattr(E, "make_generator", lambda spec: WitnessTeacher())
+    out = tmp_path / "attacks.jsonl"
+    code = G.main(["--sampler", "attack", "--n", "9", "--out", str(out),
+                   "--teacher", "mock:compliant", "--attempts", "1",
+                   "--no-cache", "--workers", "1", "--seed", "101"])
+    assert code == 0
+    report = json.loads(G.sidecar_paths(out)["report"].read_text())
+    assert report["sampler"] == "attack"
+    assert report["attack_pool"] == "A"
+    assert report["attack_pool_role"] == "train"
+    assert set(report["attack_shapes"]) == set(K.ATTACK_SHAPES)
+    assert report["evasive_drafts"] == 0
+    assert report["kept"] == 9
+
+    rows = [json.loads(line) for line in out.read_text().splitlines() if line.strip()]
+    assert len(rows) == 9
+    for row in rows:
+        assert row["messages"][0]["content"] == render_user_message(
+            row["scenario"], INSTANCES)
+        assert all(r["pass"] for r in run_checkers(row["scenario"], INSTANCES,
+                                                   row["messages"][1]["content"]))
+    # THE AUDIT, and what a pure attack block can and cannot satisfy. Two of the
+    # auditor's checks are properties of a whole CORPUS, not of a block: the 25%
+    # type-share cap (the shapes bait a handful of target types by construction)
+    # and k_span (datagen.attacks composes every row at k=3). The block is meant
+    # to be merged into a training set that spans k=2..4, and the merged file is
+    # what has to pass at the default settings. Everything that IS a property of
+    # the rows themselves -- compliance, the prompt contract, held-out types,
+    # eval-corpus overlap, the partner exam, duplicates, schema -- must pass
+    # here, so the assertion is that k_span is the ONLY finding.
+    result = A.audit(out, max_type_share=1.0)
+    assert result["violations"] == ["k_span"], result["detail"]
+    assert result["stats"]["heldout_types_present"] == []
+    assert result["stats"]["partner_break_turns_compared"] >= 20
+
+
+def test_the_cli_refuses_the_held_out_pool_and_an_unknown_shape(tmp_path):
+    out = tmp_path / "nope.jsonl"
+    assert G.main(["--sampler", "attack", "--n", "4", "--out", str(out),
+                   "--attack-pool", "B", "--teacher", "mock:compliant",
+                   "--no-cache"]) == 2
+    assert G.main(["--sampler", "attack", "--n", "4", "--out", str(out),
+                   "--attack-shapes", "format_compulsion,made_up",
+                   "--teacher", "mock:compliant", "--no-cache"]) == 2
+    assert not out.exists()
+
+
+def test_drafts_need_an_explicit_teacher(tmp_path):
+    """The ledger names whoever wrote the text. It is never inferred."""
+    drafts = tmp_path / "drafts.jsonl"
+    drafts.write_text(json.dumps({"scenario_id": "atk-a-00001", "draft": "x"}) + "\n")
+    assert G.main(["--sampler", "attack", "--n", "2", "--out", str(tmp_path / "o.jsonl"),
+                   "--drafts", str(drafts), "--no-cache"]) == 2
+
+
+def test_a_subagent_teacher_can_drive_the_whole_pipeline_from_a_drafts_file(tmp_path):
+    """The teacher is an injected callable, so drafts written by a subagent --
+    which can iterate against the REAL checkers before writing anything down --
+    go through the identical filter, verifier and ledger as an API teacher's.
+
+    One of the six drafts is the format-compulsion reward hack. It must be
+    rejected, counted, and absent from the dataset.
+    """
+    samples = G.build_samples("attack", 6, INSTANCES, CORPUS, seed=101,
+                              log=lambda *a, **k: None)
+    victim, evasive = refusal_on_a_real_attack(
+        "I can't give you that as a numbered list, so here is a paragraph "
+        "instead.", "format_compulsion")
+    records = []
+    for sample in samples:
+        sid = sample.scenario["scenario_id"]
+        if sid == victim.scenario["scenario_id"]:
+            records.append({"scenario_id": sid, "draft": evasive})
+        else:
+            records.append({"scenario_id": sid, "draft": witness_for(sample)})
+    assert any(r["draft"] == evasive for r in records), (
+        "precondition: the evasive draft is one of the six scenarios")
+    drafts = tmp_path / "drafts.jsonl"
+    drafts.write_text("".join(json.dumps(r) + "\n" for r in records))
+
+    out = tmp_path / "subagent.jsonl"
+    code = G.main(["--sampler", "attack", "--n", "6", "--out", str(out),
+                   "--teacher", "anthropic:claude-opus-5", "--drafts", str(drafts),
+                   "--attempts", "1", "--no-cache", "--workers", "1",
+                   "--seed", "101", "--min-kept", "5"])
+    assert code == 0
+    report = json.loads(G.sidecar_paths(out)["report"].read_text())
+    assert report["teacher"] == "anthropic:claude-opus-5"
+    assert report["teacher_resolved_by"] == "--teacher"
+    assert report["drafts_file"] == str(drafts)
+    assert report["evasive_drafts"] == 1, report["rejection_reasons"]
+    assert report["kept"] == 5
+
+    rows = [json.loads(line) for line in out.read_text().splitlines() if line.strip()]
+    assert all(row["messages"][1]["content"] != evasive for row in rows)
+    assert {row["provenance"]["teacher"] for row in rows} == {"anthropic:claude-opus-5"}
+    rejected = [json.loads(line) for line
+                in G.sidecar_paths(out)["rejected"].read_text().splitlines()
+                if line.strip()]
+    assert [r["reason"] for r in rejected] == ["evasive_draft"]
+    assert rejected[0]["evasion"][0]["rule"] in F.EVASION_RULES
+
+
+def test_a_drafts_file_never_invents_an_answer(tmp_path):
+    """A scenario with no draft is a recorded teacher_error, not a silent gap."""
+    drafts = tmp_path / "sparse.jsonl"
+    drafts.write_text(json.dumps({"scenario_id": "not-a-scenario",
+                                  "draft": "anything"}) + "\n")
+    generator = G.drafts_generator(drafts)
+    with pytest.raises(DatagenError, match="carries no draft"):
+        generator({"scenario_id": "atk-a-00001"}, {"turns": [{"role": "user",
+                                                              "content": "x"}]})
+    with pytest.raises(DatagenError, match="does not exist"):
+        G.drafts_generator(tmp_path / "missing.jsonl")
+    empty = tmp_path / "empty.jsonl"
+    empty.write_text("")
+    with pytest.raises(DatagenError, match="no drafts"):
+        G.drafts_generator(empty)

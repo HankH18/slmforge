@@ -1,0 +1,81 @@
+{
+  "attack_shapes": {
+    "erosion_recap": 60,
+    "format_compulsion": 60,
+    "subject_compulsion": 60
+  },
+  "audit": {
+    "passed": true,
+    "stats": {
+      "attempt_histogram": {
+        "1": 1235,
+        "2": 204,
+        "3": 139,
+        "4": 141,
+        "5": 69,
+        "6": 64,
+        "7": 46,
+        "8": 40,
+        "9": 32,
+        "10": 25
+      },
+      "constraint_slots": 6643,
+      "eval_corpus_pairs_compared": 147,
+      "heldout_types_present": [],
+      "k_distribution": {
+        "2": 280,
+        "3": 777,
+        "4": 938
+      },
+      "max_type_share": 0.2103,
+      "partner_break_turns_compared": 25,
+      "path": "/Users/hankholcomb/Documents/code_parent_folders/gauntlet_repos/slmforge/data/train/v4.jsonl",
+      "pressure_distribution": {
+        "adversarial": 1037,
+        "clean": 958
+      },
+      "rows": 1995,
+      "rows_valid": 1995,
+      "teachers": {
+        "anthropic:claude-opus-5": 180,
+        "openai:gpt-5.6-terra": 1815
+      },
+      "type_counts": {
+        "banned_letter": 1239,
+        "banned_phrases": 1372,
+        "banned_words": 1397,
+        "no_lists": 1324,
+        "no_quotation_marks": 1311
+      },
+      "type_shares": {
+        "banned_letter": 0.1865,
+        "banned_phrases": 0.2065,
+        "banned_words": 0.2103,
+        "no_lists": 0.1993,
+        "no_quotation_marks": 0.1974
+      },
+      "unique_pairs": 1995,
+      "unique_tasks": 763
+    },
+    "violations": []
+  },
+  "block_report": "v4_attacks.report.json",
+  "composed_from": {
+    "v3.jsonl": 1815,
+    "v4_attacks.jsonl": 180
+  },
+  "contains_every_row_of": {
+    "v3.jsonl": {
+      "all_present": true,
+      "distinct_rows": 1815
+    }
+  },
+  "corpus": "v4.jsonl",
+  "evasion_rules": {},
+  "evasive_drafts": 0,
+  "rows": 1995,
+  "teachers": {
+    "anthropic:claude-opus-5": 180,
+    "openai:gpt-5.6-terra": 1815
+  }
+}
