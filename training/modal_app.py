@@ -121,6 +121,64 @@ CONFIG_PATH = REPO_ROOT / "configs" / "train.json"
 REMOTE_VOL = "/vol"            # where the artifacts Volume is mounted
 REMOTE_HF_CACHE = "/root/.cache/huggingface"
 
+
+# --------------------------------------------------- host: Modal, or not Modal
+# Modal became unavailable (both workspaces over their spend limit) after the
+# curve checkpoints were trained by THIS function body. The retrain has to run
+# the SAME body on a rented CUDA pod or the recipe is no longer held constant
+# and the curve compares two different trainers.
+#
+# `modal.Function` exposes `.local()`, which executes this body in-process with
+# no control plane, so the body is REUSED rather than reimplemented -- see
+# training/pod_train.py. What that requires is that the body stop hardcoding the
+# two container-only paths. It does not require a second trainer, and there is
+# deliberately not one.
+#
+# Every helper below is a NO-OP on Modal by construction: inside the container
+# REPO_ROOT already IS Path(REMOTE_REPO) (line above) and running_on_modal() is
+# True, so each returns exactly the literal it replaced.
+def running_on_modal() -> bool:
+    """True only inside a Modal container.
+
+    modal.is_local() is the library's own answer and is checked first; the
+    mounted-slice test is the same predicate REPO_ROOT is resolved with, kept as
+    a fallback so this cannot disagree with REPO_ROOT if the client changes.
+    """
+    try:
+        return not modal.is_local()
+    except Exception:  # noqa: BLE001 -- an unusable client is not "on Modal"
+        return (Path(REMOTE_REPO) / "configs").is_dir()
+
+
+def artifact_root() -> Path:
+    """The directory run directories are created under.
+
+    On Modal that is the mounted Volume, the only writable namespace a container
+    has. Off Modal there is no Volume, and a run directory is an ordinary repo
+    path: runs/<run_name>/, which is where every eval and every report in this
+    repo already looks for a checkpoint.
+    """
+    return Path(REMOTE_VOL) if running_on_modal() else (REPO_ROOT / "runs")
+
+
+def artifact_ref(run_name: str, dirname: str) -> str:
+    """The string recorded in train_log.artifacts.{adapter,merged_fp16}.
+
+    This is not cosmetic. scripts/check_loop.py leg 4 canonicalizes an eval's
+    `model` spec and compares it to these references as a WHOLE string, never a
+    substring (_canon_ref / checkpoint_identities). On Modal the only namespace
+    available is the Volume's, so the reference is Volume-relative -- "v2/merged"
+    -- and an eval that necessarily names a real path, "hf:runs/train_v2/merged",
+    canonicalizes to "runs/train_v2/merged" and can NEVER equal it. Leg 4 was
+    unpassable for every Modal-trained checkpoint for that reason alone.
+
+    Off Modal the run directory is a real repo path, so the reference is the
+    repo-relative path and the two sides can actually match.
+    """
+    if running_on_modal():
+        return f"{run_name}/{dirname}"
+    return (artifact_root() / run_name / dirname).relative_to(REPO_ROOT).as_posix()
+
 # Qwen3's vocabulary is 151936 tokens, and the loss materialises a
 # [batch, seq, vocab] logits tensor plus an fp32 upcast of it inside
 # cross_entropy. At the PINNED per_device_train_batch_size of 8 that term, not
@@ -775,9 +833,12 @@ def train(smoke: bool, dataset_path: str, run_name: str,
     from transformers import (AutoModelForCausalLM, AutoTokenizer,
                               BitsAndBytesConfig, Trainer, TrainingArguments)
 
-    sys.path.insert(0, REMOTE_REPO)
+    # REPO_ROOT, not REMOTE_REPO: identical inside a Modal container (where
+    # REPO_ROOT *is* Path(REMOTE_REPO)) and correct on a pod, where /repo does
+    # not exist. This is what lets pod_train.py reuse this body verbatim.
+    sys.path.insert(0, str(REPO_ROOT))
 
-    cfg = load_config(Path(REMOTE_REPO) / "configs" / "train.json")
+    cfg = load_config(REPO_ROOT / "configs" / "train.json")
     resolved = apply_micro_batch_split(resolve_config(cfg, smoke), micro_batch)
     tcfg = resolved["training"]
     lcfg = resolved["lora"]
@@ -786,7 +847,7 @@ def train(smoke: bool, dataset_path: str, run_name: str,
     ocfg = resolved["output"]
 
     # ---- dataset -------------------------------------------------------------
-    ds_file = Path(REMOTE_REPO) / dataset_path
+    ds_file = REPO_ROOT / dataset_path
     if not ds_file.exists():
         raise FileNotFoundError(
             f"training dataset {dataset_path!r} not found at {ds_file} -- the "
@@ -801,8 +862,8 @@ def train(smoke: bool, dataset_path: str, run_name: str,
     render_fn = resolve_render_fn(render_fn_dotted)
     scenarios_path = dcfg.get("scenarios_path")
     constraints_path = dcfg.get("constraints_path")
-    scenario_corpus = load_side_corpus(REMOTE_REPO, scenarios_path, "scenario_id")
-    constraint_corpus = load_side_corpus(REMOTE_REPO, constraints_path, "id")
+    scenario_corpus = load_side_corpus(REPO_ROOT, scenarios_path, "scenario_id")
+    constraint_corpus = load_side_corpus(REPO_ROOT, constraints_path, "id")
     verify_prompt_contract(rows, render_fn, scenario_corpus=scenario_corpus,
                            constraint_corpus=constraint_corpus)
 
@@ -930,7 +991,7 @@ def train(smoke: bool, dataset_path: str, run_name: str,
         pad_id = tokenizer.eos_token_id
     transformers.set_seed(tcfg["seed"])
 
-    out_root = Path(REMOTE_VOL) / run_name
+    out_root = artifact_root() / run_name
     args_kwargs = dict(
         output_dir=str(out_root / "hf_trainer"),
         per_device_train_batch_size=tcfg["per_device_train_batch_size"],
@@ -1053,9 +1114,9 @@ def train(smoke: bool, dataset_path: str, run_name: str,
         steps=int(trainer.state.global_step),
         loss_history=loss_history,
         wall_clock_seconds=time.time() - t_zero,
-        adapter_path=f"{run_name}/{ocfg['adapter_dirname']}",
+        adapter_path=artifact_ref(run_name, ocfg["adapter_dirname"]),
         adapter_bytes=adapter_bytes,
-        merged_path=f"{run_name}/{ocfg['merged_dirname']}",
+        merged_path=artifact_ref(run_name, ocfg["merged_dirname"]),
         merged_bytes=merged_bytes,
         started_utc=started_utc,
         finished_utc=finished_utc,
@@ -1063,7 +1124,11 @@ def train(smoke: bool, dataset_path: str, run_name: str,
 
     (out_root / ocfg["train_log_filename"]).write_text(
         json.dumps(train_log, indent=2))
-    artifacts_vol.commit()
+    # Committing a Volume is a control-plane call. Off Modal there is no Volume
+    # and no auth to make it with, and the run directory is already a durable
+    # path on the pod's disk -- so the commit is exactly the no-op it looks like.
+    if running_on_modal():
+        artifacts_vol.commit()
 
     def _version(mod_name):
         # bitsandbytes in particular can fail to import when the CUDA runtime is
@@ -1113,11 +1178,17 @@ def train(smoke: bool, dataset_path: str, run_name: str,
                                  "bnb_4bit_use_double_quant": True,
                                  "bnb_4bit_compute_dtype": str(compute_dtype)},
                 "gradient_checkpointing": bool(use_gc)},
+        # A manifest that tells a grader to `modal volume get` weights that were
+        # never in a Volume is a false instruction in an evidence artifact, so
+        # off Modal this says where they actually are instead.
+        "host": "modal" if running_on_modal() else "local_cuda_host",
         "pull_commands": [
             f"modal volume get {ocfg['modal_volume']} "
             f"{run_name}/{ocfg['merged_dirname']} <local-dir>",
             f"modal volume get {ocfg['modal_volume']} "
             f"{run_name}/{ocfg['adapter_dirname']} <local-dir>",
+        ] if running_on_modal() else [
+            f"# already on this host at {out_root} (no Volume involved)",
         ],
         "train_log": train_log,
     }
