@@ -577,3 +577,47 @@ def run_driver(pod, app_mod, tripwires, monkeypatch, tmp_path):
 
     for path in made:
         shutil.rmtree(path, ignore_errors=True)
+
+
+# ------------------------------------------------------- the two false positives
+#
+# The first real pod smoke reported SIX stack divergences on a host where every
+# package WAS at its pinned version. Under RETRAIN_PREREGISTRATION section 6 a
+# non-empty divergence list disqualifies the checkpoint from the efficiency
+# curve, so a false one is not cosmetic -- it would have thrown away a valid run.
+# Both causes are pinned here.
+
+def test_a_cuda_local_version_is_the_pinned_release_not_a_divergence(pod):
+    """`pip install torch==2.12.1` on a CUDA 13 host resolves to 2.12.1+cu130.
+
+    That is the pinned release built for this host's CUDA. Reporting it as drift
+    is what the first smoke did.
+    """
+    diffs = pod.stack_divergence(pod.observed_stack({"torch": "2.12.1+cu130"}))
+    assert not [d for d in diffs if d.startswith("torch:")], diffs
+
+
+def test_a_real_torch_drift_is_still_caught_through_the_same_path(pod):
+    """The normalisation must not swallow an actual different release."""
+    diffs = pod.stack_divergence(pod.observed_stack({"torch": "2.13.0"}))
+    assert any(d.startswith("torch: pinned 2.12.1, host has 2.13.0") for d in diffs), diffs
+
+
+def test_a_pin_the_trainer_does_not_probe_is_filled_not_reported_absent(pod):
+    """The body records ~5 packages; the pin list has 10.
+
+    Comparing ten pins against a five-key env produced five bogus
+    "host reports nothing" lines. The uncovered pins come from installed
+    metadata instead -- same host, different way of asking.
+    """
+    merged = pod.observed_stack({"torch": "2.12.1"})
+    # every pinned package is now accounted for, one way or the other
+    assert set(pod.pinned_stack()) <= set(merged)
+    assert merged["torch"] == "2.12.1", "an env value must never be overridden"
+
+
+def test_env_wins_over_installed_metadata(pod):
+    """env is what ran; metadata is only the fallback. If they disagree, the
+    measurement from inside the training process is the one that counts."""
+    merged = pod.observed_stack({"torch": "9.9.9"})
+    assert merged["torch"] == "9.9.9"

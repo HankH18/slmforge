@@ -293,9 +293,37 @@ def stack_divergence(observed: dict) -> list:
         got = observed.get(name)
         if got in (None, "", "unknown"):
             diffs.append(f"{name}: pinned {want}, host reports nothing")
-        elif str(got) != want:
+        elif _release(got) != _release(want):
             diffs.append(f"{name}: pinned {want}, host has {got}")
     return diffs
+
+
+def _release(version: str) -> str:
+    """A PEP 440 version without its LOCAL segment.
+
+    `pip install torch==2.12.1` on a CUDA 13 host resolves to `2.12.1+cu130`.
+    That is the pinned release built for this host's CUDA, not a different
+    release, and reporting it as a divergence would wrongly disqualify the run
+    from the curve. Everything before the `+` still has to match exactly, so a
+    real drift -- 2.13.0, or transformers 5.x -- is still caught.
+    """
+    return str(version).partition("+")[0].strip()
+
+
+def observed_stack(env: dict) -> dict:
+    """Versions for the host that ran, preferring what the trainer body measured.
+
+    ``env`` is authoritative: the trainer recorded it inside the process that did
+    the training, and it is the seam the tests drive to simulate a wrong host.
+    It covers only the handful of packages the body probes, so the remaining pins
+    are filled from this interpreter's installed metadata -- the same host, just a
+    different way of asking. A key present in ``env`` is never overridden.
+    """
+    merged = dict(installed_versions())
+    for name, got in (env or {}).items():
+        if got not in (None, "", "unknown"):
+            merged[name] = got
+    return merged
 
 
 def installed_versions() -> dict:
@@ -341,7 +369,14 @@ def host_evidence(manifest: dict) -> dict:
         # Measured on the host that ran, compared to the pins the Modal image
         # used. Empty is the only value consistent with "only the host changed".
         "pinned_stack": pinned_stack(),
-        "stack_divergence": stack_divergence(env),
+        # env FIRST -- it is what the trainer body measured on the machine that
+        # actually ran, and it is what the tests drive to simulate a wrong host.
+        # installed_versions() only FILLS THE GAPS: the body records about five
+        # packages, so comparing the ten pins against env alone reported five
+        # "host reports nothing" divergences on a pod where every package WAS at
+        # its pinned version. A false divergence is not cosmetic -- it disqualifies
+        # the run from the curve under RETRAIN_PREREGISTRATION 6.
+        "stack_divergence": stack_divergence(observed_stack(env)),
     }
     for key in ("gpu", "peak_vram_bytes", "compute_dtype_4bit"):
         if ev[key] in (None, "", 0):
