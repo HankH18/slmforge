@@ -23,7 +23,7 @@ satisfy V6.
 `~/opt/anaconda3/bin/python`, and that interpreter has no `torch`:
 
 ```
-$ /Users/hankholcomb/opt/anaconda3/bin/python -c "import torch"
+$ ~/opt/anaconda3/bin/python -c "import torch"
 ModuleNotFoundError: No module named 'torch'
 ```
 

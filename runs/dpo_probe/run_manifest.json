@@ -25,9 +25,9 @@
     ],
     "scenario_source": {
       "mode": "sibling_manifest",
-      "manifest": "/Users/hankholcomb/Documents/code_parent_folders/gauntlet_repos/slmforge/data/train/v3.dpo_pairs.manifest.json",
+      "manifest": "data/train/v3.dpo_pairs.manifest.json",
       "paths": [
-        "/Users/hankholcomb/Documents/code_parent_folders/gauntlet_repos/slmforge/data/train/v3.dpo_negatives.jsonl"
+        "data/train/v3.dpo_negatives.jsonl"
       ],
       "declared_sha256": "7d02d7af238309e213a6d13de6cb2fac2999db82888bdf01b16f08a74efee3e7",
       "actual_sha256": "7d02d7af238309e213a6d13de6cb2fac2999db82888bdf01b16f08a74efee3e7"
@@ -109,5 +109,5 @@
     "quantization": null,
     "_quantization_note": "no 4-bit: bitsandbytes has no MPS build. The SFT recipe's load_in_4bit and adamw_8bit are CUDA-only and are NOT reproduced here."
   },
-  "eval_command": ".venv/bin/python eval.py --model /Users/hankholcomb/Documents/code_parent_folders/gauntlet_repos/slmforge/runs/dpo_probe/merged --eval-set data/scenarios/corpus.jsonl"
+  "eval_command": ".venv/bin/python eval.py --model runs/dpo_probe/merged --eval-set data/scenarios/corpus.jsonl"
 }

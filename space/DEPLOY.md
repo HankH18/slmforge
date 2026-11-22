@@ -3,8 +3,8 @@
 Target: a **public** Gradio Space that runs a grader-supplied prompt against the
 pinned base and tuned models live and prints the pinned checkers' verdicts.
 
-Every command below has been run from this machine. Four of them ran only as far
-as argument parsing, and are marked where they appear:
+Every command below has been run from this machine. Four of them at first ran
+only as far as argument parsing, and are marked where they appear:
 
 * the three formerly marked NOT RUN — creating the Space, uploading to it, and
   reading a live Space back — **have now all been run for real** (2026-08-23).
@@ -277,12 +277,13 @@ flag any file left behind on the Hub that the new build does not produce.
 because it is the most likely way a correct upload still fails to boot.
 `README.md`'s front matter names `5.49.1`. That release **exists**:
 `GET https://pypi.org/pypi/gradio/5.49.1/json` returns `200` with
-`version: 5.49.1`, `requires_python: >=3.10`. What is **not** verified is that
-the Hub's Space builder accepts it as an `sdk_version` — that list is the Hub's,
-not PyPI's, no Space was created from this machine, and Gradio is deliberately
-not installed here. If the build log rejects it, it names the versions it does
-accept: put one of those in `README.md` line 7 and re-upload. Nothing else
-changes; the whole Space is one YAML line away from working in that case.
+`version: 5.49.1`, `requires_python: >=3.10`. The list of `sdk_version` values
+the Hub's Space builder accepts is the Hub's, not PyPI's; the 2026-08-23 deploy
+carried this front matter, and step 5's read-back reported stage `RUNNING`.
+Gradio is deliberately not installed here. If the build log rejects it, it
+names the versions it does accept: put one of those in `README.md` line 7 and
+re-upload. Nothing else changes; the whole Space is one YAML line away from
+working in that case.
 
 **Build succeeds, page 500s on load.** Almost always `_repo.RepoRootNotFound` —
 `pins/` did not upload completely. Check the Space's Files tab against
@@ -310,14 +311,10 @@ resident.
   `gr.Textbox(show_copy_button=True)`, or `elem_id=` on every output component,
   or `(label, value)` choice tuples in `gr.Dropdown`, or that a generator `fn`
   streams as intended. First boot is the first real test of that.
-* **`sdk_version: 5.49.1`.** The release exists on PyPI (checked: HTTP `200`).
-  Whether the Hub's Space builder accepts that exact string is not checked;
-  see the first troubleshooting entry.
 * **The real models.** Every local check uses a stub generator. The
   model-loading seam is `scripts/demo.py:generate` → `eval.make_generator`, the
   same path `scripts/demo.py` and `eval.py` use, but no weight has been loaded by
   anything in `space/`.
-* **The push and the live read-back.** Steps 3, 4 and 5's success path.
 * **Latency.** The figure in the UI is labelled an estimate and is not a
   measurement on Space hardware. The app prints its own real elapsed seconds per
   model, which replaces the estimate the first time anyone presses Run.

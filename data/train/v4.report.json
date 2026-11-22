@@ -29,7 +29,7 @@
       },
       "max_type_share": 0.2103,
       "partner_break_turns_compared": 25,
-      "path": "/Users/hankholcomb/Documents/code_parent_folders/gauntlet_repos/slmforge/data/train/v4.jsonl",
+      "path": "data/train/v4.jsonl",
       "pressure_distribution": {
         "adversarial": 1037,
         "clean": 958

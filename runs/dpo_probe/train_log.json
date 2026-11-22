@@ -1,6 +1,6 @@
 {
   "base_model": {
-    "repo": "/Users/hankholcomb/Documents/code_parent_folders/gauntlet_repos/slmforge/runs/train_v2/merged",
+    "repo": "runs/train_v2/merged",
     "revision": "7c5e3e25cf09cc4d7ae700d7a6abd0a53fc47db3940b90e3a4300a74c707e800",
     "revision_kind": "sha256_of_local_checkpoint_content",
     "_note": "The base of this DPO run is the SFT checkpoint on disk, not a Hub commit. configs/models.json:tuned names the published checkpoint the orchestrator states these weights match; this log does NOT verify that claim, it records the local digest."
@@ -70,7 +70,7 @@
     "_run_name": "dpo_probe"
   },
   "dataset": {
-    "path": "/Users/hankholcomb/Documents/code_parent_folders/gauntlet_repos/slmforge/data/train/v3.dpo_pairs.jsonl",
+    "path": "data/train/v3.dpo_pairs.jsonl",
     "rows": 8,
     "sha256": "f13d6821d3a453694806424981204929df07af191f64ea9916890641d83d6efe"
   },
@@ -135,9 +135,9 @@
       ],
       "scenario_source": {
         "mode": "sibling_manifest",
-        "manifest": "/Users/hankholcomb/Documents/code_parent_folders/gauntlet_repos/slmforge/data/train/v3.dpo_pairs.manifest.json",
+        "manifest": "data/train/v3.dpo_pairs.manifest.json",
         "paths": [
-          "/Users/hankholcomb/Documents/code_parent_folders/gauntlet_repos/slmforge/data/train/v3.dpo_negatives.jsonl"
+          "data/train/v3.dpo_negatives.jsonl"
         ],
         "declared_sha256": "7d02d7af238309e213a6d13de6cb2fac2999db82888bdf01b16f08a74efee3e7",
         "actual_sha256": "7d02d7af238309e213a6d13de6cb2fac2999db82888bdf01b16f08a74efee3e7"
