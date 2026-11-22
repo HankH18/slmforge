@@ -12,9 +12,17 @@ stored in `runs/breaks/*.json` — no stored verdict is read — and
 unless the block regenerates byte-identically. Editing a digit here fails the
 check rather than changing the claim.
 
-> **Status: BEFORE measured, AFTER pending.** The v4 corpus is being generated and
-> no retrained checkpoint exists yet. The `after` column appears here when it does,
-> produced by the same script against the same frozen exam.
+> **Status: BEFORE and AFTER measured; the `after` column is not in the table below yet.**
+> AFTER was measured on 2026-08-24 (UTC) against the retrained checkpoint, which the
+> run files record as `hf:runs/train_v4/merged` (not pinned in `configs/models.json`).
+> The three AFTER runs are `runs/breaks/after.json` (this exam, same sha256 as `before`),
+> `runs/final_v4_checkeronly/` (the 147-row corpus) and `runs/attacks_heldout_v4/`
+> (`data/eval/attacks_heldout.jsonl`). The corpus and attack-set runs were scored
+> with the stand-in quality judge `mock:4` (a fixed score of 4), not a real judge,
+> so their `spec_adherence` reflects the checkers alone.
+> `scripts/score_preregistration.py` grades the
+> [`RETRAIN_PREREGISTRATION.md`](RETRAIN_PREREGISTRATION.md) §2 predictions from
+> `runs/final_v4_checkeronly/` and `runs/breaks/after.json`.
 
 ## What was received
 

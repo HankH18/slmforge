@@ -32,7 +32,7 @@ positional argument and lands in `PATH_IN_REPO`'s slot.
 ## 0. Prerequisites
 
 ```bash
-cd /Users/hankholcomb/Documents/code_parent_folders/gauntlet_repos/slmforge
+cd <path-to-your-slmforge-checkout>
 set -a && . ./.env && set +a
 .venv/bin/hf auth whoami
 ```

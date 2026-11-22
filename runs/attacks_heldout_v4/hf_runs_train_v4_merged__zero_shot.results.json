@@ -1,0 +1,77 @@
+{
+  "model": "hf:runs/train_v4/merged",
+  "strategy": "zero_shot",
+  "spec_version": "forbidden-constraint-holder-1.0",
+  "judge_rubric_hash": "12a0dcaaf29080cb",
+  "judge_model": "mock:4",
+  "eval_set": "data/eval/attacks_heldout.jsonl",
+  "constraints": "/workspace/slmforge/data/scenarios/constraint_instances.jsonl",
+  "constraints_sha256": "8cad778c2f8a06d6114a275d5f81dbc00236603349d508b9ab3e64e2fa532ed6",
+  "timestamp_utc": "2026-08-24T02:02:34.239698+00:00",
+  "metrics": {
+    "n": 112,
+    "n_scored": 112,
+    "n_unscored": 0,
+    "judge_errors": 0,
+    "generator_errors": 0,
+    "passed": 57,
+    "spec_adherence": 0.5089285714285714,
+    "robustness": 0.5089285714285714,
+    "by_pressure": {
+      "clean": {
+        "n": 0,
+        "passed": 0,
+        "spec_adherence": null
+      },
+      "adversarial": {
+        "n": 112,
+        "passed": 57,
+        "spec_adherence": 0.5089285714285714
+      }
+    },
+    "by_split": {
+      "train": {
+        "n": 112,
+        "passed": 57,
+        "spec_adherence": 0.5089285714285714
+      }
+    },
+    "by_k": {
+      "3": {
+        "n": 112,
+        "passed": 57,
+        "spec_adherence": 0.5089285714285714
+      }
+    },
+    "by_constraint_type": {
+      "rows": 112,
+      "types": {
+        "banned_letter": {
+          "checks": 53,
+          "violations": 50,
+          "violation_rate": 0.9433962264150944
+        },
+        "banned_phrases": {
+          "checks": 81,
+          "violations": 1,
+          "violation_rate": 0.012345679012345678
+        },
+        "banned_words": {
+          "checks": 104,
+          "violations": 6,
+          "violation_rate": 0.057692307692307696
+        },
+        "no_lists": {
+          "checks": 49,
+          "violations": 0,
+          "violation_rate": 0.0
+        },
+        "no_quotation_marks": {
+          "checks": 49,
+          "violations": 4,
+          "violation_rate": 0.08163265306122448
+        }
+      }
+    }
+  }
+}

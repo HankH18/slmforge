@@ -1,7 +1,12 @@
 # Forbidden-Constraint Holder
 
-Instilling one falsifiable behavior into a small open model (Qwen3-1.7B) and
-proving with numbers that the tuned model beats the prompted base model at it.
+A QLoRA fine-tune of Qwen3-1.7B that tries to hold hard negative writing constraints (banned words, banned letters, no commas, no lists) while still doing the task. Scored by deterministic checkers plus a quality judge from a separate model family.
+
+- **Prompting plateaus:** the best frontier cell (gpt-5.6-sol, zero-shot) reaches 0.78 spec-adherence on 147 scenarios; every checker failure in that cell is a banned-letter leak ([`docs/ABLATION_G1.md`](docs/ABLATION_G1.md)).
+- **Fine-tuning moved the behavior, not the pass rate:** banned-letter occurrences fell from a median of 34 to 14 per response (sign test p ≈ 1e-13). Pass/fail is a tie with base (0.082 vs 0.089, McNemar p = 1.0): trained constraint types improved and never-trained types got worse ([`docs/BRAINLIFT.md`](docs/BRAINLIFT.md) §7).
+- **Artifacts:** [model](https://huggingface.co/HankH18/qwen3-1.7b-forbidden-constraint-holder) · [dataset](https://huggingface.co/datasets/HankH18/forbidden-constraint-holder-sft)
+- **Run it locally:** the eval and repro commands are under `## Start here` below; the Gradio demo app source is in `space/`.
+- **Stack:** Python 3.11, Hugging Face transformers + PEFT (QLoRA), Modal (A10G), Gradio, pytest.
 
 ## Start here
 
@@ -24,7 +29,10 @@ Published artifacts, both public and both pinned by commit hash in
 |---|---|
 | Model | [`HankH18/qwen3-1.7b-forbidden-constraint-holder`](https://huggingface.co/HankH18/qwen3-1.7b-forbidden-constraint-holder) — merged fp16 at the repo root, LoRA adapter under `adapter/` |
 | Dataset | [`HankH18/forbidden-constraint-holder-sft`](https://huggingface.co/datasets/HankH18/forbidden-constraint-holder-sft) — the training rows, **plus every rejected teacher attempt** and the generation ledger |
-| Demo | [`HankH18/forbidden-constraint-holder`](https://huggingface.co/spaces/HankH18/forbidden-constraint-holder) — a public Gradio Space running base vs tuned on a visitor's own prompt, scored by the pinned checkers. Runs on `cpu-basic`, so a generation takes minutes, not seconds |
+
+The demo is a Gradio app in `space/` that runs base vs tuned on a visitor's own
+prompt and scores both outputs with the pinned checkers; deploy steps are in
+`space/DEPLOY.md`.
 
 `configs/models.json` carries two model pins on purpose: `tuned` is the current
 published checkpoint, `tuned_mvp` is the one `docs/MVP_REPORT.md` documents. Both
@@ -147,13 +155,6 @@ python eval.py --model hf:HankH18/qwen3-1.7b-forbidden-constraint-holder@c19712a
                --constraints <path-to-their-constraints.jsonl> --out <your-run-dir>
 ```
 
-Note the `hf:` provider prefix on the commands above: they pin an exact
-revision, which is what makes the numbers reproducible. The bare form the
-project doc names — `eval.py --model <hf-repo-id>` — runs too. A bare
-`owner/name[@revision]` resolves to the `hf` provider (`normalize_model_spec`,
-`eval.py:333`); anything that is neither provider-qualified nor shaped like a
-repo id is refused locally, before a model loads or a judge is constructed.
-
 `google:gemini-3.1-pro` is rate-limited to **25 requests/minute** — pass
 `--workers 2` for it or the run 429s partway through.
 
@@ -264,11 +265,11 @@ passing silently.
 | `constraints/` | Registry and the deterministic checkers — the ground-truth layer |
 | `scenarios/` | Corpus generator, reachability prover, the shared prompt renderer |
 | `training/` | Modal QLoRA app |
-| `space/` | Source for the Gradio inference demo — the app that runs base vs tuned on a visitor's own prompt and prints the pinned checkers' verdicts — plus its deploy runbook and pre-deploy checks. **Deployed** at [the Space above](https://huggingface.co/spaces/HankH18/forbidden-constraint-holder); `space/verify_deploy.py` reads the Hub back and exits 0 only when every file matches this build byte for byte |
+| `space/` | Source for the Gradio inference demo — the app that runs base vs tuned on a visitor's own prompt and prints the pinned checkers' verdicts — plus its deploy runbook and pre-deploy checks. Deploy steps: `space/DEPLOY.md`; `space/verify_deploy.py` reads a deployed Space back and exits 0 only when every file matches this build byte for byte |
 | `scripts/` | the gates and the publishing tools — see below |
 | `data/scenarios/` | Corpus, constraint instances, few-shot exemplars, smoke set, and the hardened adversarial set |
 | `data/fixtures/` | Golden checker fixtures |
-| `runs/` | Ablation, smoke and MVP run artifacts |
+| `runs/` | Every run directory. Eval runs: g1 ablation (plus its earlier rungs g1_r3-k4 and g1_r6-char65), final, mvp, mvp_v2, efficiency curve, adversarial_v2, breaks (partner-exam replay), the v4 retrain's final_v4_checkeronly and attacks_heldout_v4, hedge_pilot, t0_smoke, and ablation (the retired abstainer's). Training records, no eval results: train_v1, train_v2, smoke, dpo_probe |
 | `archive/abstainer/` | The retired first target — see below |
 | `docs/` | Project spec (source of truth), pivot spec/design/tasks |
 

@@ -1,4 +1,4 @@
-# Grounded Abstainer — pinned runtime. Python 3.11+ required:
+# Forbidden-Constraint Holder — pinned runtime. Python 3.11+ required:
 # frozen eval.py uses PEP 604 (`list | None`) annotations evaluated at import.
 
 # eval harness — providers
